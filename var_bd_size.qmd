@@ -6,14 +6,10 @@ editor: source
 
 Guiding Question: How does Bd intensity change with size of adult amphibians across RIBBiTR survey locations?
 
--   Need to determine appropriate species per location with significant swab results
+-   Include toads?
 
-    -   North America: rana_catesbeiana, rana_clamitans, pseudacris_crucifer, rana_muscosa, lithobates_chiricahuensis
-    -   Panama: rhaebo_haematiticus, silverstoneia_flotator, colostethus_panamensis
-    -   ~~Brazil: brachycephalus_pitanga, ischnocnema_henselii, boana_faber, dendrophryniscus_haddadi~~
-        -   no SVL for Brazil data :(
+-   Need to determine appropriate species per location with significant swab results. How many data points needed?
 
-![](images/Screenshot%202023-10-26%20at%201.46.21%20PM.png)
 
 ## load packages
 
@@ -55,12 +51,10 @@ dbExecute(connection, "set search_path to survey_data")
 
 ```{r}
 
-species_list <- c("rana_catesbeiana", "rana_clamitans", "pseudacris_crucifer", "rana_muscosa", "lithobates_chiricahuensis", # North America
-                  "rhaebo_haematiticus", "silverstoneia_flotator", "colostethus_panamensis") # Panama
-                  #"brachycephalus_pitanga", "ischnocnema_henselii", "boana_faber", "dendrophryniscus_haddadi") # Brazil
+
 
 q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
-      c.svl_mm, c.life_stage, qbr.average_copy_number 
+      c.svl_mm, c.life_stage, qbr.average_copy_number, qbr.detected 
       from location l 
       join region r on l.location_id = r.location_id 
       join site s on r.region_id = s.region_id 
@@ -69,25 +63,106 @@ q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_
       join capture c on s2.survey_id = c.survey_id 
       join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
       where c.svl_mm is not null
-      and c.life_stage = 'adult';"
+      and c.life_stage = 'adult'
+      and qbr.detected = '1'";
 
-raw_data <- dbGetQuery(connection, q) %>% 
-  filter(species_capture %in% species_list)
-
+raw_data <- dbGetQuery(connection, q) 
 
 ```
+
+## Find good species list
+```{r}
+
+infec_size <- raw_data %>% 
+  group_by(species_capture) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 10) %>% 
+  filter(!species_capture %in% c("anaxyrus_americanus", "notophthalmus_viridescens", "anaxyrus_fowleri"))   #remove toad and newt
+
+species_list <- infec_size$species_capture
+
+```
+
 
 ## Wrangle data
 
 ```{r}
 
 data <- raw_data %>% 
-  filter(average_copy_number > 0) %>% 
+  filter(species_capture %in% species_list) %>% 
   mutate(average_copy_number = log10(average_copy_number + 1))
 
-ggplot(data = data, aes(x = svl_mm, y = average_copy_number)) +
-  geom_point() +
-  geom_smooth() +
-  facet_wrap(~species_capture)
+## Explore
+# ggplot(data = data, aes(x = svl_mm, y = average_copy_number)) +
+#   geom_point() +
+#   geom_smooth() +
+#   facet_wrap(~species_capture)
 
 ```
+
+
+## lm() Species Loop
+```{r}
+
+plots <- list()
+
+for (i in 1:length(species_list)) {
+  
+  
+  # data for each model
+  dat <- data %>% 
+    select(species_capture, average_copy_number, svl_mm) %>% 
+    filter(species_capture == species_list[i]) 
+  
+  # run lm average_copy_number ~ svl_mm per species
+  mod <- lm(average_copy_number ~ svl_mm, data=dat)
+  
+  # create model outputs as objects in environment
+  assign(species_list[i], mod)
+  
+  # predict
+  svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=50)
+  #average_copy_number = seq(min(dat$average_copy_number), max(dat$average_copy_number), len = 50)
+  newdata <- data.frame(svl_mm = svl_mm)
+  mod_pred = predict(mod, newdata = newdata, se.fit = T)
+  newdata$pred <- mod_pred$fit
+  newdata$upper_se <- mod_pred$fit + (2 * mod_pred$se.fit)
+  newdata$lower_se <- mod_pred$fit - (2 * mod_pred$se.fit)
+  
+  
+  # make GAM plot
+  p <- ggplot(newdata) + 
+   geom_line(aes(x=svl_mm, y=pred)) +
+   geom_point(data=dat, aes(x=svl_mm, y=average_copy_number), size=2, alpha = 0.2) +
+   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
+   xlab("Snout Vent Length (mm)") + ylab("Log10 Infection Intensity") + theme_classic() +
+   coord_cartesian(ylim = c(0,7)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
+    
+ # save GAM plot in list
+  plots[[i]] <- p  
+  
+  # residuals vs fitted
+  plot(mod, 1, main = species_list[i])
+  
+  # Error checking during loop
+  print(paste("done with", species_list[i]))
+  
+}
+
+
+```
+
+## Examine Model Plots
+```{r}
+
+plots[1:length(plots)]
+
+```
+
+## Examine residuals vs fitted
+```{r}
+
+res_vs_fit[1:length(res_vs_fit)]
+
+```
+
