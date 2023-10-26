@@ -1,0 +1,93 @@
+---
+title: "Variation in Bd Intensity Through Size of Adult Amphibians"
+format: html
+editor: source
+---
+
+Guiding Question: How does Bd intensity change with size of adult amphibians across RIBBiTR survey locations?
+
+-   Need to determine appropriate species per location with significant swab results
+
+    -   North America: rana_catesbeiana, rana_clamitans, pseudacris_crucifer, rana_muscosa, lithobates_chiricahuensis
+    -   Panama: rhaebo_haematiticus, silverstoneia_flotator, colostethus_panamensis
+    -   ~~Brazil: brachycephalus_pitanga, ischnocnema_henselii, boana_faber, dendrophryniscus_haddadi~~
+        -   no SVL for Brazil data :(
+
+![](images/Screenshot%202023-10-26%20at%201.46.21%20PM.png)
+
+## load packages
+
+```{r}
+
+if (!require(librarian)){
+  install.packages("librarian")
+  library(librarian)
+}
+
+librarian::shelf(tidyverse, here, DBI, RPostgres)
+
+```
+
+## connect to database
+
+```{r}
+tryCatch({
+    drv <- dbDriver("Postgres")
+    print("Connecting to Database…")
+    connection <- dbConnect(drv,
+                 dbname = Sys.getenv("aws_dbname"),
+                 host = Sys.getenv("aws_host"),
+                 port = Sys.getenv("aws_port"),
+                 user = Sys.getenv("aws_user"),
+                 password = Sys.getenv("aws_password"),
+                 timezone=NULL)
+    print("Database Connected!")
+    },
+    error=function(cond) {
+            print("Unable to connect to Database.")
+    })
+
+#search path
+dbExecute(connection, "set search_path to survey_data")
+```
+
+## query data of interest
+
+```{r}
+
+species_list <- c("rana_catesbeiana", "rana_clamitans", "pseudacris_crucifer", "rana_muscosa", "lithobates_chiricahuensis", # North America
+                  "rhaebo_haematiticus", "silverstoneia_flotator", "colostethus_panamensis") # Panama
+                  #"brachycephalus_pitanga", "ischnocnema_henselii", "boana_faber", "dendrophryniscus_haddadi") # Brazil
+
+q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
+      c.svl_mm, c.life_stage, qbr.average_copy_number 
+      from location l 
+      join region r on l.location_id = r.location_id 
+      join site s on r.region_id = s.region_id 
+      join visit v on s.site_id = v.site_id 
+      join survey s2 on v.visit_id = s2.visit_id 
+      join capture c on s2.survey_id = c.survey_id 
+      join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
+      where c.svl_mm is not null
+      and c.life_stage = 'adult';"
+
+raw_data <- dbGetQuery(connection, q) %>% 
+  filter(species_capture %in% species_list)
+
+
+```
+
+## Wrangle data
+
+```{r}
+
+data <- raw_data %>% 
+  filter(average_copy_number > 0) %>% 
+  mutate(average_copy_number = log10(average_copy_number + 1))
+
+ggplot(data = data, aes(x = svl_mm, y = average_copy_number)) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~species_capture)
+
+```
