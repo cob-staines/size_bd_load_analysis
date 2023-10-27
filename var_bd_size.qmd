@@ -72,12 +72,12 @@ raw_data <- dbGetQuery(connection, q)
 
 ## Find good species list
 ```{r}
-
+# 10 observations or more with SVL and average_copy_number
 infec_size <- raw_data %>% 
   group_by(species_capture) %>% 
   summarise(n = n()) %>% 
   filter(n > 10) %>% 
-  filter(!species_capture %in% c("anaxyrus_americanus", "notophthalmus_viridescens", "anaxyrus_fowleri"))   #remove toad and newt
+  filter(!species_capture %in% c("anaxyrus_americanus", "notophthalmus_viridescens", "anaxyrus_fowleri")) #remove toad and newt
 
 species_list <- infec_size$species_capture
 
@@ -90,13 +90,10 @@ species_list <- infec_size$species_capture
 
 data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
-  mutate(average_copy_number = log10(average_copy_number + 1))
-
-## Explore
-# ggplot(data = data, aes(x = svl_mm, y = average_copy_number)) +
-#   geom_point() +
-#   geom_smooth() +
-#   facet_wrap(~species_capture)
+  #mutate(average_copy_number = log10(average_copy_number + 1)) %>% 
+  mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
+  filter(!r == "0") %>% 
+  select(!r)
 
 ```
 
@@ -118,7 +115,7 @@ for (i in 1:length(species_list)) {
   mod <- lm(average_copy_number ~ svl_mm, data=dat)
   
   # create model outputs as objects in environment
-  assign(species_list[i], mod)
+  #assign(species_list[i], mod)
   
   # predict
   svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=50)
@@ -135,14 +132,23 @@ for (i in 1:length(species_list)) {
    geom_line(aes(x=svl_mm, y=pred)) +
    geom_point(data=dat, aes(x=svl_mm, y=average_copy_number), size=2, alpha = 0.2) +
    geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
-   xlab("Snout Vent Length (mm)") + ylab("Log10 Infection Intensity") + theme_classic() +
-   coord_cartesian(ylim = c(0,7)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
+   xlab("Snout Vent Length (mm)") + ylab("Infection Intensity") + theme_classic() +
+   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 1000)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
     
  # save GAM plot in list
   plots[[i]] <- p  
   
+  
   # residuals vs fitted
-  plot(mod, 1, main = species_list[i])
+  par(mfrow = c(2,2))
+  plot(mod, main = species_list[i])
+  
+  # cooks distance
+  par(mfrow = c(1,1))
+  cooksd <- cooks.distance(mod)
+  plot(cooksd, pch="*", cex=2, main=paste("Cooks Distance", species_list[i])) 
+  abline(h = 4*mean(cooksd, na.rm=T), col="red")  # add cutoff line
+  text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4*mean(cooksd, na.rm=T),names(cooksd),""), col="red") 
   
   # Error checking during loop
   print(paste("done with", species_list[i]))
@@ -159,10 +165,5 @@ plots[1:length(plots)]
 
 ```
 
-## Examine residuals vs fitted
-```{r}
 
-res_vs_fit[1:length(res_vs_fit)]
-
-```
 
