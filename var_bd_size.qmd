@@ -77,7 +77,7 @@ infec_size <- raw_data %>%
   group_by(species_capture) %>% 
   summarise(n = n()) %>% 
   filter(n > 10) %>% 
-  filter(!species_capture %in% c("anaxyrus_americanus", "notophthalmus_viridescens", "anaxyrus_fowleri")) #remove toad and newt
+  filter(!species_capture %in% c("notophthalmus_viridescens")) #remove toad and newt
 
 species_list <- infec_size$species_capture
 
@@ -90,7 +90,7 @@ species_list <- infec_size$species_capture
 
 data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
-  #mutate(average_copy_number = log10(average_copy_number + 1)) %>% 
+  mutate(average_copy_number = log10(average_copy_number + 1)) %>% 
   mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
   filter(!r == "0") %>% 
   select(!r)
@@ -133,7 +133,7 @@ for (i in 1:length(species_list)) {
    geom_point(data=dat, aes(x=svl_mm, y=average_copy_number), size=2, alpha = 0.2) +
    geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
    xlab("Snout Vent Length (mm)") + ylab("Infection Intensity") + theme_classic() +
-   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 1000)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
+   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 5)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
     
  # save GAM plot in list
   plots[[i]] <- p  
@@ -165,5 +165,17 @@ plots[1:length(plots)]
 
 ```
 
+## Save plots
 
+```{r}
+for (i in 1:length(plots)) {
+  
+  ggsave(here("figures", paste(species_list[i], ".jpeg", sep="")),
+         plot = plots[[i]])
+  
+}
+
+
+
+```
 
