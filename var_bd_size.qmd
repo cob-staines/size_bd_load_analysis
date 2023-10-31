@@ -54,7 +54,7 @@ dbExecute(connection, "set search_path to survey_data")
 
 
 q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
-      c.svl_mm, c.life_stage, qbr.average_copy_number, qbr.detected 
+      c.svl_mm, c.body_mass_g, c.life_stage, qbr.average_copy_number, qbr.detected 
       from location l 
       join region r on l.location_id = r.location_id 
       join site s on r.region_id = s.region_id 
@@ -77,23 +77,72 @@ infec_size <- raw_data %>%
   group_by(species_capture) %>% 
   summarise(n = n()) %>% 
   filter(n > 10) %>% 
-  filter(!species_capture %in% c("notophthalmus_viridescens")) #remove toad and newt
+  filter(!species_capture %in% c("notophthalmus_viridescens")) #remove newt
 
 species_list <- infec_size$species_capture
+
+
 
 ```
 
 
 ## Wrangle data
 
+### Initial wrangle
 ```{r}
 
-data <- raw_data %>% 
+mid_data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
-  mutate(average_copy_number = log10(average_copy_number + 1)) %>% 
+  mutate(average_copy_number = log10(average_copy_number + 1),
+                  body_mass_g = abs(body_mass_g)) %>%  # error in db NEED TO FIX, one negative mass
+  filter(body_mass_g > 0) %>%  # error in db NEED TO FIX, one bull frog with 0 mass) %>% 
   mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
   filter(!r == "0") %>% 
-  select(!r)
+  select(!r) %>% 
+  group_by(species_capture) %>% 
+  mutate(mean_L = mean(svl_mm))
+```
+
+### loop for slope calc per species `lm(mass~l)`
+```{r}
+
+slopes_spec <- NULL
+
+r_value <- NULL
+
+for (i in 1:length(species_list)) {
+  
+  slop_data <- mid_data %>% 
+    filter(species_capture == species_list[i])
+  
+  model <- lm(log(body_mass_g) ~ log(svl_mm), data=slop_data)
+  
+  slope <- model$coefficients[2]
+  
+  slopes_spec <- rbind(slopes_spec, slope)
+  
+  r <- sqrt(summary(model)$r.squared)
+  
+  r_value <- rbind(r_value, r)
+
+}
+
+species_list_df <- as.data.frame(species_list)
+
+final_slopes_r <- cbind(slopes_spec, r_value, species_list_df) %>% 
+  rename(slope = 'log(svl_mm)') %>% 
+  mutate(b_sma = slope/r_value) %>% 
+  select(species_list, b_sma)
+
+```
+
+### add `b_sma` to data and calculate size scale index
+```{r}
+
+data <- mid_data %>% 
+  ungroup() %>% 
+  left_join(final_slopes_r, by = c("species_capture" = "species_list")) %>% 
+  mutate(M = body_mass_g * (mean_L / svl_mm) ^ b_sma)
 
 ```
 
@@ -108,19 +157,19 @@ for (i in 1:length(species_list)) {
   
   # data for each model
   dat <- data %>% 
-    select(species_capture, average_copy_number, svl_mm) %>% 
+    select(species_capture, average_copy_number, M) %>% 
     filter(species_capture == species_list[i]) 
   
-  # run lm average_copy_number ~ svl_mm per species
-  mod <- lm(average_copy_number ~ svl_mm, data=dat)
+  # run lm average_copy_number ~ M per species
+  mod <- lm(average_copy_number ~ M, data=dat)
   
   # create model outputs as objects in environment
   #assign(species_list[i], mod)
   
   # predict
-  svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=50)
+  M = seq(min(dat$M), max(dat$M), len=50)
   #average_copy_number = seq(min(dat$average_copy_number), max(dat$average_copy_number), len = 50)
-  newdata <- data.frame(svl_mm = svl_mm)
+  newdata <- data.frame(M = M)
   mod_pred = predict(mod, newdata = newdata, se.fit = T)
   newdata$pred <- mod_pred$fit
   newdata$upper_se <- mod_pred$fit + (2 * mod_pred$se.fit)
@@ -129,11 +178,11 @@ for (i in 1:length(species_list)) {
   
   # make GAM plot
   p <- ggplot(newdata) + 
-   geom_line(aes(x=svl_mm, y=pred)) +
-   geom_point(data=dat, aes(x=svl_mm, y=average_copy_number), size=2, alpha = 0.2) +
-   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
-   xlab("Snout Vent Length (mm)") + ylab("Infection Intensity") + theme_classic() +
-   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 5)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
+   geom_line(aes(x=M, y=pred)) +
+   geom_point(data=dat, aes(x=M, y=average_copy_number), size=2, alpha = 0.2) +
+   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = M), alpha = 0.2, fill = "blue")+
+   xlab("Scaled Mass Index") + ylab("Infection Intensity") + theme_classic() +
+   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 3)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
     
  # save GAM plot in list
   plots[[i]] <- p  
