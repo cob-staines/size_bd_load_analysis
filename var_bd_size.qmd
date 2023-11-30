@@ -52,9 +52,8 @@ dbExecute(connection, "set search_path to survey_data")
 ```{r}
 
 
-
 q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
-      c.svl_mm, c.body_mass_g, c.life_stage, qbr.average_copy_number, qbr.detected 
+      c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected 
       from location l 
       join region r on l.location_id = r.location_id 
       join site s on r.region_id = s.region_id 
@@ -63,6 +62,7 @@ q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_
       join capture c on s2.survey_id = c.survey_id 
       join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
       where c.svl_mm is not null
+      and c.body_mass_g is not null
       and c.life_stage = 'adult'
       and qbr.detected = '1'";
 
@@ -72,7 +72,7 @@ raw_data <- dbGetQuery(connection, q)
 
 ## Find good species list
 ```{r}
-# 10 observations or more with SVL and average_copy_number
+# 10 observations or more with SVL and target_quant_per_swab
 infec_size <- raw_data %>% 
   group_by(species_capture) %>% 
   summarise(n = n()) %>% 
@@ -93,15 +93,115 @@ species_list <- infec_size$species_capture
 
 mid_data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
-  mutate(average_copy_number = log10(average_copy_number + 1),
+  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1),
                   body_mass_g = abs(body_mass_g)) %>%  # error in db NEED TO FIX, one negative mass
   filter(body_mass_g > 0) %>%  # error in db NEED TO FIX, one bull frog with 0 mass) %>% 
   mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
   filter(!r == "0") %>% 
   select(!r) %>% 
   group_by(species_capture) %>% 
-  mutate(mean_L = mean(svl_mm))
+  mutate(mean_L = median(svl_mm)) %>% 
+  ungroup()
+
+
 ```
+
+### loop for bivariate plot
+```{r}
+
+bi_va_plot <- list()
+
+for (i in 1:length(species_list)) {
+  
+  bv_data <- mid_data %>% 
+    filter(species_capture == species_list[i]) %>% 
+    select(c(body_mass_g, svl_mm))
+  
+  bv_p <- ggplot(data = bv_data, aes(x=svl_mm, y=body_mass_g)) +
+    geom_point() +
+    ggtitle(label = paste(species_list[i])) 
+  
+  bi_va_plot[[i]] <- bv_p
+  
+  
+}
+
+bi_va_plot[1:length(bi_va_plot)]
+
+# concerning points: colostethus_panamensis svl>50, desmognathus_fuscus svl>80, espadarana_prosoblepon svl<15, hyla_versicolor svl>60, lithobates_warszewitschii svl<10, pseudacris_crucifer svl >3.59, pseudacris_feriarum, rana_catesbeiana, rana_clamitans svl = 28.5, 22.20 & bm = 65.5, sachatamia_albomaculata svl > 30, silverstoneia_flotator svl>25, 
+
+```
+### remove concerning poinnts for SMA regression
+```{r}
+
+sm_dat <- mid_data %>% 
+  mutate(rm_dp = if_else(species_capture == "colostethus_panamensis" & svl_mm > 50.00,
+                         1, 0),
+         rm_dp = if_else(species_capture == "desmognathus_fuscus" & svl_mm > 80.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "espadarana_prosoblepon" & svl_mm < 15.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "hyla_versicolor" & svl_mm > 60.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "lithobates_warszewitschii" & svl_mm < 10.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_clamitans" & svl_mm == 28.50 & body_mass_g == 65.50,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_clamitans" & svl_mm == 22.20 & body_mass_g == 65.50,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_clamitans" & svl_mm < 40.00 & body_mass_g > 25.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_clamitans" & svl_mm < 45.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "sachatamia_albomaculata" & svl_mm > 30.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "sachatamia_albomaculata" & svl_mm < 20.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "silverstoneia_flotator" & svl_mm > 25.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "silverstoneia_flotator" & svl_mm < 12.00 & body_mass_g > 0.50,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_catesbeiana" & svl_mm > 120.00 & body_mass_g == 100.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_catesbeiana" & svl_mm == 113.30 & body_mass_g == 14.30,
+                         1, rm_dp),
+         # rm_dp = if_else(species_capture == "rana_catesbeiana" & svl_mm < 42.00 & body_mass_g < 47.00,
+         #                 1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_catesbeiana" & svl_mm < 50.00 & body_mass_g > 45.00,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "rana_catesbeiana" & svl_mm == 104.00 & body_mass_g == 7.20,
+                         1, rm_dp),
+         rm_dp = if_else(species_capture == "pseudacris_crucifer" & svl_mm >35.59,
+                         1, rm_dp)) %>% 
+  filter(!rm_dp == 1) %>% 
+  select(!rm_dp)
+
+
+
+
+## Now check plots again
+
+bi_va_plot <- list()
+
+for (i in 1:length(species_list)) {
+  
+  bv_data <- sm_dat %>% 
+    filter(species_capture == species_list[i]) %>% 
+    select(c(body_mass_g, svl_mm))
+  
+  bv_p <- ggplot(data = bv_data, aes(x=svl_mm, y=body_mass_g)) +
+    geom_point() +
+    ggtitle(label = paste(species_list[i])) 
+  
+  bi_va_plot[[i]] <- bv_p
+  
+  
+}
+
+bi_va_plot[1:length(bi_va_plot)]
+
+```
+
 
 ### loop for slope calc per species `lm(mass~l)`
 ```{r}
@@ -112,10 +212,12 @@ r_value <- NULL
 
 for (i in 1:length(species_list)) {
   
-  slop_data <- mid_data %>% 
-    filter(species_capture == species_list[i])
+  slop_data <- sm_dat %>% 
+    filter(species_capture == species_list[i]) %>% 
+    mutate(body_mass_g = log(body_mass_g),
+           svl_mm = log(svl_mm))
   
-  model <- lm(log(body_mass_g) ~ log(svl_mm), data=slop_data)
+  model <- lm(body_mass_g ~ svl_mm, data=slop_data)
   
   slope <- model$coefficients[2]
   
@@ -130,8 +232,8 @@ for (i in 1:length(species_list)) {
 species_list_df <- as.data.frame(species_list)
 
 final_slopes_r <- cbind(slopes_spec, r_value, species_list_df) %>% 
-  rename(slope = 'log(svl_mm)') %>% 
-  mutate(b_sma = slope/r_value) %>% 
+  rename(b_sma = svl_mm) %>% 
+  #mutate(b_sma = slope)) %>% 
   select(species_list, b_sma)
 
 ```
@@ -142,7 +244,10 @@ final_slopes_r <- cbind(slopes_spec, r_value, species_list_df) %>%
 data <- mid_data %>% 
   ungroup() %>% 
   left_join(final_slopes_r, by = c("species_capture" = "species_list")) %>% 
-  mutate(M = body_mass_g * (mean_L / svl_mm) ^ b_sma)
+  mutate(M = (body_mass_g * ((mean_L / svl_mm) ^ b_sma))) %>% 
+  filter(!M > 250)
+
+species_list <- species_list[-10]# remove due to poor b_sma value
 
 ```
 
@@ -152,25 +257,46 @@ data <- mid_data %>%
 
 plots <- list()
 
+p_value_M <- NULL
+mod_slope_M <- NULL
+p_value_svl <- NULL
+mod_slope_svl <- NULL
+p_value_bm <- NULL
+mod_slope_bm <- NULL
+p_value_int <- NULL
+mod_slope_int <- NULL
+r_value <- NULL
+
 for (i in 1:length(species_list)) {
   
   
   # data for each model
   dat <- data %>% 
-    select(species_capture, average_copy_number, M) %>% 
+    select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g) %>% 
     filter(species_capture == species_list[i]) 
   
-  # run lm average_copy_number ~ M per species
-  mod <- lm(average_copy_number ~ M, data=dat)
+  # run lm target_quant_per_swab ~ M + svl_mm*body_mass_g per species
+  mod <- lm(target_quant_per_swab ~ M + svl_mm * body_mass_g, data=dat)
   
   # create model outputs as objects in environment
   #assign(species_list[i], mod)
   
+  p_value_M <- rbind(p_value_M, summary(mod)$coefficients[2,4])
+  mod_slope_M <- rbind(mod_slope_M, summary(mod)$coefficients[2,1])
+  p_value_svl <- rbind(p_value_svl, summary(mod)$coefficients[3,4])
+  mod_slope_svl <- rbind(mod_slope_svl, summary(mod)$coefficients[3,1])
+  p_value_bm <- rbind(p_value_bm, summary(mod)$coefficients[4,4])
+  mod_slope_bm <- rbind(mod_slope_bm, summary(mod)$coefficients[4,1])
+  p_value_int <- rbind(p_value_int, summary(mod)$coefficients[5,4])
+  mod_slope_int <- rbind(mod_slope_int, summary(mod)$coefficients[5,1])
+  r_value <- rbind(r_value, summary(mod)$r.squared)
+  
   # predict
   M = seq(min(dat$M), max(dat$M), len=50)
-  #average_copy_number = seq(min(dat$average_copy_number), max(dat$average_copy_number), len = 50)
-  newdata <- data.frame(M = M)
-  mod_pred = predict(mod, newdata = newdata, se.fit = T)
+  svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=50)
+  body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=50)
+  newdata <- data.frame(M = M, svl_mm = svl_mm, body_mass_g = body_mass_g)
+  mod_pred = predict(mod, newdata = newdata, se.fit = T, type = 'response')
   newdata$pred <- mod_pred$fit
   newdata$upper_se <- mod_pred$fit + (2 * mod_pred$se.fit)
   newdata$lower_se <- mod_pred$fit - (2 * mod_pred$se.fit)
@@ -178,39 +304,72 @@ for (i in 1:length(species_list)) {
   
   # make GAM plot
   p <- ggplot(newdata) + 
-   geom_line(aes(x=M, y=pred)) +
-   geom_point(data=dat, aes(x=M, y=average_copy_number), size=2, alpha = 0.2) +
-   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = M), alpha = 0.2, fill = "blue")+
+   geom_line(aes(x=svl_mm, y=pred)) +
+   geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab), size=2, alpha = 0.2) +
+   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
    xlab("Scaled Mass Index") + ylab("Infection Intensity") + theme_classic() +
-   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 3)) + ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1]))
+   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 3)) + 
+   ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1], 
+                 "p-value:", summary(mod)$coefficients[2,4]))
     
  # save GAM plot in list
   plots[[i]] <- p  
   
   
-  # residuals vs fitted
-  par(mfrow = c(2,2))
-  plot(mod, main = species_list[i])
-  
-  # cooks distance
-  par(mfrow = c(1,1))
-  cooksd <- cooks.distance(mod)
-  plot(cooksd, pch="*", cex=2, main=paste("Cooks Distance", species_list[i])) 
-  abline(h = 4*mean(cooksd, na.rm=T), col="red")  # add cutoff line
-  text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4*mean(cooksd, na.rm=T),names(cooksd),""), col="red") 
-  
+  # # residuals vs fitted
+  # par(mfrow = c(2,2))
+  # plot(mod, main = species_list[i])
+  # 
+  # # cooks distance
+  # par(mfrow = c(1,1))
+  # cooksd <- cooks.distance(mod)
+  # plot(cooksd, pch="*", cex=2, main=paste("Cooks Distance", species_list[i])) 
+  # abline(h = 4*mean(cooksd, na.rm=T), col="red")  # add cutoff line
+  # text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4*mean(cooksd, na.rm=T),names(cooksd),""), col="red") 
+  # 
   # Error checking during loop
   print(paste("done with", species_list[i]))
   
 }
 
 
+
 ```
+
+## Examine Significant Table
+```{r}
+
+sig_table <- cbind(species_list, mod_slope_M, p_value_M, mod_slope_svl, p_value_svl,
+                   mod_slope_bm, p_value_bm, mod_slope_int, p_value_int) %>% 
+  as.data.frame() %>% 
+  rename(mod_slope_M = V2,
+         p_value_M = V3,
+         mod_slope_svl = V4,
+         p_value_svl = V5,
+         mod_slope_bm = V6,
+         p_value_bm = V7,
+         mod_slope_int = V8,
+         p_value_int = V9) %>% 
+  mutate(across(mod_slope_M:p_value_int, ~ round(as.numeric(.), 4)))
+
+```
+
+
+## Examine Model Outputs
+```{r}
+species_list
+
+summary(species_list[21])
+```
+
 
 ## Examine Model Plots
 ```{r}
 
 plots[1:length(plots)]
+
+
+
 
 ```
 
