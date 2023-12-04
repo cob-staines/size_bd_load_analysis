@@ -4,13 +4,6 @@ format: html
 editor: source
 ---
 
-Guiding Question: How does Bd intensity change with size of adult amphibians across RIBBiTR survey locations?
-
--   Include toads?
-
--   Need to determine appropriate species per location with significant swab results. How many data points needed?
-
-
 ## load packages
 
 ```{r}
@@ -64,13 +57,14 @@ q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_
       where c.svl_mm is not null
       and c.body_mass_g is not null
       and c.life_stage = 'adult'
-      and qbr.detected = '1'";
+      and qbr.detected = '1';"
 
 raw_data <- dbGetQuery(connection, q) 
 
 ```
 
 ## Find good species list
+
 ```{r}
 # 10 observations or more with SVL and target_quant_per_swab
 infec_size <- raw_data %>% 
@@ -85,10 +79,10 @@ species_list <- infec_size$species_capture
 
 ```
 
-
 ## Wrangle data
 
 ### Initial wrangle
+
 ```{r}
 
 mid_data <- raw_data %>% 
@@ -107,6 +101,7 @@ mid_data <- raw_data %>%
 ```
 
 ### loop for bivariate plot
+
 ```{r}
 
 bi_va_plot <- list()
@@ -131,7 +126,9 @@ bi_va_plot[1:length(bi_va_plot)]
 # concerning points: colostethus_panamensis svl>50, desmognathus_fuscus svl>80, espadarana_prosoblepon svl<15, hyla_versicolor svl>60, lithobates_warszewitschii svl<10, pseudacris_crucifer svl >3.59, pseudacris_feriarum, rana_catesbeiana, rana_clamitans svl = 28.5, 22.20 & bm = 65.5, sachatamia_albomaculata svl > 30, silverstoneia_flotator svl>25, 
 
 ```
+
 ### remove concerning poinnts for SMA regression
+
 ```{r}
 
 sm_dat <- mid_data %>% 
@@ -202,8 +199,10 @@ bi_va_plot[1:length(bi_va_plot)]
 
 ```
 
-
 ### loop for slope calc per species `lm(mass~l)`
+
+![](images/Screenshot 2023-12-04 at 1.52.55 PM.png)
+
 ```{r}
 
 slopes_spec <- NULL
@@ -239,6 +238,7 @@ final_slopes_r <- cbind(slopes_spec, r_value, species_list_df) %>%
 ```
 
 ### add `b_sma` to data and calculate size scale index
+
 ```{r}
 
 data <- mid_data %>% 
@@ -251,8 +251,8 @@ species_list <- species_list[-10]# remove due to poor b_sma value
 
 ```
 
-
 ## lm() Species Loop
+
 ```{r}
 
 plots <- list()
@@ -337,6 +337,7 @@ for (i in 1:length(species_list)) {
 ```
 
 ## Examine Significant Table
+
 ```{r}
 
 sig_table <- cbind(species_list, mod_slope_M, p_value_M, mod_slope_svl, p_value_svl,
@@ -354,16 +355,16 @@ sig_table <- cbind(species_list, mod_slope_M, p_value_M, mod_slope_svl, p_value_
 
 ```
 
-
 ## Examine Model Outputs
+
 ```{r}
 species_list
 
 summary(species_list[21])
 ```
 
-
 ## Examine Model Plots
+
 ```{r}
 
 plots[1:length(plots)]
@@ -386,4 +387,3 @@ for (i in 1:length(plots)) {
 
 
 ```
-
