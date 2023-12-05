@@ -17,7 +17,7 @@ if (!require(librarian)){
   library(librarian)
 }
 
-librarian::shelf(tidyverse, here, DBI, RPostgres)
+librarian::shelf(tidyverse, here, DBI, RPostgres, mgcv)
 
 ```
 
@@ -277,47 +277,64 @@ for (i in 1:length(species_list)) {
   # data for each model
   dat <- data %>% 
     select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g) %>% 
-    filter(species_capture == species_list[21]) %>% 
+    filter(species_capture == species_list[i]) %>% 
     mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
                             svl_mm > quantile(svl_mm, 0.66) ~ "large",
                             between(svl_mm, 
                                     quantile(svl_mm, 0.33),
-                                    quantile(svl_mm, 0.66)) ~ "medium")) %>% 
+                                    quantile(svl_mm, 0.66)) ~ "medium"),
+           body_mass_g = log(body_mass_g),
+           svl_mm = log(svl_mm)) %>% 
     mutate(M = as.numeric(scale(M)),
            svl_mm = as.numeric(scale(svl_mm)),
            body_mass_g = as.numeric(scale(body_mass_g)))
 
   
   # run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
-  mod <- lm(target_quant_per_swab ~ svl_mm * body_mass_g + svl_mm * size, data=dat)
+  mod <- lm(target_quant_per_swab ~ svl_mm * body_mass_g, data=dat)
   
 
   # pull model coefficients for each predictor
-  p_value_M <- rbind(p_value_M, summary(mod)$coefficients[2,4])
-  mod_slope_M <- rbind(mod_slope_M, summary(mod)$coefficients[2,1])
-  p_value_svl <- rbind(p_value_svl, summary(mod)$coefficients[3,4])
-  mod_slope_svl <- rbind(mod_slope_svl, summary(mod)$coefficients[3,1])
-  p_value_bm <- rbind(p_value_bm, summary(mod)$coefficients[4,4])
-  mod_slope_bm <- rbind(mod_slope_bm, summary(mod)$coefficients[4,1])
-  p_value_int <- rbind(p_value_int, summary(mod)$coefficients[5,4])
-  mod_slope_int <- rbind(mod_slope_int, summary(mod)$coefficients[5,1])
-  r_value <- rbind(r_value, summary(mod)$r.squared)
+  # p_value_M <- rbind(p_value_M, summary(mod)$coefficients[2,4])
+  # mod_slope_M <- rbind(mod_slope_M, summary(mod)$coefficients[2,1])
+  # p_value_svl <- rbind(p_value_svl, summary(mod)$coefficients[3,4])
+  # mod_slope_svl <- rbind(mod_slope_svl, summary(mod)$coefficients[3,1])
+  # p_value_bm <- rbind(p_value_bm, summary(mod)$coefficients[4,4])
+  # mod_slope_bm <- rbind(mod_slope_bm, summary(mod)$coefficients[4,1])
+  # p_value_int <- rbind(p_value_int, summary(mod)$coefficients[5,4])
+  # mod_slope_int <- rbind(mod_slope_int, summary(mod)$coefficients[5,1])
+  # r_value <- rbind(r_value, summary(mod)$r.squared)
   
   # predict
-  #M = seq(min(dat$M), max(dat$M), len=60)
-  M = rep(mean(dat$M), len=60) # Mean
-  svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=60)
-  #svl_mm = rep(mean(dat$svl_mm), len=60) # Mean
-  body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=60)
-  #body_mass_g = rep(mean(dat$body_mass_g), len=60) # Mean
+  #M = seq(min(dat$M), max(dat$M), len=300)
+  M = rep(mean(dat$M), len=300) # Mean
+  #svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=300)
+  svl_mm = rep(mean(dat$svl_mm), len=300) # Mean
+  body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=300)
+  #body_mass_g = rep(mean(dat$body_mass_g), len=300) # Mean
   
-  size = as.data.frame(seq(min(dat$svl_mm), max(dat$svl_mm), len=60)) %>% 
-    mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
-                            svl_mm > quantile(svl_mm, 0.66) ~ "large",
-                            between(svl_mm, 
-                                    quantile(svl_mm, 0.33),
-                                    quantile(svl_mm, 0.66)) ~ "medium")) %>% 
-    select(size)
+  small_sizes <- dat %>% 
+    select(size, svl_mm) %>% 
+    filter(size == "small")
+  
+  small <- seq(min(small_sizes$svl_mm), max(small_sizes$svl_mm), len=100)
+  
+  medium_sizes <- dat %>% 
+    select(size, svl_mm) %>% 
+    filter(size == "medium")
+  
+  medium <- seq(min(medium_sizes$svl_mm), max(medium_sizes$svl_mm), len=100)
+  
+  large_sizes <- dat %>% 
+    select(size, svl_mm) %>% 
+    filter(size == "large")
+  
+  large <- seq(min(large_sizes$svl_mm), max(large_sizes$svl_mm), len=100)
+  
+  svl_mm <- c(small, medium, large)
+  
+  size <- rep(c("small", "medium", "large"), len = 300) %>% 
+    sort(decreasing = T)
   
   newdata <- data.frame(M = M, svl_mm = svl_mm, body_mass_g = body_mass_g, size = size)
   
@@ -329,12 +346,12 @@ for (i in 1:length(species_list)) {
   
   # make GAM plot
   p <- ggplot(newdata) + 
-   geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab, color = size), size=2, alpha = 0.2) +
-   geom_line(aes(x=svl_mm, y=pred, color = size)) +
+   geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab, color = size), size=0.8, alpha = 0.2) +
+   geom_line(aes(x=svl_mm, y=pred, color = size), linewidth = 2) +
    geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
    xlab("svl_mm") + ylab("Infection Intensity") + theme_classic() +
    coord_cartesian(ylim = c(0,max(newdata$upper_se) + 5)) + 
-   ggtitle(paste(species_list[21], ", slope:", summary(mod)$coefficients[2,1], 
+   ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1], 
                  "p-value:", summary(mod)$coefficients[2,4]))
     
  # save GAM plot in list
@@ -358,7 +375,7 @@ for (i in 1:length(species_list)) {
 }
 
 
-
+p
 ```
 
 ### Examine Significant Table
