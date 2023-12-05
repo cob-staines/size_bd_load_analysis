@@ -4,7 +4,11 @@ format: html
 editor: source
 ---
 
-## load packages
+[Guiding Question]{.underline}: How does size (weight, length, and/or a mass scalar) affect Bd infection intensity in adult amphibians.
+
+[Hypothesis]{.underline}: We expect that as amphibians increase in size we would see a decrease in Bd infection intensity due to more developed and robust immune system.
+
+### Load Packages
 
 ```{r}
 
@@ -17,7 +21,7 @@ librarian::shelf(tidyverse, here, DBI, RPostgres)
 
 ```
 
-## connect to database
+### Connect to Database
 
 ```{r}
 tryCatch({
@@ -40,7 +44,7 @@ tryCatch({
 dbExecute(connection, "set search_path to survey_data")
 ```
 
-## query data of interest
+### query data of interest
 
 ```{r}
 
@@ -63,7 +67,7 @@ raw_data <- dbGetQuery(connection, q)
 
 ```
 
-## Find good species list
+### Find adequate species list based on sample size
 
 ```{r}
 # 10 observations or more with SVL and target_quant_per_swab
@@ -79,9 +83,9 @@ species_list <- infec_size$species_capture
 
 ```
 
-## Wrangle data
+### Wrangle data
 
-### Initial wrangle
+#### Initial wrangle
 
 ```{r}
 
@@ -100,7 +104,7 @@ mid_data <- raw_data %>%
 
 ```
 
-### loop for bivariate plot
+#### loop for bivariate plot - M size scalar 
 
 ```{r}
 
@@ -127,7 +131,7 @@ bi_va_plot[1:length(bi_va_plot)]
 
 ```
 
-### remove concerning poinnts for SMA regression
+#### remove concerning poinnts for SMA regression
 
 ```{r}
 
@@ -176,7 +180,7 @@ sm_dat <- mid_data %>%
 
 
 
-## Now check plots again
+### Now check plots again
 
 bi_va_plot <- list()
 
@@ -199,9 +203,9 @@ bi_va_plot[1:length(bi_va_plot)]
 
 ```
 
-### loop for slope calc per species `lm(mass~l)`
+#### loop for slope calc per species `lm(log(mass)~(svl_mm))`
 
-![](images/Screenshot 2023-12-04 at 1.52.55 PM.png)
+![](images/Screenshot%202023-12-04%20at%201.52.55%20PM.png)
 
 ```{r}
 
@@ -237,7 +241,7 @@ final_slopes_r <- cbind(slopes_spec, r_value, species_list_df) %>%
 
 ```
 
-### add `b_sma` to data and calculate size scale index
+#### add `b_sma` to data and calculate size scalar index
 
 ```{r}
 
@@ -251,7 +255,7 @@ species_list <- species_list[-10]# remove due to poor b_sma value
 
 ```
 
-## lm() Species Loop
+### lm() Species Loop `lm(target_quant_per_swab ~ M + svl_mm * body_mass_g)`
 
 ```{r}
 
@@ -273,14 +277,16 @@ for (i in 1:length(species_list)) {
   # data for each model
   dat <- data %>% 
     select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g) %>% 
-    filter(species_capture == species_list[i]) 
+    filter(species_capture == species_list[21]) %>% 
+    mutate(M = as.numeric(scale(M)),
+           svl_mm = as.numeric(scale(svl_mm)),
+           body_mass_g = as.numeric(scale(body_mass_g)))
   
   # run lm target_quant_per_swab ~ M + svl_mm*body_mass_g per species
   mod <- lm(target_quant_per_swab ~ M + svl_mm * body_mass_g, data=dat)
   
-  # create model outputs as objects in environment
-  #assign(species_list[i], mod)
-  
+
+  # pull model coefficients for each predictor
   p_value_M <- rbind(p_value_M, summary(mod)$coefficients[2,4])
   mod_slope_M <- rbind(mod_slope_M, summary(mod)$coefficients[2,1])
   p_value_svl <- rbind(p_value_svl, summary(mod)$coefficients[3,4])
@@ -292,10 +298,19 @@ for (i in 1:length(species_list)) {
   r_value <- rbind(r_value, summary(mod)$r.squared)
   
   # predict
-  M = seq(min(dat$M), max(dat$M), len=50)
+  #M = seq(min(dat$M), max(dat$M), len=50)
+  M = rep(mean(dat$M), len=50) # Mean
   svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=50)
+  #svl_mm = rep(mean(dat$svl_mm), len=50) # Mean
   body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=50)
-  newdata <- data.frame(M = M, svl_mm = svl_mm, body_mass_g = body_mass_g)
+  #body_mass_g = rep(mean(dat$body_mass_g), len=50) # Mean
+  
+  newdata <- data.frame(M = M, svl_mm = svl_mm, body_mass_g = body_mass_g) %>% 
+    mutate(size = "",
+           size = case_when(body_mass_g < body_mass_g*0.33 ~ "small",
+                            body_mass_g > body_mass_g*0.33 & body_mass_g < body_mass_g*0.66 ~ "medium",
+                            body_mass_g > body_mass_g*0.66 ~ "large"))
+  
   mod_pred = predict(mod, newdata = newdata, se.fit = T, type = 'response')
   newdata$pred <- mod_pred$fit
   newdata$upper_se <- mod_pred$fit + (2 * mod_pred$se.fit)
@@ -307,7 +322,7 @@ for (i in 1:length(species_list)) {
    geom_line(aes(x=svl_mm, y=pred)) +
    geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab), size=2, alpha = 0.2) +
    geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
-   xlab("Scaled Mass Index") + ylab("Infection Intensity") + theme_classic() +
+   xlab("svl_mm") + ylab("Infection Intensity") + theme_classic() +
    coord_cartesian(ylim = c(0,max(newdata$upper_se) + 3)) + 
    ggtitle(paste(species_list[i], ", slope:", summary(mod)$coefficients[2,1], 
                  "p-value:", summary(mod)$coefficients[2,4]))
@@ -336,7 +351,7 @@ for (i in 1:length(species_list)) {
 
 ```
 
-## Examine Significant Table
+### Examine Significant Table
 
 ```{r}
 
@@ -355,7 +370,7 @@ sig_table <- cbind(species_list, mod_slope_M, p_value_M, mod_slope_svl, p_value_
 
 ```
 
-## Examine Model Outputs
+### Examine Model Outputs
 
 ```{r}
 species_list
@@ -363,7 +378,7 @@ species_list
 summary(species_list[21])
 ```
 
-## Examine Model Plots
+### Examine Model Plots
 
 ```{r}
 
@@ -374,7 +389,7 @@ plots[1:length(plots)]
 
 ```
 
-## Save plots
+### Save plots
 
 ```{r}
 for (i in 1:length(plots)) {
