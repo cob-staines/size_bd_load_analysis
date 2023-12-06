@@ -255,6 +255,82 @@ species_list <- species_list[-10]# remove due to poor b_sma value
 
 ```
 
+### RAMU only
+#### `lm(target_quant_per_swab ~ M + svl_mm * body_mass_g)`
+
+```{r}
+
+# wrangle data
+dat <- data %>% 
+   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g) %>% 
+   filter(species_capture == "rana_muscosa") %>% 
+   mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
+                           svl_mm > quantile(svl_mm, 0.66) ~ "large",
+                           between(svl_mm, 
+                                   quantile(svl_mm, 0.33),
+                                   quantile(svl_mm, 0.66)) ~ "medium"),
+          body_mass_g = log(body_mass_g),
+          svl_mm = log(svl_mm)) %>% 
+   mutate(M = as.numeric(scale(M)),
+          svl_mm = as.numeric(scale(svl_mm)),
+          body_mass_g = as.numeric(scale(body_mass_g)))
+
+
+# run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
+mod <- lm(target_quant_per_swab ~ svl_mm * body_mass_g, data=dat)
+
+summary(mod)
+
+# create new dataframe to predict
+small_sizes <- dat %>% 
+  select(size, svl_mm) %>% 
+  filter(size == "small")
+
+small <- seq(min(small_sizes$svl_mm), max(small_sizes$svl_mm), len=100)
+
+medium_sizes <- dat %>% 
+  select(size, svl_mm) %>% 
+  filter(size == "medium")
+medium <- seq(min(medium_sizes$svl_mm), max(medium_sizes$svl_mm), len=100)
+
+large_sizes <- dat %>% 
+  select(size, svl_mm) %>% 
+  filter(size == "large")
+large <- seq(min(large_sizes$svl_mm), max(large_sizes$svl_mm), len=100)
+
+svl_mm <- c(small, medium, large)
+
+size <- rep(c("small", "medium", "large"), len = 300) %>% 
+  sort(decreasing = T)
+
+body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=300)
+#body_mass_g = rep(mean(dat$body_mass_g), len=300) # Mean
+
+#M = seq(min(dat$M), max(dat$M), len=300)
+M = rep(mean(dat$M), len=300) # Mean
+
+# dataframe to predict on
+newdata <- data.frame(M = M, svl_mm = svl_mm, body_mass_g = body_mass_g, size = size)
+
+# predict
+mod_pred = predict(mod, newdata = newdata, se.fit = T, type = 'response')
+
+# SE and pred
+newdata$pred <- mod_pred$fit
+newdata$upper_se <- mod_pred$fit + (2 * mod_pred$se.fit)
+newdata$lower_se <- mod_pred$fit - (2 * mod_pred$se.fit)
+
+# visualize 
+ggplot(newdata) + 
+   geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab, color = size), size=0.8, alpha = 0.2) +
+   geom_line(aes(x=svl_mm, y=pred, color = size), linewidth = 1.5) +
+   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue")+
+   xlab("svl_mm") + ylab("Infection Intensity") + theme_classic() +
+   coord_cartesian(ylim = c(0,max(newdata$upper_se) + 5)) + 
+   ggtitle(paste(species_list[21]))
+```
+
+
 ### lm() Species Loop `lm(target_quant_per_swab ~ M + svl_mm * body_mass_g)`
 
 ```{r}
@@ -309,7 +385,7 @@ for (i in 1:length(species_list)) {
   #M = seq(min(dat$M), max(dat$M), len=300)
   M = rep(mean(dat$M), len=300) # Mean
   #svl_mm = seq(min(dat$svl_mm), max(dat$svl_mm), len=300)
-  svl_mm = rep(mean(dat$svl_mm), len=300) # Mean
+  #svl_mm = rep(mean(dat$svl_mm), len=300) # Mean
   body_mass_g = seq(min(dat$body_mass_g), max(dat$body_mass_g), len=300)
   #body_mass_g = rep(mean(dat$body_mass_g), len=300) # Mean
   
@@ -344,7 +420,7 @@ for (i in 1:length(species_list)) {
   newdata$lower_se <- mod_pred$fit - (2 * mod_pred$se.fit)
   
   
-  # make GAM plot
+  # make plot
   p <- ggplot(newdata) + 
    geom_point(data=dat, aes(x=svl_mm, y=target_quant_per_swab, color = size), size=0.8, alpha = 0.2) +
    geom_line(aes(x=svl_mm, y=pred, color = size), linewidth = 2) +
@@ -374,8 +450,6 @@ for (i in 1:length(species_list)) {
   
 }
 
-
-p
 ```
  
 ### Examine Significant Table
