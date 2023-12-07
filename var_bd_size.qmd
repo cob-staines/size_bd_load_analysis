@@ -50,7 +50,7 @@ dbExecute(connection, "set search_path to survey_data")
 
 
 q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
-      c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected 
+      c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected, qbr.bd_swab_id 
       from location l 
       join region r on l.location_id = r.location_id 
       join site s on r.region_id = s.region_id 
@@ -92,9 +92,9 @@ species_list <- infec_size$species_capture
 mid_data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
   mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
-  mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
-  filter(!r == "0") %>% 
-  select(!r) %>% 
+  # mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
+  # filter(!r == "0") %>% 
+  # select(!r) %>% 
   group_by(species_capture) %>% 
   mutate(mean_L = median(svl_mm)) %>% 
   ungroup()
@@ -260,7 +260,7 @@ species_list <- species_list[-10]# remove due to poor b_sma value
  
 # wrangle data
 dat <- data %>% 
-   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, date) %>% 
+   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, date, site, bd_swab_id) %>% 
    filter(species_capture == "rana_muscosa") %>% 
    mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
                            svl_mm > quantile(svl_mm, 0.66) ~ "large",
@@ -272,6 +272,7 @@ dat <- data %>%
    mutate(M = as.numeric(scale(M)),
           svl_mm = as.numeric(scale(svl_mm)),
           body_mass_g = as.numeric(scale(body_mass_g)))
+
 
 # initial explore - not looking good....
 hist(dat$svl_mm)
