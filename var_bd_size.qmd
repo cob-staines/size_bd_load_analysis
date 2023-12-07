@@ -91,9 +91,7 @@ species_list <- infec_size$species_capture
 
 mid_data <- raw_data %>% 
   filter(species_capture %in% species_list) %>% 
-  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1),
-                  body_mass_g = abs(body_mass_g)) %>%  # error in db NEED TO FIX, one negative mass
-  filter(body_mass_g > 0) %>%  # error in db NEED TO FIX, one bull frog with 0 mass) %>% 
+  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
   mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>% 
   filter(!r == "0") %>% 
   select(!r) %>% 
@@ -262,7 +260,7 @@ species_list <- species_list[-10]# remove due to poor b_sma value
  
 # wrangle data
 dat <- data %>% 
-   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g) %>% 
+   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, date) %>% 
    filter(species_capture == "rana_muscosa") %>% 
    mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
                            svl_mm > quantile(svl_mm, 0.66) ~ "large",
