@@ -17,7 +17,7 @@ if (!require(librarian)){
   library(librarian)
 }
 
-librarian::shelf(tidyverse, here, DBI, RPostgres, mgcv)
+librarian::shelf(tidyverse, here, DBI, RPostgres, mgcv, lme4, lmerTest, plm)
 
 ```
 
@@ -279,21 +279,21 @@ site_count <- dat %>%
   group_by(site) %>% 
   summarise(n = n())
 
-dat <- data %>% 
-   select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, site) %>% 
-   filter(species_capture == "rana_muscosa",
-          site == "72336") %>% 
-   mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
-                           svl_mm > quantile(svl_mm, 0.66) ~ "large",
-                           between(svl_mm, 
-                                   quantile(svl_mm, 0.33),
-                                   quantile(svl_mm, 0.66)) ~ "medium"),
-          body_mass_g = log(body_mass_g),
-          svl_mm = log(svl_mm)) %>% 
-   mutate(M = as.numeric(scale(M)),
-          svl_mm = as.numeric(scale(svl_mm)),
-          body_mass_g = as.numeric(scale(body_mass_g)),
-          site = as.factor(site))
+# dat <- data %>% 
+#    select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, site) %>% 
+#    filter(species_capture == "rana_muscosa",
+#           site == "72336") %>% 
+#    mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
+#                            svl_mm > quantile(svl_mm, 0.66) ~ "large",
+#                            between(svl_mm, 
+#                                    quantile(svl_mm, 0.33),
+#                                    quantile(svl_mm, 0.66)) ~ "medium"),
+#           body_mass_g = log(body_mass_g),
+#           svl_mm = log(svl_mm)) %>% 
+#    mutate(M = as.numeric(scale(M)),
+#           svl_mm = as.numeric(scale(svl_mm)),
+#           body_mass_g = as.numeric(scale(body_mass_g)),
+#           site = as.factor(site))
 
 # initial explore - not looking good....
 hist(dat$svl_mm)
@@ -309,11 +309,12 @@ cor(dat$body_mass_g, dat$target_quant_per_swab)
 
 # run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
 
-mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data=dat)
+mod.fix <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "random", data=dat)
 
-summary(mod)
+mod <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "within", data=dat)
 
-anova(mod)
+phtest(mod.fix,mod)
+
 
 # create new dataframe to predict
 small_sizes <- dat %>% 
