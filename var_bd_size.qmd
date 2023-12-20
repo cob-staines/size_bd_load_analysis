@@ -305,7 +305,7 @@ hist(dat$M)
 cor(dat$svl_mm, dat$target_quant_per_swab)
 
 cor(dat$body_mass_g, dat$target_quant_per_swab)
-
+ 
 
 # run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
 
