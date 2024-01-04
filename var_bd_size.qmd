@@ -263,11 +263,7 @@ species_list <- species_list[-10]# remove due to poor b_sma value
 dat <- data %>% 
    select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, site) %>% 
    filter(species_capture == "rana_muscosa") %>% 
-   mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
-                           svl_mm > quantile(svl_mm, 0.66) ~ "large",
-                           between(svl_mm, 
-                                   quantile(svl_mm, 0.33),
-                                   quantile(svl_mm, 0.66)) ~ "medium"),
+   mutate(
           body_mass_g = log(body_mass_g),
           svl_mm = log(svl_mm)) %>% 
    mutate(M = as.numeric(scale(M)),
@@ -277,41 +273,32 @@ dat <- data %>%
 
 site_count <- dat %>% 
   group_by(site) %>% 
-  summarise(n = n())
+  summarise(n = n()) %>% 
+  filter(n > 100) %>% 
+  select(site)
 
-# dat <- data %>% 
-#    select(species_capture, target_quant_per_swab, M, svl_mm, body_mass_g, site) %>% 
-#    filter(species_capture == "rana_muscosa",
-#           site == "72336") %>% 
-#    mutate(size = case_when(svl_mm < quantile(svl_mm, 0.33) ~ "small",
-#                            svl_mm > quantile(svl_mm, 0.66) ~ "large",
-#                            between(svl_mm, 
-#                                    quantile(svl_mm, 0.33),
-#                                    quantile(svl_mm, 0.66)) ~ "medium"),
-#           body_mass_g = log(body_mass_g),
-#           svl_mm = log(svl_mm)) %>% 
-#    mutate(M = as.numeric(scale(M)),
-#           svl_mm = as.numeric(scale(svl_mm)),
-#           body_mass_g = as.numeric(scale(body_mass_g)),
-#           site = as.factor(site))
+# 100 counts of more at site
+final_data <- dat %>% 
+  filter(site %in% c(site_count$site))
+
 
 # initial explore - not looking good....
-hist(dat$svl_mm)
+hist(final_data$svl_mm)
 
-hist(dat$body_mass_g)
+hist(final_data$body_mass_g)
 
-hist(dat$M)
+hist(final_data$M)
 
-cor(dat$svl_mm, dat$target_quant_per_swab)
+cor(final_data$svl_mm, final_data$target_quant_per_swab)
 
-cor(dat$body_mass_g, dat$target_quant_per_swab)
+cor(final_data$body_mass_g, final_data$target_quant_per_swab)
  
 
 # run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
 
-mod.fix <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "random", data=dat)
+mod.fix <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "random", data=final_data)
 
-mod <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "within", data=dat)
+mod <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "within", data=final_data)
 
 phtest(mod.fix,mod)
 
