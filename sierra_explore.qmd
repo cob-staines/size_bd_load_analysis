@@ -44,7 +44,7 @@ dbExecute(connection, "set search_path to survey_data")
 ```{r}
 
 
-q <- "select l.location, r.region, s.site, v.date, s2.detection_type, c.species_capture, 
+q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_type, c.species_capture, 
       c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected, qbr.bd_swab_id 
       from location l 
       join region r on l.location_id = r.location_id 
@@ -62,7 +62,7 @@ raw_data <- dbGetQuery(connection, q)
 
 ```
 
-### Wrangle data
+### Wrangle data - Site
 
 #### Initial wrangle
 
@@ -79,7 +79,8 @@ data <- raw_data %>%
           svl_mm = log(svl_mm)) %>% 
    mutate(svl_mm = as.numeric(scale(svl_mm)),
           body_mass_g = as.numeric(scale(body_mass_g)),
-          site = as.factor(site))
+          site = as.factor(site),
+          wilderness = as.factor(wilderness))
 
 
 site_count <- data %>% 
@@ -127,7 +128,7 @@ phtest(fixed,random)
 
 #### `lm(target_quant_per_swab ~ svl_mm + factor(site) - 1)` to see sig and trend of site level fixed effects
 ```{r}
-sit_random <- lm(target_quant_per_swab ~ svl_mm + factor(site) - 1, data = final_data)
+sit_random <- lm(target_quant_per_swab ~ svl_mm + site - 1, data = final_data)
 
 summary(sit_random)
 
@@ -135,3 +136,76 @@ summary(sit_random)
 
 ```
 
+### Wrangle data - Wilderness
+
+#### Initial wrangle
+
+```{r}
+
+data <- raw_data %>% 
+  filter(species_capture == "rana_muscosa") %>% 
+  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
+  mutate(r = if_else(species_capture == "rana_muscosa" & svl_mm < 40, "0", "1")) %>%
+  filter(!r == "0") %>%
+  select(!r) %>%
+  ungroup() %>% 
+   mutate(body_mass_g = log(body_mass_g),
+          svl_mm = log(svl_mm)) %>% 
+   mutate(svl_mm = as.numeric(scale(svl_mm)),
+          body_mass_g = as.numeric(scale(body_mass_g)),
+          site = as.factor(site),
+          wilderness = as.factor(wilderness))
+
+
+wilderness_count <- data %>% 
+  group_by(wilderness) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 100) %>% 
+  select(wilderness)
+
+# 100 counts of more at site
+final_data <- data %>% 
+  filter(wilderness %in% c(wilderness_count$wilderness))
+
+
+```
+
+### Models
+
+#### Explore Cor
+```{r}
+
+# initial explore - not looking good....
+hist(final_data$svl_mm)
+
+hist(final_data$body_mass_g)
+
+cor(final_data$svl_mm, final_data$target_quant_per_swab)
+
+cor(final_data$body_mass_g, final_data$target_quant_per_swab)
+```
+
+#### `plm()` check if fixed or random effect for wilderness is better
+
+```{r}
+# run plm target_quant_per_swab ~ svl_mm to determine if fixed or random better
+
+fixed <- plm(target_quant_per_swab ~ svl_mm, index = c("wilderness"), model = "within", data=final_data) #fixed model
+
+random <- plm(target_quant_per_swab ~ svl_mm, index = c("wilderness"), model = "random", data=final_data) #random
+
+phtest(fixed,random)
+
+# random site better because p>0.05
+
+```
+
+#### `lm(target_quant_per_swab ~ svl_mm + factor(wilderness) - 1)` to see sig and trend of site level fixed effects
+```{r}
+wild_random <- lm(target_quant_per_swab ~ svl_mm + wilderness - 1, data = final_data)
+
+summary(wild_random)
+
+# Seems bigger frogs are more infected...
+
+```
