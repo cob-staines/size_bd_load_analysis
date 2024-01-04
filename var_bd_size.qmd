@@ -294,14 +294,19 @@ cor(final_data$svl_mm, final_data$target_quant_per_swab)
 cor(final_data$body_mass_g, final_data$target_quant_per_swab)
  
 
-# run lm target_quant_per_swab ~ M + svl_mm * body_mass_g + svl_mm * size per species
+# run plm target_quant_per_swab ~ svl_mm to determine if fixed or random better
 
-mod.fix <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "random", data=final_data)
+fixed <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "within", data=final_data) #fixed model
 
-mod <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "within", data=final_data)
+random <- plm(target_quant_per_swab ~ svl_mm, index = c("site"), model = "random", data=final_data) #random
 
-phtest(mod.fix,mod)
+phtest(fixed,random)
 
+# run lm target_quant_per_swab ~ svl_mm + factor(site) - 1
+
+sit_random <- lm(target_quant_per_swab ~ svl_mm + factor(site) - 1, data = final_data)
+
+summary(sit_random)
 
 # create new dataframe to predict
 small_sizes <- dat %>% 
