@@ -264,6 +264,22 @@ wild_random <- lm(target_quant_per_swab ~ svl_mm + wilderness - 1, data = final_
 
 summary(wild_random)
 
+# Seems longer frogs are more infected...
+
+
+wild_random <- lm(target_quant_per_swab ~ body_mass_g + wilderness - 1, data = final_data)
+
+summary(wild_random)
+
 # Seems bigger frogs are more infected...
+
+
+
+wild_random <- lm(target_quant_per_swab ~ svl_mm*body_mass_g + wilderness - 1, data = final_data)
+
+summary(wild_random)
+
+# Seems bigger frogs are more infected...
+
 
 ```
