@@ -125,6 +125,17 @@ phtest(fixed,random)
 # random site better because p>0.05
 
 
+# run plm target_quant_per_swab ~ body_mass_g to determine if fixed or random better
+
+fixed <- plm(target_quant_per_swab ~ body_mass_g, index = c("site"), model = "within", data=final_data) #fixed model
+
+random <- plm(target_quant_per_swab ~ body_mass_g, index = c("site"), model = "random", data=final_data) #random
+
+phtest(fixed,random)
+
+# random site better because p>0.05
+
+
 
 # run plm target_quant_per_swab ~ svl_mm*body_mass_g to determine if fixed or random better
 
@@ -138,14 +149,25 @@ phtest(fixed,random)
 
 ```
 
-#### `lm(target_quant_per_swab ~ svl_mm + factor(site) - 1)` to see sig and trend of site level fixed effects
+#### `lm()` to see sig and trend of site level fixed effects
 ```{r}
+# svl_mm
 sit_random <- lm(target_quant_per_swab ~ svl_mm + site - 1, data = final_data)
+
+summary(sit_random)
+
+# Seems longer frogs are more infected...
+
+
+# body_mass_g
+sit_random <- lm(target_quant_per_swab ~ body_mass_g + site - 1, data = final_data)
 
 summary(sit_random)
 
 # Seems bigger frogs are more infected...
 
+
+# svl_mm * body_mass_g
 sit_random <- lm(target_quant_per_swab ~ svl_mm*body_mass_g + site - 1, data = final_data)
 
 summary(sit_random)
@@ -209,6 +231,26 @@ cor(final_data$body_mass_g, final_data$target_quant_per_swab)
 fixed <- plm(target_quant_per_swab ~ svl_mm, index = c("wilderness"), model = "within", data=final_data) #fixed model
 
 random <- plm(target_quant_per_swab ~ svl_mm, index = c("wilderness"), model = "random", data=final_data) #random
+
+phtest(fixed,random)
+
+# random site better because p>0.05
+
+
+
+fixed <- plm(target_quant_per_swab ~ body_mass_g, index = c("wilderness"), model = "within", data=final_data) #fixed model
+
+random <- plm(target_quant_per_swab ~ body_mass_g, index = c("wilderness"), model = "random", data=final_data) #random
+
+phtest(fixed,random)
+
+# random site better because p>0.05
+
+
+
+fixed <- plm(target_quant_per_swab ~ svl_mm*body_mass_g, index = c("wilderness"), model = "within", data=final_data) #fixed model
+
+random <- plm(target_quant_per_swab ~ svl_mm*body_mass_g, index = c("wilderness"), model = "random", data=final_data) #random
 
 phtest(fixed,random)
 
