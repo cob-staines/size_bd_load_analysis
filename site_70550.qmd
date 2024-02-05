@@ -266,7 +266,7 @@ ggplot(newdata_sub) +
   ggtitle(paste("Sub-Adult RAMU, Site 70550, Slope:", 
                 round(summary(sub_svl_mod)$coefficients[2,1], 3), 
                 ", p-value:", 
-                round(summary(sub_svl_mod)$coefficients[2,4], 3), "**"))
+                round(summary(sub_svl_mod)$coefficients[2,4], 3), "**")) 
 
 ```
 
