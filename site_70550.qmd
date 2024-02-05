@@ -43,7 +43,8 @@ dbExecute(connection, "set search_path to survey_data")
 ### query data of interest
 
 ```{r}
-#      and c.life_stage = 'adult'
+
+# This query returns all organisms that are infected and have a SVL and body mass measurement 
 
 q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_type, c.species_capture, 
       c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected, qbr.bd_swab_id 
@@ -59,5 +60,85 @@ q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_ty
       and qbr.detected = '1';"
 
 raw_data <- dbGetQuery(connection, q) 
+
+```
+
+### Wrangle Adult data - Site 70550
+
+#### Initial wrangle
+
+```{r}
+
+# Here we filter only for RAMU, log10 +1 transform the bd load, and filter for adult life stage only. We then center and scale the variables. 
+
+adult_data <- raw_data %>% 
+  filter(species_capture == "rana_muscosa",
+         life_stage == "adult") %>% 
+  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
+  ungroup() %>% 
+   mutate(body_mass_g = log(body_mass_g),
+          svl_mm = log(svl_mm)) %>% 
+   mutate(svl_mm = as.numeric(scale(svl_mm)),
+          body_mass_g = as.numeric(scale(body_mass_g)),
+          site = as.factor(site),
+          wilderness = as.factor(wilderness))
+
+
+# briefly examine how many sites we have available with greater then 100 observations. 
+
+adult_site_count <- adult_data %>% 
+  group_by(site) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 100) %>% 
+  select(site)
+
+
+# Site 70550 data
+
+final_adult_data <- adult_data %>% 
+  filter(site == "70550")
+
+
+```
+
+### Models
+
+#### Explore 
+```{r}
+
+# initial explore
+hist(final_adult_data$svl_mm)
+
+hist(final_adult_data$body_mass_g)
+
+hist(final_adult_data$target_quant_per_swab)
+
+cor(final_adult_data$svl_mm, final_adult_data$target_quant_per_swab)
+
+cor(final_adult_data$body_mass_g, final_adult_data$target_quant_per_swab)
+```
+
+#### `lm()` to see sig and trend for adults at site 70550
+```{r}
+# svl_mm
+adult_svl_mod <- lm(target_quant_per_swab ~ svl_mm , data = final_adult_data)
+
+summary(adult_svl_mod)
+
+# Seems longer frogs are more infected...
+
+
+# body_mass_g
+adult_bm_mod <- lm(target_quant_per_swab ~ body_mass_g, data = final_adult_data)
+
+summary(adult_bm_mod)
+
+# Seems bigger frogs are more infected...
+
+
+# svl_mm * body_mass_g
+adult_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_adult_data)
+
+summary(adult_svl.bm_mod)
 
 ```
