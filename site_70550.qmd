@@ -69,7 +69,7 @@ raw_data <- dbGetQuery(connection, q)
 
 ```{r}
 
-# Here we filter only for RAMU, log10 +1 transform the bd load, and filter for adult life stage only. We then center and scale the variables. 
+# Here we filter only for adult RAMU, log10 +1 transform the bd load, and filter for adult life stage only. We then center and scale the variables. 
 
 adult_data <- raw_data %>% 
   filter(species_capture == "rana_muscosa",
@@ -125,7 +125,7 @@ adult_svl_mod <- lm(target_quant_per_swab ~ svl_mm , data = final_adult_data)
 
 summary(adult_svl_mod)
 
-# Seems longer frogs are more infected...
+# Seems longer frogs are less infected
 
 
 # body_mass_g
@@ -133,7 +133,7 @@ adult_bm_mod <- lm(target_quant_per_swab ~ body_mass_g, data = final_adult_data)
 
 summary(adult_bm_mod)
 
-# Seems bigger frogs are more infected...
+# Seems bigger frogs are less infected
 
 
 # svl_mm * body_mass_g
@@ -142,3 +142,97 @@ adult_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_
 summary(adult_svl.bm_mod)
 
 ```
+
+#### Visualize Adult `lm(target_quant_per_swab ~ svl_mm)`
+```{r}
+
+
+
+```
+
+
+### Wrangle SubAdult data - Site
+
+#### Initial wrangle
+
+```{r}
+# Here we filter only for subadult RAMU, log10 +1 transform the bd load, and filter for adult life stage only. We then center and scale the variables. 
+sub_data <- raw_data %>% 
+  filter(species_capture == "rana_muscosa",
+         life_stage == "subadult") %>% 
+  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
+  ungroup() %>% 
+   mutate(body_mass_g = log(body_mass_g),
+          svl_mm = log(svl_mm)) %>% 
+   mutate(svl_mm = as.numeric(scale(svl_mm)),
+          body_mass_g = as.numeric(scale(body_mass_g)),
+          site = as.factor(site),
+          wilderness = as.factor(wilderness))
+
+
+# briefly examine how many sites we have available with greater then 50 observations. 
+sub_site_count <- sub_data %>% 
+  group_by(site) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 50) %>% 
+  select(site)
+
+
+# Site 70550 data
+final_sub_data <- sub_data %>% 
+  filter(site == "70550")
+
+
+```
+
+### Models
+
+#### Explore Cor
+```{r}
+
+# initial explore 
+hist(final_sub_data$svl_mm)
+
+hist(final_sub_data$body_mass_g)
+
+hist(final_sub_data$target_quant_per_swab)
+
+cor(final_sub_data$svl_mm, final_sub_data$target_quant_per_swab)
+
+cor(final_sub_data$body_mass_g, final_sub_data$target_quant_per_swab)
+```
+
+#### `lm()` to see sig and trend for subadults at site 70550
+```{r}
+# svl_mm
+sub_svl_mod <- lm(target_quant_per_swab ~ svl_mm, data = final_sub_data)
+
+summary(sub_svl_mod)
+
+# Seems longer frogs are less infected
+
+
+# body_mass_g
+sub_bm_mod <- lm(target_quant_per_swab ~ body_mass_g, data = final_sub_data)
+
+summary(sub_bm_mod)
+
+# Seems bigger frogs are less infected...
+
+
+# svl_mm * body_mass_g
+sub_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_sub_data)
+
+summary(sub_svl.bm_mod)
+```
+
+
+#### Visualize Subadult `lm(target_quant_per_swab ~ svl_mm)`
+```{r}
+
+
+
+```
+
+
+
