@@ -1,0 +1,63 @@
+---
+title: "site_70550"
+format: html
+editor: source
+---
+
+### Load Packages
+
+```{r}
+
+if (!require(librarian)){
+  install.packages("librarian")
+  library(librarian)
+}
+
+librarian::shelf(tidyverse, here, DBI, RPostgres, mgcv, lme4, lmerTest, plm)
+
+```
+
+### Connect to Database
+
+```{r}
+tryCatch({
+    drv <- dbDriver("Postgres")
+    print("Connecting to Database…")
+    connection <- dbConnect(drv,
+                 dbname = Sys.getenv("aws_dbname"),
+                 host = Sys.getenv("aws_host"),
+                 port = Sys.getenv("aws_port"),
+                 user = Sys.getenv("aws_user"),
+                 password = Sys.getenv("aws_password"),
+                 timezone=NULL)
+    print("Database Connected!")
+    },
+    error=function(cond) {
+            print("Unable to connect to Database.")
+    })
+
+#search path
+dbExecute(connection, "set search_path to survey_data")
+```
+
+### query data of interest
+
+```{r}
+#      and c.life_stage = 'adult'
+
+q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_type, c.species_capture, 
+      c.svl_mm, c.body_mass_g, c.life_stage, qbr.target_quant_per_swab, qbr.detected, qbr.bd_swab_id 
+      from location l 
+      join region r on l.location_id = r.location_id 
+      join site s on r.region_id = s.region_id 
+      join visit v on s.site_id = v.site_id 
+      join survey s2 on v.visit_id = s2.visit_id 
+      join capture c on s2.survey_id = c.survey_id 
+      join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
+      where c.svl_mm is not null
+      and c.body_mass_g is not null
+      and qbr.detected = '1';"
+
+raw_data <- dbGetQuery(connection, q) 
+
+```
