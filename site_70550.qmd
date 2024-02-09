@@ -78,8 +78,8 @@ q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_ty
       join capture c on s2.survey_id = c.survey_id 
       join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
       where c.svl_mm is not null
-      and c.body_mass_g is not null
-      and qbr.detected = '1';"  # this restriction could bias results. it also explains why log10(Bd load) data are normally distributed (which was unexpected)
+      and c.body_mass_g is not null;"
+      #and qbr.detected = '1';"  # this restriction could bias results. it also explains why log10(Bd load) data are normally distributed (which was unexpected)
 
 raw_data <- dbGetQuery(connection, q) 
 
@@ -320,7 +320,7 @@ ggplot(newdata_sub) +
 
 postmeta_data <- raw_data %>% 
   filter(species_capture == "rana_muscosa") %>% 
-  mutate(log_target_quant_per_swab = log10(target_quant_per_swab),
+  mutate(log_target_quant_per_swab = log10(target_quant_per_swab+1),
          log_body_mass_g = log(body_mass_g),
          log_svl_mm = log(svl_mm)) %>% 
 #   mutate(svl_mm = as.numeric(scale(svl_mm)),
@@ -373,6 +373,57 @@ cor(final_postmeta_data$body_mass_g, final_postmeta_data$log_target_quant_per_sw
 cor(final_postmeta_data$log_body_mass_g, final_postmeta_data$log_target_quant_per_swab)
 
 ```
+
+#### `lm()` to see sig and trend for subadults at site 70550
+```{r}
+# svl_mm
+postmet_svl_mod <- lm(log_target_quant_per_swab ~ svl_mm, data = final_postmeta_data)
+
+summary(postmet_svl_mod)
+
+# Seems longer frogs are less infected
+
+
+# body_mass_g
+sub_bm_mod <- lm(log_target_quant_per_swab ~ log_body_mass_g, data = final_sub_data)
+
+summary(sub_bm_mod)
+
+# Seems bigger frogs are less infected...
+
+
+# svl_mm * body_mass_g
+sub_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_sub_data)
+
+summary(sub_svl.bm_mod)
+```
+
+
+#### Visualize postmeta `lm(target_quant_per_swab ~ svl_mm)`
+```{r}
+
+pred_svl_postmet <- seq(min(final_postmeta_data$svl_mm), max(final_postmeta_data$svl_mm), len=100)
+
+newdata_postmet <- data.frame(svl_mm = pred_svl_postmet)
+
+mod_pred_adult = predict(postmet_svl_mod, newdata = newdata_postmet, se.fit = T, type = 'response')
+newdata_postmet$pred <- mod_pred_adult$fit
+newdata_postmet$upper_se <- mod_pred_adult$fit + (2 * mod_pred_adult$se.fit)
+newdata_postmet$lower_se <- mod_pred_adult$fit - (2 * mod_pred_adult$se.fit)
+
+ggplot(newdata_postmet) + 
+  geom_point(data=final_postmeta_data, aes(x=svl_mm, y=log_target_quant_per_swab), size=0.5, alpha = 0.2) +
+  geom_line(data=newdata_postmet, aes(x=svl_mm, y=pred), linewidth = 1) +
+  geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue") +
+  xlab("svl_mm") + ylab("Infection Intensity") + 
+  theme_classic() +
+  ggtitle(paste("Post Meta-Metamorphic RAMU, Site 70550, Slope:", 
+                round(summary(postmet_svl_mod)$coefficients[2,1], 3), 
+                ", p-value:", 
+                round(summary(postmet_svl_mod)$coefficients[2,4], 3), "***")) 
+
+```
+
 
 #### Plot Bd load data vs SVL
 
