@@ -384,6 +384,8 @@ final_postmeta_data %>%
     geom_smooth() + 
     geom_smooth(method = lm, color = "green")
 ```
+Let's discuss log10-transformation and scaling of variables. There are some issues there worth digging into.
+
 Linear relationship underestimates loads in subadults and the biggest adults. Smoother shows that Bd loads decrease linear from SVL 30 to 50 mm, and then either
 remain constant or increase slightly from 50 to 70 mm. However, the magnitude of difference between subadults and adults is less than I expected based on earlier work. 
 Interesting! Here are some points to consider for future modeling:
