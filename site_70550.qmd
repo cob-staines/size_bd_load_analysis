@@ -17,7 +17,7 @@ librarian::shelf(tidyverse, here, DBI, RPostgres, mgcv, lme4, lmerTest, plm)
 
 ```
 
-### Connect to Database
+### Connect to Database (optiion 1)
 
 ```{r}
 tryCatch({
@@ -29,6 +29,28 @@ tryCatch({
                  port = Sys.getenv("aws_port"),
                  user = Sys.getenv("aws_user"),
                  password = Sys.getenv("aws_password"),
+                 timezone=NULL)
+    print("Database Connected!")
+    },
+    error=function(cond) {
+            print("Unable to connect to Database.")
+    })
+
+#search path
+dbExecute(connection, "set search_path to survey_data")
+```
+
+### Connect to the database (option 2)
+```{r}
+tryCatch({
+    drv <- dbDriver("Postgres")
+    print("Connecting to Database…")
+    connection <- dbConnect(drv,
+                 dbname = "ribbitr",
+                 host = "ribbitr.c6p56tuocn5n.us-west-1.rds.amazonaws.com",
+                 port = "5432",
+                 user = rstudioapi::askForPassword("aws_user"),
+                 password = rstudioapi::askForPassword("aws_password"),
                  timezone=NULL)
     print("Database Connected!")
     },
@@ -74,13 +96,13 @@ raw_data <- dbGetQuery(connection, q)
 adult_data <- raw_data %>% 
   filter(species_capture == "rana_muscosa",
          life_stage == "adult") %>% 
-  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
+  mutate(log_target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%  # adding 1 is unnecessary because there are no 0 values in load data
   ungroup() %>% 
-   mutate(body_mass_g = log(body_mass_g),
-          svl_mm = log(svl_mm)) %>% 
-   mutate(svl_mm = as.numeric(scale(svl_mm)),
-          body_mass_g = as.numeric(scale(body_mass_g)),
-          site = as.factor(site),
+   mutate(log_body_mass_g = log(body_mass_g),
+          log_svl_mm = log(svl_mm)) %>% 
+#   mutate(svl_mm = as.numeric(scale(svl_mm)),
+#          body_mass_g = as.numeric(scale(body_mass_g)),
+   mutate(site = as.factor(site),
           wilderness = as.factor(wilderness))
 
 
@@ -109,19 +131,29 @@ final_adult_data <- adult_data %>%
 # initial explore
 hist(final_adult_data$svl_mm)
 
+hist(final_adult_data$log_svl_mm)
+
 hist(final_adult_data$body_mass_g)
+
+hist(final_adult_data$log_body_mass_g)
 
 hist(final_adult_data$target_quant_per_swab)
 
-cor(final_adult_data$svl_mm, final_adult_data$target_quant_per_swab)
+hist(final_adult_data$log_target_quant_per_swab)
 
-cor(final_adult_data$body_mass_g, final_adult_data$target_quant_per_swab)
+cor(final_adult_data$svl_mm, final_adult_data$log_target_quant_per_swab)
+
+cor(final_adult_data$log_svl_mm, final_adult_data$log_target_quant_per_swab)
+
+cor(final_adult_data$body_mass_g, final_adult_data$log_target_quant_per_swab)
+
+cor(final_adult_data$log_body_mass_g, final_adult_data$log_target_quant_per_swab)
 ```
 
 #### `lm()` to see sig and trend for adults at site 70550
 ```{r}
 # svl_mm
-adult_svl_mod <- lm(target_quant_per_swab ~ svl_mm , data = final_adult_data)
+adult_svl_mod <- lm(log_target_quant_per_swab ~ svl_mm , data = final_adult_data)
 
 summary(adult_svl_mod)
 
@@ -129,7 +161,7 @@ summary(adult_svl_mod)
 
 
 # body_mass_g
-adult_bm_mod <- lm(target_quant_per_swab ~ body_mass_g, data = final_adult_data)
+adult_bm_mod <- lm(target_quant_per_swab ~ log_body_mass_g, data = final_adult_data)
 
 summary(adult_bm_mod)
 
@@ -137,7 +169,7 @@ summary(adult_bm_mod)
 
 
 # svl_mm * body_mass_g
-adult_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_adult_data)
+adult_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*log_body_mass_g, data = final_adult_data)
 
 summary(adult_svl.bm_mod)
 
@@ -156,7 +188,7 @@ newdata_adult$upper_se <- mod_pred_adult$fit + (2 * mod_pred_adult$se.fit)
 newdata_adult$lower_se <- mod_pred_adult$fit - (2 * mod_pred_adult$se.fit)
 
 ggplot(newdata_adult) + 
-  geom_point(data=final_adult_data, aes(x=svl_mm, y=target_quant_per_swab), size=0.5, alpha = 0.2) +
+  geom_point(data=final_adult_data, aes(x=svl_mm, y=log_target_quant_per_swab), size=0.5, alpha = 0.2) +
   geom_line(data=newdata_adult, aes(x=svl_mm, y=pred), linewidth = 1) +
   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue") +
   xlab("svl_mm") + ylab("Infection Intensity") + 
@@ -178,13 +210,13 @@ ggplot(newdata_adult) +
 sub_data <- raw_data %>% 
   filter(species_capture == "rana_muscosa",
          life_stage == "subadult") %>% 
-  mutate(target_quant_per_swab = log10(target_quant_per_swab + 1)) %>%
+  mutate(log_target_quant_per_swab = log10(target_quant_per_swab)) %>%
   ungroup() %>% 
-   mutate(body_mass_g = log(body_mass_g),
-          svl_mm = log(svl_mm)) %>% 
-   mutate(svl_mm = as.numeric(scale(svl_mm)),
-          body_mass_g = as.numeric(scale(body_mass_g)),
-          site = as.factor(site),
+   mutate(log_body_mass_g = log(body_mass_g),
+          log_svl_mm = log(svl_mm)) %>% 
+#   mutate(svl_mm = as.numeric(scale(svl_mm)),
+#          body_mass_g = as.numeric(scale(body_mass_g)),
+    mutate(site = as.factor(site),
           wilderness = as.factor(wilderness))
 
 
@@ -211,19 +243,29 @@ final_sub_data <- sub_data %>%
 # initial explore 
 hist(final_sub_data$svl_mm)
 
+hist(final_sub_data$log_svl_mm)
+
 hist(final_sub_data$body_mass_g)
+
+hist(final_sub_data$log_body_mass_g)
 
 hist(final_sub_data$target_quant_per_swab)
 
-cor(final_sub_data$svl_mm, final_sub_data$target_quant_per_swab)
+hist(final_sub_data$log_target_quant_per_swab)
+
+cor(final_sub_data$svl_mm, final_sub_data$log_target_quant_per_swab)
+
+cor(final_sub_data$log_svl_mm, final_sub_data$log_target_quant_per_swab)
 
 cor(final_sub_data$body_mass_g, final_sub_data$target_quant_per_swab)
+
+cor(final_sub_data$log_body_mass_g, final_sub_data$log_target_quant_per_swab)
 ```
 
 #### `lm()` to see sig and trend for subadults at site 70550
 ```{r}
 # svl_mm
-sub_svl_mod <- lm(target_quant_per_swab ~ svl_mm, data = final_sub_data)
+sub_svl_mod <- lm(log_target_quant_per_swab ~ svl_mm, data = final_sub_data)
 
 summary(sub_svl_mod)
 
@@ -231,7 +273,7 @@ summary(sub_svl_mod)
 
 
 # body_mass_g
-sub_bm_mod <- lm(target_quant_per_swab ~ body_mass_g, data = final_sub_data)
+sub_bm_mod <- lm(log_target_quant_per_swab ~ log_body_mass_g, data = final_sub_data)
 
 summary(sub_bm_mod)
 
@@ -258,7 +300,7 @@ newdata_sub$upper_se <- mod_pred_adult$fit + (2 * mod_pred_adult$se.fit)
 newdata_sub$lower_se <- mod_pred_adult$fit - (2 * mod_pred_adult$se.fit)
 
 ggplot(newdata_sub) + 
-  geom_point(data=final_sub_data, aes(x=svl_mm, y=target_quant_per_swab), size=0.5, alpha = 0.2) +
+  geom_point(data=final_sub_data, aes(x=svl_mm, y=log_target_quant_per_swab), size=0.5, alpha = 0.2) +
   geom_line(data=newdata_sub, aes(x=svl_mm, y=pred), linewidth = 1) +
   geom_ribbon(aes(ymin = lower_se, ymax= upper_se, x = svl_mm), alpha = 0.2, fill = "blue") +
   xlab("svl_mm") + ylab("Infection Intensity") + 
@@ -270,5 +312,89 @@ ggplot(newdata_sub) +
 
 ```
 
+### All post-metamorphic frogs
+
+```{r}
+
+# Here we filter for adult/subadult RAMU, log10 +1 transform the bd load. We then center and scale the variables. 
+
+postmeta_data <- raw_data %>% 
+  filter(species_capture == "rana_muscosa") %>% 
+  mutate(log_target_quant_per_swab = log10(target_quant_per_swab),
+         log_body_mass_g = log(body_mass_g),
+         log_svl_mm = log(svl_mm)) %>% 
+#   mutate(svl_mm = as.numeric(scale(svl_mm)),
+#          body_mass_g = as.numeric(scale(body_mass_g)),
+  mutate(site = as.factor(site),
+          wilderness = as.factor(wilderness))
 
 
+# briefly examine how many sites we have available with greater then 100 observations. 
+
+postmeta_site_count <- postmeta_data %>% 
+  group_by(site) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 100) %>% 
+  select(site)
+
+
+# Site 70550 data
+
+final_postmeta_data <- postmeta_data %>% 
+  filter(site == "70550")
+
+
+```
+
+### Models
+
+#### Explore 
+```{r}
+
+# initial explore
+hist(final_postmeta_data$svl_mm)
+
+hist(final_postmeta_data$log_svl_mm)
+
+hist(final_postmeta_data$body_mass_g)
+
+hist(final_postmeta_data$log_body_mass_g)
+
+hist(final_postmeta_data$target_quant_per_swab)
+
+hist(final_postmeta_data$log_target_quant_per_swab)
+
+cor(final_postmeta_data$svl_mm, final_postmeta_data$log_target_quant_per_swab)
+
+cor(final_postmeta_data$log_svl_mm, final_postmeta_data$log_target_quant_per_swab)
+
+cor(final_postmeta_data$body_mass_g, final_postmeta_data$log_target_quant_per_swab)
+
+cor(final_postmeta_data$log_body_mass_g, final_postmeta_data$log_target_quant_per_swab)
+
+```
+
+#### Plot Bd load data vs SVL
+
+```{r}
+final_postmeta_data %>% 
+  ggplot(aes(svl_mm, target_quant_per_swab)) +
+    scale_y_log10() +
+    geom_point() +
+    geom_smooth() + 
+    geom_smooth(method = lm, color = "green")
+```
+Linear relationship underestimates loads in subadults and the biggest adults. Smoother shows that Bd loads decrease linear from SVL 30 to 50 mm, and then either
+remain constant or increase slightly from 50 to 70 mm. However, the magnitude of difference between subadults and adults is less than I expected based on earlier work. 
+Interesting! Here are some points to consider for future modeling:
+
+Small subadults (30-35 mm) show odd bifurcation of Bd load values: One group has relatively constant Bd loads with SVL, the other shows very high loads at small SVL and 
+rapid decreases with SVL. Weird. Is this an artifact or something else?
+
+Hierarchical structure that may affect independence of data:
+  - Same adults swabbed over time. This may also be the case for subadults, but we have no way of knowing. Difficult to account for across subadults and adults. 
+  - Sampling occurred on distinct dates. Include year and/or day-of-year as a fixed effect, date as a random (group-level) effect?
+  
+Conduct similar analysis using data from epizootic population(s)
+  - Difficult because we rarely have many samples from such populations due to high frog mortality and resulting small population size. 
+  - 10100, 10101, 10102, 11858, 12590 during epizootic (2015) might have potential (Knapp et al. 2022, PeerJ), but I don't think we swabbed many subadults. 
