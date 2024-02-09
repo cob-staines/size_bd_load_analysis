@@ -79,7 +79,7 @@ q <- "select l.location, r.region, s.site, s.wilderness, v.date, s2.detection_ty
       join qpcr_bd_results qbr on c.bd_swab_id = qbr.bd_swab_id
       where c.svl_mm is not null
       and c.body_mass_g is not null
-      and qbr.detected = '1';"
+      and qbr.detected = '1';"  # this restriction could bias results. it also explains why log10(Bd load) data are normally distributed (which was unexpected)
 
 raw_data <- dbGetQuery(connection, q) 
 
@@ -384,6 +384,9 @@ final_postmeta_data %>%
     geom_smooth() + 
     geom_smooth(method = lm, color = "green")
 ```
+Exclusion only of Bd-negative frogs could bias results. 70550 is a Bd-positive site, and excluding zero load values could change the Bd load vs SVL relationship. This 
+definitely needs additional discussion. 
+
 Let's discuss log10-transformation and scaling of variables. There are some issues there worth digging into.
 
 Linear relationship underestimates loads in subadults and the biggest adults. Smoother shows that Bd loads decrease linear from SVL 30 to 50 mm, and then either
