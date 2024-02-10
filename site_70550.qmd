@@ -471,7 +471,7 @@ final_postmeta_data %>%
     scale_y_log10() +
     geom_point() +
     geom_smooth() + 
-    geom_smooth(method = lm, color = "green")
+    geom_smooth(method = lm, color = "green") 
 
 # hmm above figure indicates a negative linear relationship for non log transformed bd load but log transformed indicates positive bd load in the lm().  
 ```
