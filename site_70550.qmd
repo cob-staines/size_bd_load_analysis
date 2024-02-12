@@ -481,7 +481,7 @@ postmet_prev %>%
   ggplot(aes(svl_mm_bin, prev)) +
     geom_point() +
     geom_smooth() + 
-    geom_smooth(method = lm, color = "green")
+    geom_smooth(method = lm, color = "green") 
 
 ```
 
