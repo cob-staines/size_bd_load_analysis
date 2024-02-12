@@ -200,6 +200,16 @@ ggplot(newdata_adult) +
 
 ```
 
+#### Plot Bd load data vs SVL
+
+```{r}
+final_adult_data %>% 
+  ggplot(aes(svl_mm, target_quant_per_swab)) +
+    scale_y_log10() +
+    geom_point() +
+    geom_smooth() + 
+    geom_smooth(method = lm, color = "green")
+```
 
 ### Wrangle SubAdult data - Site
 
@@ -504,7 +514,7 @@ cor(final_postmeta_data$log_body_mass_g, final_postmeta_data$log_target_quant_pe
 
 ```
 
-#### `lm()` to see sig and trend for subadults at site 70550
+#### `lm()` to see sig and trend for postmet
 ```{r}
 # svl_mm
 postmet_svl_mod <- lm(log_target_quant_per_swab ~ svl_mm, data = final_postmeta_data)
