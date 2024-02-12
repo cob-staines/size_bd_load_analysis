@@ -393,19 +393,19 @@ summary(postmet_svl_mod)
 
 # Seems longer frogs are less infected
 
-
-# body_mass_g
-sub_bm_mod <- lm(log_target_quant_per_swab ~ log_body_mass_g, data = final_sub_data)
-
-summary(sub_bm_mod)
-
-# Seems bigger frogs are less infected...
-
-
-# svl_mm * body_mass_g
-sub_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_sub_data)
-
-summary(sub_svl.bm_mod)
+# 
+# # body_mass_g
+# sub_bm_mod <- lm(log_target_quant_per_swab ~ log_body_mass_g, data = final_sub_data)
+# 
+# summary(sub_bm_mod)
+# 
+# # Seems bigger frogs are less infected...
+# 
+# 
+# # svl_mm * body_mass_g
+# sub_svl.bm_mod <- lm(target_quant_per_swab ~ svl_mm*body_mass_g, data = final_sub_data)
+# 
+# summary(sub_svl.bm_mod)
 ```
 
 
@@ -439,12 +439,53 @@ ggplot(newdata_postmet) +
 
 ```{r}
 final_postmeta_data %>% 
-  ggplot(aes(svl_mm, target_quant_per_swab)) +
+  ggplot(aes(svl_mm, (target_quant_per_swab + 0.1))) +
     scale_y_log10() +
+    geom_point() +
+    geom_smooth(span = 0.2) + 
+    geom_smooth(method = lm, color = "green")
+```
+
+#### Postmetamorphic prevelance
+```{r}
+
+round_any = function(x, accuracy, f=round){f(x/ accuracy) * accuracy}
+
+postmet_prev <- final_postmeta_data %>% 
+  mutate(bin = case_when(
+                         svl_mm >= 25 & svl_mm < 35 ~ 1, # two obs less then 30 so grouped them in 30 bin
+                         svl_mm >= 35 & svl_mm < 40 ~ 2,
+                         svl_mm >= 40 & svl_mm < 45 ~ 3,
+                         svl_mm >= 45 & svl_mm < 50 ~ 4,
+                         svl_mm >= 50 & svl_mm < 55 ~ 5,
+                         svl_mm >= 55 & svl_mm < 60 ~ 6,
+                         svl_mm >= 60 & svl_mm < 65 ~ 7,
+                         svl_mm >= 65 & svl_mm < 70 ~ 8,
+                         svl_mm >= 70 & svl_mm < 75 ~ 9)) %>% 
+  group_by(bin) %>% 
+  mutate(n = n(),
+         n_infected = (sum(detected)),
+         prev = (n_infected/n) * 100) %>% 
+  filter(!duplicated(bin)) %>% 
+  ungroup() %>% 
+  arrange(bin) %>% 
+  mutate(svl_mm_bin = seq(from = 30, to = 70, by = 5))
+
+cor(postmet_prev$prev, postmet_prev$svl_mm)
+
+prev_postmet_mod <- lm(prev ~ svl_mm, data = postmet_prev)
+
+summary(prev_postmet_mod)
+  
+postmet_prev %>% 
+  ggplot(aes(svl_mm_bin, prev)) +
     geom_point() +
     geom_smooth() + 
     geom_smooth(method = lm, color = "green")
+
 ```
+
+
 Exclusion only of Bd-negative frogs could bias results. 70550 is a Bd-positive site, and excluding zero load values could change the Bd load vs SVL relationship. This 
 definitely needs additional discussion. 
 
