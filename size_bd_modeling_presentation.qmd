@@ -1,0 +1,102 @@
+---
+title: "Size vs. Bd Prevalence & Load"
+author: Cob Staines
+date: 2025-05-06
+format: html
+df-print: kable
+---
+
+```{r, echo = FALSE, eval = TRUE, include = FALSE}
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+
+## Connect to DB
+dbcon <- hopToDB("ribbitr")
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+bd_sample = db_sample %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+```
+
+# Motivation
+#### A case study:
+
+- Region: Sierra Nevada
+- Species: Rana Sierrae
+- Site: 70550
+- Temporal range: 2006 - 2024
+- Data: Capture surveys (SVL), Bd swabs (Bd its1 copies)
+- Sample size: 3874
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+data_70550 = bd_sample %>%
+  inner_join(db_bd, by = "sample_id") %>%
+  filter(site == "70550",
+         !is.na(svl_mm)) %>%
+  group_by(sample_id,
+           capture_id,
+           svl_mm,
+           life_stage,
+           site,
+           date) %>%
+  summarise(bd_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+            detected = any(detected),
+            .groups = "drop") %>%
+  ungroup() %>%
+  mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
+  collect()
+
+stats_70550 = data_70550 %>%
+  summarise(min_date = min(date),
+            max_date = max(date),
+            count = n())
+
+ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab))) + 
+  geom_point()
+
+ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab), color = life_stage)) + 
+  geom_point()
+```
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+ggplot(data_70550, aes(, log(bd_its1_copies_per_swab), color = life_stage)) + 
+  geom_boxplot()
+
+(prev_70550 = data_70550 %>%
+  group_by(life_stage) %>%
+  summarise(n = n(),
+            prevalence = sum(bd_its1_copies_per_swab > 0) / n()))
+```
+# A broad-enough question for cross-RIBBiTR analysis
+
+### Working hypotheses:
+
+a. Younger individuals are more likely to be infected with Bd than older individuals in a given population
+b. Younger individuals are more likely to carry higher Bd loads than older individuals in a given population
+
+# Preliminary analysis

@@ -1,0 +1,344 @@
+---
+title: "data_exploration"
+format: html
+---
+
+# setup
+```{r}
+librarian::shelf(tidyverse, dbplyr, here, lubridate, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+
+## Connect to DB
+dbcon <- hopToDB("ribbitr")
+
+```
+
+# data table pointers
+```{r}
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+```
+
+# data discovery
+```{r}
+bd_sample = db_sample %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+
+bd_ls_rb_80 = bd_sample %>%
+  filter(life_stage %in% c("juvenile", "metamorph", "subadult", "adult"),
+         date >= "2021-10-01",
+         !is.na(svl_mm),
+         !is.na(body_mass_g)) %>%
+  group_by(site, taxon_capture) %>%
+  count() %>%
+  filter(n >= 80) %>%
+  collect() %>%
+  arrange(desc(n))
+
+data_ls_rb_80_sn = bd_sample %>%
+  filter(region == "california",
+         site %in% bd_ls_rb_80$site,
+         life_stage %in% c("juvenile", "metamorph", "subadult", "adult"),
+         date >= "2021-10-01",
+         !is.na(svl_mm),
+         !is.na(body_mass_g)) %>%
+  collect() %>%
+  inner_join(bd_ls_rb_80 %>%
+               select(site, taxon_capture), by = c("site", "taxon_capture"))
+
+data_ls_rb_80_sn_bd = data_ls_rb_80_sn %>%
+  left_join(db_bd %>%
+              filter(sample_id %in% data_ls_rb_80_sn$sample_id) %>%
+              collect(), by = "sample_id")
+
+data_summary = data_ls_rb_80_sn %>%
+  group_by(site, site_name_alt, geographic_area, taxon_capture) %>%
+  count()
+```
+
+# 70550 all data
+```{r}
+data_70550 = bd_sample %>%
+  inner_join(db_bd, by = "sample_id") %>%
+  filter(site == "70550",
+         !is.na(svl_mm),
+         !is.na(body_mass_g)) %>%
+  group_by(sample_id,
+           capture_id,
+           svl_mm,
+           body_mass_g,
+           life_stage,
+           site,
+           date) %>%
+  summarise(bd_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+            detected = any(detected)) %>%
+  ungroup() %>%
+  collect()
+
+ggplot(data_70550, aes(svl_mm, log(bd_its1_copies_per_swab))) + 
+  geom_point()
+
+ggplot(data_70550, aes(svl_mm, log(bd_its1_copies_per_swab), color = life_stage)) + 
+  geom_point()
+
+data_p = data_ls_rb_80_sn_bd
+
+group_levels <- sort(unique(data_p$site))
+
+# mass plots
+plots_mass <- map(group_levels, ~{
+  ggplot(subset(data_p, site == .x), aes(x = body_mass_g, y = log(bd_its1_copies_per_swab))) +
+    geom_point() +
+    ggtitle(paste("Group:", .x))
+})
+names(plots_mass) <- group_levels
+
+print(plots_mass)
+
+# length plots
+plots_length <- map(group_levels, ~{
+  ggplot(subset(data_p, site == .x), aes(x = svl_mm, y = log(bd_its1_copies_per_swab))) +
+    geom_point() +
+    ggtitle(paste("Group:", .x))
+})
+names(plots_length) <- group_levels
+
+print(plots_length)
+```
+# 70550 timeline
+```{r}
+
+# prevalence & bd load through time
+grouped_70550 = data_70550 %>%
+  mutate(year = year(date),
+         year_group = cut(year, breaks = seq(min(year) - 1, max(year) + 5, by = 5)))
+
+ggplot(grouped_70550, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_boxplot()
+
+
+timeline_70550 = grouped_70550%>%
+  group_by(year_group, life_stage) %>%
+  summarise(n = n(),
+            prevalence = sum(bd_its1_copies_per_swab > 0) / n(),
+            load_mean = mean(bd_its1_copies_per_swab),
+            load_infected_mean = mean(bd_its1_copies_per_swab[bd_its1_copies_per_swab > 0]),
+            load_infected_median = median(bd_its1_copies_per_swab[bd_its1_copies_per_swab > 0])) %>%
+  ungroup()
+
+ggplot(timeline_70550, aes(year_group, n, color = life_stage)) + 
+  geom_point()
+
+ggplot(timeline_70550, aes(year_group, prevalence, color = life_stage)) + 
+  geom_point()
+
+ggplot(timeline_70550, aes(year_group, log(load_mean), color = life_stage)) + 
+  geom_point()
+
+ggplot(timeline_70550, aes(year_group, log(load_infected_mean), color = life_stage)) + 
+  geom_point()
+
+ggplot(timeline_70550, aes(year_group, log(load_infected_median), color = life_stage)) + 
+  geom_point()
+
+```
+
+# long data
+```{r, fig.width=8, fig.height=16}
+bd_sample = db_sample %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+
+bd_ca_summary = bd_sample %>%
+  filter(region == "california",
+         !is.na(svl_mm),
+         taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+  group_by(site) %>%
+  summarize(n = n(),
+            year_first = year(min(date)),
+            year_last = year(max(date))) %>%
+  collect() %>%
+  arrange(desc(n)) %>%
+  filter(n > 300)
+
+bd_ca_200 = bd_sample %>%
+  inner_join(db_bd, by = "sample_id") %>%
+  filter(region == "california",
+         !is.na(svl_mm),
+         taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
+         life_stage %in% c("subadult", "adult"),
+         site %in% bd_ca_summary$site
+         # site %in% c("50783",
+         #             "52127",
+         #             "70413",
+         #             "70505",
+         #             "70550",
+         #             "72996")
+         ) %>%
+  group_by(sample_id,
+           capture_id,
+           svl_mm,
+           body_mass_g,
+           life_stage,
+           site,
+           site_latitude,
+           site_longitude,
+           date) %>%
+  summarise(bd_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+            detected = any(detected)) %>%
+  ungroup() %>%
+  collect()
+
+peace = bd_ca_200 %>%
+  group_by(site) %>%
+  count()
+
+bd_ca_200_group = bd_ca_200 %>%
+  mutate(year = year(date),
+         year_group = cut(year, breaks = seq(min(year), max(year) + 5, by = 5))) %>%
+  filter(!is.na(year_group)) %>%
+  arrange(site)
+
+bd_ca_200_pos = bd_ca_200_group %>%
+  filter(bd_its1_copies_per_swab > 0)
+
+bd_ca_200_prev = bd_ca_200_group %>%
+  group_by(site, life_stage, year_group) %>%
+  summarise(prevalence = sum(bd_its1_copies_per_swab > 0) / n(),
+            first_year = min(year)) %>%
+  filter(!is.na(prevalence))
+
+# all boxplot
+ggplot(bd_ca_200_group, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_boxplot() +
+  facet_grid(rows = vars(site))
+
+# all scatter
+ggplot(bd_ca_200_group, aes(svl_mm, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  facet_grid(site ~ year_group)
+
+# positive boxplot
+ggplot(bd_ca_200_pos, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_boxplot() +
+  facet_grid(rows = vars(site))
+
+# positive scatter
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  facet_grid(site ~ year_group)
+
+# positive scatter regression
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab))) +
+  geom_point() +
+  facet_grid(site ~ year_group) +
+  geom_smooth(method = "lm")
+
+# prevalence line
+ggplot(bd_ca_200_prev, aes(first_year, prevalence, color = life_stage)) +
+  geom_point() +
+  geom_line() +
+  facet_grid(site ~ .)
+
+
+```
+# plotting across sites
+```{r}
+# combined scatter positive
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab))) +
+  geom_point()
+
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab))) +
+  geom_bin2d(bins = 40)
+
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab))) +
+  geom_hex()
+
+ggplot(bd_ca_200_pos, aes(svl_mm, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_point()
+
+# combined boxplot positive
+ggplot(bd_ca_200_pos, aes(, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_boxplot()
+
+
+
+```
+
+# bd load lifestage ratio, including zeros
+```{r}
+
+bd_ca_200_calc = bd_ca_200_group %>%
+  group_by(site, year_group, life_stage) %>%
+  summarise(first_year = min(year),
+            mean_log_bd = mean(log(bd_its1_copies_per_swab + 1), na.rm = TRUE),
+            prevalence = sum(detected) / n()) %>%
+  pivot_wider(id_cols = c(site, year_group, first_year),
+              names_from = life_stage,
+              values_from = mean_log_bd) %>%
+  mutate(ls_ratio = subadult / adult) %>%
+  filter(is.finite(ls_ratio))
+
+ggplot(bd_ca_200_calc[!is.na(bd_ca_200_calc$ls_ratio), ], aes(first_year, ls_ratio, color = site)) +
+  geom_line() +
+  geom_point() +
+  ylim(-1, 6)
+
+```
+
+# bd load lifestage ratio, positive only
+```{r}
+
+bd_ca_200_calc = bd_ca_200_group %>%
+  filter(bd_its1_copies_per_swab > 0) %>%
+  group_by(site, year_group, life_stage) %>%
+  summarise(first_year = min(year),
+            mean_log_bd = mean(log(bd_its1_copies_per_swab + 1), na.rm = TRUE),
+            prevalence = sum(detected) / n()) %>%
+  pivot_wider(id_cols = c(site, year_group, first_year),
+              names_from = life_stage,
+              values_from = mean_log_bd) %>%
+  mutate(ls_ratio = subadult / adult) %>%
+  filter(is.finite(ls_ratio))
+
+ggplot(bd_ca_200_calc[!is.na(bd_ca_200_calc$ls_ratio), ], aes(first_year, ls_ratio, color = site)) +
+  geom_line() +
+  geom_point()
+
+```
+
+# bd prevalence ratio
+```{r}
+
+bd_ca_200_calc = bd_ca_200_group %>%
+  group_by(site, year_group, life_stage) %>%
+  summarise(first_year = min(year),
+            mean_log_bd = mean(log(bd_its1_copies_per_swab + 1), na.rm = TRUE),
+            prevalence = sum(detected) / n()) %>%
+  pivot_wider(id_cols = c(site, year_group, first_year),
+              names_from = life_stage,
+              values_from = prevalence) %>%
+  mutate(ls_ratio = subadult / adult) %>%
+  filter(is.finite(ls_ratio))
+
+ggplot(bd_ca_200_calc[!is.na(bd_ca_200_calc$ls_ratio), ], aes(first_year, ls_ratio, color = site)) +
+  geom_line() +
+  geom_point()
+
+```
