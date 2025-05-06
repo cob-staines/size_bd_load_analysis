@@ -46,6 +46,7 @@ bd_ls_rb_80 = bd_sample %>%
   collect() %>%
   arrange(desc(n))
 
+# california
 data_ls_rb_80_sn = bd_sample %>%
   filter(region == "california",
          site %in% bd_ls_rb_80$site,
@@ -122,10 +123,27 @@ print(plots_length)
 # prevalence & bd load through time
 grouped_70550 = data_70550 %>%
   mutate(year = year(date),
-         year_group = cut(year, breaks = seq(min(year) - 1, max(year) + 5, by = 5)))
+         year_group_force = cut(year, breaks = seq(min(year) - 1, max(year) + 5, by = 5))) %>%
+  group_by(year_group_force) %>%
+  mutate(min_year = min(year),
+         max_year = max(year),
+         year_group = as.factor(paste0("[", min_year, " - ", max_year, "]"))) %>%
+  ungroup()
 
-ggplot(grouped_70550, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
+grouped_70550_pos = grouped_70550 %>%
+  filter(bd_its1_copies_per_swab > 0)
+
+ggplot(grouped_70550_pos, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
   geom_boxplot()
+
+ggplot(grouped_70550_pos, aes(x = svl_mm, y = log(bd_its1_copies_per_swab))) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_grid(. ~ year_group)
+
+ggplot(grouped_70550_pos, aes(x = date, y = log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  geom_smooth(method = "lm")
 
 
 timeline_70550 = grouped_70550%>%
@@ -341,4 +359,80 @@ ggplot(bd_ca_200_calc[!is.na(bd_ca_200_calc$ls_ratio), ], aes(first_year, ls_rat
   geom_line() +
   geom_point()
 
+```
+
+
+# all sites inventory
+```{r}
+bd_sample = db_sample %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+
+bd_population = bd_sample %>%
+  filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  mutate(population = site,
+         population = ifelse(country == "brazil", region, site))
+
+bd_population_summary = bd_population %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarize(sample_count = n(),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date))) %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  filter(population_count >= 2) %>%
+  collect() %>%
+  arrange(desc(sample_count), taxon_capture)
+
+bd_population_agg = bd_population %>%
+  group_by(taxon_capture,
+           country) %>%
+  collect() %>%
+  inner_join(bd_population_summary %>%
+               select(population, taxon_capture),
+             by = c("population", "taxon_capture")) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            sample_count = n(),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            population_count = n_distinct(population)) %>%
+  arrange(country, taxon_capture)
+
+bd_ca_200 = bd_sample %>%
+  inner_join(db_bd, by = "sample_id") %>%
+  filter(region == "california",
+         !is.na(svl_mm),
+         taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
+         life_stage %in% c("subadult", "adult"),
+         site %in% bd_ca_summary$site
+         # site %in% c("50783",
+         #             "52127",
+         #             "70413",
+         #             "70505",
+         #             "70550",
+         #             "72996")
+         ) %>%
+  group_by(sample_id,
+           capture_id,
+           svl_mm,
+           body_mass_g,
+           life_stage,
+           site,
+           site_latitude,
+           site_longitude,
+           date) %>%
+  summarise(bd_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+            detected = any(detected)) %>%
+  ungroup() %>%
+  collect()
 ```

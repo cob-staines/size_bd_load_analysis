@@ -4,9 +4,26 @@ author: Cob Staines
 date: 2025-05-06
 format: html
 df-print: kable
+bibliography: references.bib
+csl: ecology.csl
 ---
 
-```{r, echo = FALSE, eval = TRUE, include = FALSE}
+# Motivation
+
+Patterns of greater Bd load in recently metamorphosed individuals have been documented in some cases[@adams_chytridiomycosis-induced_2020] [@humphries_immune_2022] [@humphries_chytridiomycosis_2024] [@humphries_chytridiomycosis_2025] (and the opposite pattern in others[@bradley_host_2019]), with possible implications for:
+
+- resilience trajectory assessment (Q1)
+- population dynamics (Q2)
+- assessing Bd resistance/tolerance mechanisms (Q3)
+
+... with the goal of complementing ongoing RIBBiTR research efforts :)
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
 # setup
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
 
@@ -32,17 +49,14 @@ bd_sample = db_sample %>%
   left_join(db_country, by = "country_id") %>%
   filter(sample_type == "bd")
 ```
-
-# Motivation
-#### A case study:
+## A case study:
 
 - Region: Sierra Nevada
-- Species: Rana Sierrae
 - Site: 70550
 - Temporal range: 2006 - 2024
-- Data: Capture surveys (SVL), Bd swabs (Bd its1 copies)
+- Species: Rana sierrae
+- Data: Capture surveys (SVL), Bd swabs (Bd ITS1 copies)
 - Sample size: 3874
-
 ```{r}
 #| eval: true
 #| warning: false
@@ -72,10 +86,9 @@ stats_70550 = data_70550 %>%
             count = n())
 
 ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab))) + 
-  geom_point()
-
-ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab), color = life_stage)) + 
-  geom_point()
+  geom_point() +
+  xlab("Snout-vent length (mm)") +
+  ylab("ln( ITS1 copies / swab )")
 ```
 
 ```{r}
@@ -83,20 +96,213 @@ ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab), color = life_
 #| warning: false
 #| code-fold: true
 #| code-summary: "Show code"
-
-ggplot(data_70550, aes(, log(bd_its1_copies_per_swab), color = life_stage)) + 
-  geom_boxplot()
-
-(prev_70550 = data_70550 %>%
-  group_by(life_stage) %>%
-  summarise(n = n(),
-            prevalence = sum(bd_its1_copies_per_swab > 0) / n()))
+#| 
+ggplot(data_70550, aes(svl_mm_noise, log(bd_its1_copies_per_swab), color = life_stage)) + 
+  geom_point() +
+  xlab("Snout-vent length (mm)") +
+  ylab("ln( ITS1 copies / swab )")
 ```
-# A broad-enough question for cross-RIBBiTR analysis
 
-### Working hypotheses:
+
+# Working hypotheses:
 
 a. Younger individuals are more likely to be infected with Bd than older individuals in a given population
 b. Younger individuals are more likely to carry higher Bd loads than older individuals in a given population
 
-# Preliminary analysis
+**Broad-enough for cross-RIBBiTR analysis!**
+
+## A first look at 70550
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+  (prev_70550 = data_70550 %>%
+  group_by(life_stage) %>%
+  summarise(n = n(),
+            prevalence = sum(bd_its1_copies_per_swab > 0) / n()))
+
+ggplot(data_70550, aes(, log(bd_its1_copies_per_swab), color = life_stage)) + 
+  geom_boxplot() +
+  xlab("Snout-vent length (mm)") +
+  ylab("ln( ITS1 copies / swab )")
+
+```
+
+## Temporal variability
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+# prevalence & bd load through time
+grouped_70550 = data_70550 %>%
+  mutate(year = year(date),
+         year_group_force = cut(year, breaks = seq(min(year) - 1, max(year) + 5, by = 5))) %>%
+  group_by(year_group_force) %>%
+  mutate(min_year = min(year),
+         max_year = max(year),
+         year_group = as.factor(paste0("[", min_year, " - ", max_year, "]"))) %>%
+  ungroup()
+
+timeline_70550 = grouped_70550%>%
+  group_by(year, life_stage) %>%
+  summarise(n = n(),
+            prevalence = sum(bd_its1_copies_per_swab > 0) / n(),
+            load_mean = mean(bd_its1_copies_per_swab),
+            load_infected_mean = mean(bd_its1_copies_per_swab[bd_its1_copies_per_swab > 0]),
+            load_infected_median = median(bd_its1_copies_per_swab[bd_its1_copies_per_swab > 0])) %>%
+  ungroup()
+
+ggplot(timeline_70550, aes(year, log(load_infected_median), color = life_stage)) +
+  geom_point() +
+  geom_line()
+
+ggplot(timeline_70550, aes(year, prevalence, color = life_stage)) +
+  geom_point() +
+  geom_line()
+```
+
+##  Grouped by...
+
+::: {.panel-tabset}
+## lifestage
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+grouped_70550_pos = grouped_70550 %>%
+  filter(bd_its1_copies_per_swab > 0)
+
+ggplot(grouped_70550_pos, aes(x = date, y = log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+## year
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+ggplot(grouped_70550_pos, aes(x = svl_mm, y = log(bd_its1_copies_per_swab))) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_grid(. ~ year_group)
+```
+
+## life-stage & year
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+ggplot(grouped_70550_pos, aes(year_group, log(bd_its1_copies_per_swab), color = life_stage)) +
+  geom_boxplot()
+```
+
+:::
+
+#### Covariates of interest
+
+- species
+- population
+- year
+- climate (site + year)
+
+
+# RIBBiTR data inventory
+
+#### Preliminary selection criteria:
+
+- Bd swab + body size (SVL or weight) data for at least 60 individuals in a given population
+- populations sampled over at least 3 years
+- species found in at least valid 2 populations
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+bd_population = bd_sample %>%
+  filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  mutate(population = site,
+         population = ifelse(country == "brazil", region, site))
+
+bd_population_valid = bd_population %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarize(sample_count = n(),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date))) %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  filter(population_count >= 2) %>%
+  collect() %>%
+  arrange(desc(sample_count), taxon_capture)
+
+bd_sample_valid = bd_population %>%
+    filter(population %in% bd_population_valid$population &
+             taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  left_join(db_bd, by = "sample_id") %>%
+  select(sample_id,
+         bd_its1_copies_per_swab,
+         detected,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         svl_mm,
+         body_mass_g,
+         date,
+         site,
+         population,
+         region,
+         country
+         ) %>%
+  collect() %>%
+  mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5))
+
+(bd_population_agg = bd_sample_valid %>%
+    group_by(taxon_capture,
+             country) %>%
+    summarise(regions = str_flatten(sort(unique(region)), collapse = ", "),
+              sample_count = n(),
+              year_first = year(min(date)),
+              year_last = year(max(date)),
+              year_count = n_distinct(year(date)),
+              pop_count = n_distinct(population)) %>%
+    arrange(country, taxon_capture))
+```
+# Data exploration
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+#| fig-width: 8
+#| fig-height: 12
+
+ggplot(bd_sample_valid %>%
+         arrange(taxon_capture) %>%
+         filter(!is.na(bd_its1_copies_per_swab),
+                !is.na(svl_mm_noise)), aes(x = svl_mm_noise, y = log(bd_its1_copies_per_swab))) + 
+  geom_point(size = 0.5) +
+  theme_bw() +
+  facet_wrap("taxon_capture",
+             ncol = 4,
+             scales = "free_x") +
+  xlab("Snout-vent length (mm)") +
+  ylab("ln( ITS1 copies / swab )")
+
+```
