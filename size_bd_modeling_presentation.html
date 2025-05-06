@@ -134,9 +134,9 @@ div.csl-indent {
 <h1>Motivation</h1>
 <p>Patterns of greater Bd load in recently metamorphosed individuals have been documented in some cases<span class="citation" data-cites="adams_chytridiomycosis-induced_2020"><sup><a href="#ref-adams_chytridiomycosis-induced_2020" role="doc-biblioref">1</a></sup></span><span class="citation" data-cites="humphries_immune_2022"><sup><a href="#ref-humphries_immune_2022" role="doc-biblioref">2</a></sup></span> <span class="citation" data-cites="humphries_chytridiomycosis_2024"><sup><a href="#ref-humphries_chytridiomycosis_2024" role="doc-biblioref">3</a></sup></span><span class="citation" data-cites="humphries_chytridiomycosis_2025"><sup><a href="#ref-humphries_chytridiomycosis_2025" role="doc-biblioref">4</a></sup></span> (and the opposite pattern in others<span class="citation" data-cites="bradley_host_2019"><sup><a href="#ref-bradley_host_2019" role="doc-biblioref">5</a></sup></span>), with possible implications for:</p>
 <ul>
-<li>resilience trajectory assessment (Q1)</li>
 <li>population dynamics (Q2)</li>
 <li>assessing Bd resistance/tolerance mechanisms (Q3)</li>
+<li>resilience trajectory assessment (Q1)</li>
 </ul>
 <p>… with the goal of complementing ongoing RIBBiTR research efforts :)</p>
 <div class="cell">
@@ -205,7 +205,7 @@ div.csl-indent {
 <span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(data_70550, <span class="fu">aes</span>(svl_mm_noise, <span class="fu">log</span>(bd_its1_copies_per_swab))) <span class="sc">+</span> </span>
 <span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>() <span class="sc">+</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length (mm)"</span>) <span class="sc">+</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length [mm]"</span>) <span class="sc">+</span></span>
 <span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( ITS1 copies / swab )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
@@ -221,8 +221,8 @@ div.csl-indent {
 <summary>Show code</summary>
 <div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(data_70550, <span class="fu">aes</span>(svl_mm_noise, <span class="fu">log</span>(bd_its1_copies_per_swab), <span class="at">color =</span> life_stage)) <span class="sc">+</span> </span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>() <span class="sc">+</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length (mm)"</span>) <span class="sc">+</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( ITS1 copies / swab )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length [mm]"</span>) <span class="sc">+</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd_load + 1)"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -278,10 +278,10 @@ div.csl-indent {
 </div>
 <details class="code-fold">
 <summary>Show code</summary>
-<div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(data_70550, <span class="fu">aes</span>(, <span class="fu">log</span>(bd_its1_copies_per_swab), <span class="at">color =</span> life_stage)) <span class="sc">+</span> </span>
+<div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(data_70550, <span class="fu">aes</span>(, <span class="fu">log</span>(bd_its1_copies_per_swab <span class="sc">+</span> <span class="dv">1</span>), <span class="at">color =</span> life_stage)) <span class="sc">+</span> </span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_boxplot</span>() <span class="sc">+</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length (mm)"</span>) <span class="sc">+</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( ITS1 copies / swab )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length [mm]"</span>) <span class="sc">+</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd_load  + 1)"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -318,7 +318,8 @@ div.csl-indent {
 <span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(timeline_70550, <span class="fu">aes</span>(year, <span class="fu">log</span>(load_infected_median), <span class="at">color =</span> life_stage)) <span class="sc">+</span></span>
 <span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>() <span class="sc">+</span></span>
-<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( median Bd_load, infected only )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -342,8 +343,8 @@ div.csl-indent {
 </div>
 </div>
 </section>
-<section id="grouped-by" class="level2">
-<h2 class="anchored" data-anchor-id="grouped-by">Grouped by…</h2>
+<section id="infected-only-grouped-by" class="level2">
+<h2 class="anchored" data-anchor-id="infected-only-grouped-by">Infected only, grouped by…</h2>
 <div class="tabset-margin-container"></div><div class="panel-tabset">
 <ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><a class="nav-link active" id="tabset-1-1-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-1" role="tab" aria-controls="tabset-1-1" aria-selected="true" href="">lifestage</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-2-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-2" role="tab" aria-controls="tabset-1-2" aria-selected="false" href="">year</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-3-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-3" role="tab" aria-controls="tabset-1-3" aria-selected="false" href="">life-stage &amp; year</a></li></ul>
 <div class="tab-content">
@@ -356,7 +357,8 @@ div.csl-indent {
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(grouped_70550_pos, <span class="fu">aes</span>(<span class="at">x =</span> date, <span class="at">y =</span> <span class="fu">log</span>(bd_its1_copies_per_swab), <span class="at">color =</span> life_stage)) <span class="sc">+</span></span>
 <span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>() <span class="sc">+</span></span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_smooth</span>(<span class="at">method =</span> <span class="st">"lm"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_smooth</span>(<span class="at">method =</span> <span class="st">"lm"</span>) <span class="sc">+</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd_load )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -374,7 +376,9 @@ div.csl-indent {
 <div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(grouped_70550_pos, <span class="fu">aes</span>(<span class="at">x =</span> svl_mm, <span class="at">y =</span> <span class="fu">log</span>(bd_its1_copies_per_swab))) <span class="sc">+</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>() <span class="sc">+</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_smooth</span>(<span class="at">method =</span> <span class="st">"lm"</span>) <span class="sc">+</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">facet_grid</span>(. <span class="sc">~</span> year_group)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">facet_grid</span>(. <span class="sc">~</span> year_group) <span class="sc">+</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd_load )"</span>) <span class="sc">+</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length [mm]"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -390,7 +394,9 @@ div.csl-indent {
 <details class="code-fold">
 <summary>Show code</summary>
 <div class="sourceCode cell-code" id="cb10"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(grouped_70550_pos, <span class="fu">aes</span>(year_group, <span class="fu">log</span>(bd_its1_copies_per_swab), <span class="at">color =</span> life_stage)) <span class="sc">+</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_boxplot</span>()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_boxplot</span>() <span class="sc">+</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd_load )"</span>) <span class="sc">+</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"year group"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
@@ -403,13 +409,17 @@ div.csl-indent {
 </div>
 </div>
 </div>
-<section id="covariates-of-interest" class="level4">
-<h4 class="anchored" data-anchor-id="covariates-of-interest">Covariates of interest</h4>
+<section id="variables-of-interest" class="level4">
+<h4 class="anchored" data-anchor-id="variables-of-interest">Variables of interest</h4>
 <ul>
+<li><em>Bd load</em></li>
+<li><em>size (svl_mm or body_mass_g)</em></li>
 <li>species</li>
-<li>population</li>
-<li>year</li>
+<li>population/site</li>
+<li>date/year</li>
 <li>climate (site + year)</li>
+<li>sampling</li>
+<li>others…</li>
 </ul>
 </section>
 </section>
@@ -465,18 +475,19 @@ div.csl-indent {
 <span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>         country</span>
 <span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>         ) <span class="sc">%&gt;%</span></span>
 <span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>  <span class="fu">collect</span>() <span class="sc">%&gt;%</span></span>
-<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">svl_mm_noise =</span> svl_mm <span class="sc">+</span> <span class="fu">runif</span>(<span class="fu">n</span>(), <span class="at">min =</span> <span class="sc">-</span><span class="fl">0.5</span>, <span class="at">max =</span> <span class="fl">0.5</span>))</span>
-<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>(<span class="at">bd_population_agg =</span> bd_sample_valid <span class="sc">%&gt;%</span></span>
-<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a>    <span class="fu">group_by</span>(taxon_capture,</span>
-<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>             country) <span class="sc">%&gt;%</span></span>
-<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>    <span class="fu">summarise</span>(<span class="at">regions =</span> <span class="fu">str_flatten</span>(<span class="fu">sort</span>(<span class="fu">unique</span>(region)), <span class="at">collapse =</span> <span class="st">", "</span>),</span>
-<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>              <span class="at">sample_count =</span> <span class="fu">n</span>(),</span>
-<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_first =</span> <span class="fu">year</span>(<span class="fu">min</span>(date)),</span>
-<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_last =</span> <span class="fu">year</span>(<span class="fu">max</span>(date)),</span>
-<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_count =</span> <span class="fu">n_distinct</span>(<span class="fu">year</span>(date)),</span>
-<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>              <span class="at">pop_count =</span> <span class="fu">n_distinct</span>(population)) <span class="sc">%&gt;%</span></span>
-<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>    <span class="fu">arrange</span>(country, taxon_capture))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">svl_mm_noise =</span> svl_mm <span class="sc">+</span> <span class="fu">runif</span>(<span class="fu">n</span>(), <span class="at">min =</span> <span class="sc">-</span><span class="fl">0.5</span>, <span class="at">max =</span> <span class="fl">0.5</span>)) <span class="sc">%&gt;%</span></span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="sc">!</span>(taxon_capture <span class="sc">==</span> <span class="st">"silverstoneia_flotator"</span> <span class="sc">&amp;</span> svl_mm <span class="sc">&gt;</span> <span class="dv">100</span>))</span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a>(<span class="at">bd_population_agg =</span> bd_sample_valid <span class="sc">%&gt;%</span></span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>    <span class="fu">group_by</span>(taxon_capture,</span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>             country) <span class="sc">%&gt;%</span></span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>    <span class="fu">summarise</span>(<span class="at">regions =</span> <span class="fu">str_flatten</span>(<span class="fu">sort</span>(<span class="fu">unique</span>(region)), <span class="at">collapse =</span> <span class="st">", "</span>),</span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a>              <span class="at">sample_count =</span> <span class="fu">n</span>(),</span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_first =</span> <span class="fu">year</span>(<span class="fu">min</span>(date)),</span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_last =</span> <span class="fu">year</span>(<span class="fu">max</span>(date)),</span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>              <span class="at">year_count =</span> <span class="fu">n_distinct</span>(<span class="fu">year</span>(date)),</span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>              <span class="at">pop_count =</span> <span class="fu">n_distinct</span>(population)) <span class="sc">%&gt;%</span></span>
+<span id="cb11-52"><a href="#cb11-52" aria-hidden="true" tabindex="-1"></a>    <span class="fu">arrange</span>(country, taxon_capture))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div class="kable-table">
@@ -568,7 +579,7 @@ div.csl-indent {
 <td style="text-align: left;">silverstoneia_flotator</td>
 <td style="text-align: left;">panama</td>
 <td style="text-align: left;">el_cope, el_valle, santa_fe</td>
-<td style="text-align: right;">568</td>
+<td style="text-align: right;">564</td>
 <td style="text-align: right;">2012</td>
 <td style="text-align: right;">2024</td>
 <td style="text-align: right;">10</td>
@@ -719,19 +730,19 @@ div.csl-indent {
 <div class="sourceCode cell-code" id="cb12"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(bd_sample_valid <span class="sc">%&gt;%</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>         <span class="fu">arrange</span>(taxon_capture) <span class="sc">%&gt;%</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>         <span class="fu">filter</span>(<span class="sc">!</span><span class="fu">is.na</span>(bd_its1_copies_per_swab),</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>                <span class="sc">!</span><span class="fu">is.na</span>(svl_mm_noise)), <span class="fu">aes</span>(<span class="at">x =</span> svl_mm_noise, <span class="at">y =</span> <span class="fu">log</span>(bd_its1_copies_per_swab))) <span class="sc">+</span> </span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>                <span class="sc">!</span><span class="fu">is.na</span>(svl_mm_noise)), <span class="fu">aes</span>(<span class="at">x =</span> svl_mm_noise, <span class="at">y =</span> <span class="fu">log</span>(bd_its1_copies_per_swab <span class="sc">+</span> <span class="dv">1</span>))) <span class="sc">+</span> </span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_point</span>(<span class="at">size =</span> <span class="fl">0.5</span>) <span class="sc">+</span></span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_bw</span>() <span class="sc">+</span></span>
 <span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">facet_wrap</span>(<span class="st">"taxon_capture"</span>,</span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>             <span class="at">ncol =</span> <span class="dv">4</span>,</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>             <span class="at">ncol =</span> <span class="dv">5</span>,</span>
 <span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>             <span class="at">scales =</span> <span class="st">"free_x"</span>) <span class="sc">+</span></span>
-<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length (mm)"</span>) <span class="sc">+</span></span>
-<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( ITS1 copies / swab )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">xlab</span>(<span class="st">"Snout-vent length [mm]"</span>) <span class="sc">+</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ylab</span>(<span class="st">"ln( Bd load + 1 )"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
 <div>
 <figure class="figure">
-<p><img src="size_bd_modeling_presentation_files/figure-html/unnamed-chunk-10-1.png" class="img-fluid figure-img" width="768"></p>
+<p><img src="size_bd_modeling_presentation_files/figure-html/unnamed-chunk-10-1.png" class="img-fluid figure-img" width="960"></p>
 </figure>
 </div>
 </div>

@@ -5,7 +5,7 @@ format: html
 
 # setup
 ```{r}
-librarian::shelf(tidyverse, dbplyr, here, lubridate, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+librarian::shelf(tidyverse, dbplyr, here, lubridate, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms)
 
 ## Connect to DB
 dbcon <- hopToDB("ribbitr")
@@ -116,6 +116,50 @@ plots_length <- map(group_levels, ~{
 names(plots_length) <- group_levels
 
 print(plots_length)
+```
+
+# 70550 modeling
+```{r}
+clean_70550 = data_70550 %>%
+  filter(!is.na(bd_its1_copies_per_swab),
+         !is.na(life_stage),
+         !is.na(date)) %>%
+  mutate(bd_log_load = log(bd_its1_copies_per_swab + 1),
+         decimal_date = decimal_date(date),
+         year = year(date),
+         year_group = cut(year, breaks = seq(min(year) - 1, max(year) + 5, by = 5)))
+
+pos_70550 = clean_70550 %>%
+  filter(bd_its1_copies_per_swab > 0)
+
+
+# m1: life stage catagorical
+m1 = brm(bd_log_load ~ life_stage * year_group,
+         data = pos_70550,
+         family = gaussian())
+
+summary(m1)
+plot(m1)
+plot(conditional_effects(m1), ask = FALSE)
+
+# m2: life stage continuous (length)
+m2 = brm(bd_log_load ~ svl_mm * year_group,
+         data = pos_70550,
+         family = gaussian())
+
+summary(m2)
+plot(m2)
+plot(conditional_effects(m2), ask = FALSE)
+
+# m3: life stage catagorical, time continuous
+m3 = brm(bd_log_load ~ life_stage * decimal_date,
+         data = pos_70550,
+         family = gaussian())
+
+summary(m3)
+plot(m3)
+plot(conditional_effects(m3), ask = FALSE)
+
 ```
 # 70550 timeline
 ```{r}
@@ -435,4 +479,17 @@ bd_ca_200 = bd_sample %>%
             detected = any(detected)) %>%
   ungroup() %>%
   collect()
+```
+
+```{r}
+
+relocation_site = tbl(dbcon, Id("survey_data", "site_history")) %>%
+  left_join(db_site, by = "site_id") %>%
+  select(site, treatment_type, site_latitude, site_longitude) %>%
+  distinct() %>%
+  collect() %>%
+  arrange(site)
+
+write_csv(relocation_site, here("relocation_sites.csv"))
+
 ```
