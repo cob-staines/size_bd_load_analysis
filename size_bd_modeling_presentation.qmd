@@ -243,6 +243,13 @@ ggplot(grouped_70550_pos, aes(year_group, log(bd_its1_copies_per_swab), color = 
 #| code-summary: "Show code"
 
 # define some populations
+
+pop_84313 = c("84313",
+              "84325",
+              "84326",
+              "84327",
+              "84329")
+
 pop_84309 = c("84309",
               "84317",
               "84962",
@@ -271,11 +278,11 @@ pop_84235 = c("84235",
 pop_84218 = c("84218",
               "82682")
 
-pop_84313 = c("84313",
-              "84325",
-              "84326",
-              "84327",
-              "84329")
+pop_72973 = c("72973",
+              "74976")
+
+pop_72808 = c("72808",
+              "72336")
 
 pop_70505 = c("70505",
               "72092",
@@ -290,8 +297,11 @@ pop_70505 = c("70505",
               "74132",
               "70037")
 
-pop_72808 = c("72808",
-              "72336")
+pop_70567 = c("70567",
+              "70062",
+              "72620",
+              "72580",
+              "70284")
 
 pop_70413 = c("70413",
               "71968",
@@ -305,21 +315,26 @@ pop_70413 = c("70413",
               "72696",
               "72472")
 
+# identify populations
 bd_population = bd_sample %>%
-  filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  filter(!is.na(svl_mm)) %>%
   mutate(population = site,
          population = ifelse(country == "brazil", region, site),
          population = case_when(
+           site %in% pop_84313 ~ "pop_84313",
            site %in% pop_84309 ~ "pop_84309",
            site %in% pop_84235 ~ "pop_84235",
            site %in% pop_84218 ~ "pop_84218",
-           site %in% pop_84313 ~ "pop_84313",
-           site %in% pop_70505 ~ "pop_70505",
+           site %in% pop_72973 ~ "pop_72973",
            site %in% pop_72808 ~ "pop_72808",
+           site %in% pop_70505 ~ "pop_70505",
+           site %in% pop_70567 ~ "pop_70567",
            site %in% pop_70413 ~ "pop_70413",
            .default = population
          ))
 
+# determine populations which meet criteria
 bd_population_valid = bd_population %>%
   group_by(population, region, country, taxon_capture) %>%
   summarize(sample_count = n(),
@@ -335,13 +350,21 @@ bd_population_valid = bd_population %>%
   collect() %>%
   arrange(desc(sample_count), taxon_capture)
 
+# join with bd data, select
 bd_sample_valid = bd_population %>%
     filter(population %in% bd_population_valid$population &
              taxon_capture %in% bd_population_valid$taxon_capture) %>%
-  left_join(db_bd, by = "sample_id") %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
   select(sample_id,
-         bd_its1_copies_per_swab,
-         detected,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
          capture_id,
          taxon_capture,
          life_stage,
@@ -394,16 +417,85 @@ ggplot(bd_sample_valid %>%
 
 ```
 
+# SN population selection
 ```{r}
-peace = bd_sample_valid %>%
-  filter(geographic_area == "tuolumn_dana_fk") %>%
-  select(site) %>%
-  distinct()
-
-peace = bd_sample %>%
-  filter(geographic_area == "merced_lyell_fk") %>%
-  group_by(site) %>%
+#| fig-width: 10
+#| fig-height: 40
+sn_pops = bd_sample_valid %>%
+  filter(region == "california") %>%
+  group_by(population, taxon_capture) %>%
   count() %>%
-  collect()
+  arrange(desc(n))
+
+sn_sample_valid = bd_sample_valid %>%
+  filter(region == "california",
+         life_stage %in% c("adult", "subadult"))
+
+sn_summary = sn_sample_valid %>%
+  group_by(population) %>%
+  summarise(n = n(),
+            adult_n = sum(life_stage == "adult"),
+            subadult_n = sum(life_stage == "subadult"))
+  
+
+ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  ylab("ln( Bd_load )") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 23, label = paste0("n = ", n)),
+            color = "#000000") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 20, label = paste0("adult_n = ", adult_n)),
+            color = "#F8766D") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 17, label = paste0("subadult_n = ", subadult_n)),
+            color = "#00BFC4") +
+  facet_wrap("population",
+             ncol = 4)
+
+ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  ylab("ln( Bd_load )") +
+  facet_wrap("geographic_area",
+             ncol = 4) +
+  geom_smooth(method = "lm")
+
+```
+
+# SN population analysis
+```{r}
+
+select_pops = c("70550",
+                "72996",
+                "pop_70413",
+                "pop_70505",
+                "pop_72808",
+                "pop_72973",
+                "pop_84218",
+                "pop_84235")
+
+sn_pn = bd_sample_valid %>%
+  filter(population %in% select_pops,
+         !(population == "pop_72808" & date < "2015-01-01"))
+  
+sn_pn_pos = sn_pn %>%
+  filter(bd_mean_its1_copies_per_swab > 0)
+
+sn_pn_summary = sn_pn %>%
+  mutate(year = year(date)) %>%
+  group_by(population, life_stage) %>%
+  summarise(n = n(),
+            min_year = min(year),
+            max_year = max(year),
+            year_count = n_distinct(year))
+  pivot_wider(id_cols = c(population, min_year, max_year, year_count),
+              values_from = n,
+              names_from = life_stage)
+
+ggplot(sn_pn_pos, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  ylab("ln( Bd_load )") +
+  facet_wrap("population")
 
 ```
