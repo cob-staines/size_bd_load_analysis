@@ -30,6 +30,11 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 ## Connect to DB
 dbcon <- hopToDB("ribbitr")
 
+# load populations
+data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_))
+
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
 db_sample = tbl(dbcon, Id("survey_data", "sample"))
@@ -243,141 +248,37 @@ ggplot(grouped_70550_pos, aes(year_group, log(bd_its1_copies_per_swab), color = 
 #| code-fold: true
 #| code-summary: "Show code"
 
-# define some populations
-
-pop_84313 = c("84313",
-              "84325",
-              "84326",
-              "84327",
-              "84329")
-
-pop_84309 = c("84309",
-              "84317",
-              "84962",
-              "84307",
-              "84963",
-              "82644",
-              "82643",
-              "84312",
-              "84310",
-              "84306",
-              "84307",
-              "84303",
-              "87495",
-              "82645",
-              "84292",
-              "84294",
-              "82646",
-              "84277")
-
-pop_84235 = c("84235",
-              "84266",
-              "84255",
-              "84237",
-              "84226")
-
-pop_84218 = c("84218",
-              "82682")
-
-pop_72973 = c("72973",
-              "74976")
-
-pop_72808 = c("72808",
-              "72336")
-
-pop_70505 = c("70505",
-              "72092",
-              "72654",
-              "71971",
-              "72604",
-              "71899",
-              "72894",
-              "70494",
-              "73011",
-              "74124",
-              "74132",
-              "70037")
-
-pop_70567 = c("70567",
-              "70062",
-              "72620",
-              "72580",
-              "70284")
-
-pop_70413 = c("70413",
-              "71968",
-              "72442",
-              "70175",
-              "72264",
-              "72093",
-              "70279",
-              "72008",
-              "70114",
-              "72696",
-              "72472")
-
-pop_50837 = c("50837",
-              "50858",
-              "50899",
-              "50895",
-              "52212")
-
-pop_20198 = c("20198",
-              "20199")
-
-pop_10037 = c("10037",
-              "12464",
-              "12012",
-              "10036",
-              "12011")
-
-pop_10090 = c("10090",
-              "10091",
-              "11870")
-
 # identify populations
 bd_population = bd_sample %>%
   # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
   filter(!is.na(svl_mm)) %>%
-  mutate(population = site,
-         population = ifelse(country == "brazil", region, site),
-         population = case_when(
-           site %in% pop_84313 ~ "pop_84313",
-           site %in% pop_84309 ~ "pop_84309",
-           site %in% pop_84235 ~ "pop_84235",
-           site %in% pop_84218 ~ "pop_84218",
-           site %in% pop_72973 ~ "pop_72973",
-           site %in% pop_72808 ~ "pop_72808",
-           site %in% pop_70505 ~ "pop_70505",
-           site %in% pop_70567 ~ "pop_70567",
-           site %in% pop_70413 ~ "pop_70413",
-           site %in% pop_50837 ~ "pop_50837",
-           site %in% pop_20198 ~ "pop_20198",
-           site %in% pop_10037 ~ "pop_10037",
-           site %in% pop_10090 ~ "pop_10090",
-           .default = population
-         ))
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(population = ifelse(is.na(population), site, population),
+         population = ifelse(country == "brazil", region, population),
+         year = year(date))
 
 # determine populations which meet criteria
 bd_population_valid = bd_population %>%
   group_by(population, region, country, taxon_capture) %>%
-  summarize(sample_count = n(),
-            year_first = year(min(date)),
-            year_last = year(max(date)),
-            year_count = n_distinct(year(date))) %>%
+  summarise(count = n(),
+            sample_count = n(),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            .groups = "drop") %>%
   filter(sample_count >= 60,
          year_count >= 3) %>%
   group_by(taxon_capture) %>%
   mutate(population_count = n()) %>%
   ungroup() %>%
   filter(population_count >= 2) %>%
-  collect() %>%
-  arrange(desc(sample_count), taxon_capture)
+  arrange(desc(sample_count), taxon_capture) %>%
+  collect()
 
 # join with bd data, select
 bd_sample_valid = bd_population %>%
-    filter(population %in% bd_population_valid$population &
-             taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  filter(population %in% bd_population_valid$population &
+           taxon_capture %in% bd_population_valid$taxon_capture) %>%
   left_join(db_bd %>%
               group_by(sample_id) %>%
               summarise(bd_swab_count = n(),
@@ -402,8 +303,7 @@ bd_sample_valid = bd_population %>%
          geographic_area,
          population,
          region,
-         country
-         ) %>%
+         country) %>%
   collect() %>%
   mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
   filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
@@ -440,118 +340,5 @@ ggplot(bd_sample_valid %>%
              scales = "free_x") +
   xlab("Snout-vent length [mm]") +
   ylab("ln( Bd load + 1 )")
-
-```
-
-# SN population selection
-```{r}
-#| fig-width: 10
-#| fig-height: 40
-sn_pops = bd_sample_valid %>%
-  filter(region == "california") %>%
-  group_by(population, taxon_capture) %>%
-  count() %>%
-  arrange(desc(n))
-
-sn_sample_valid = bd_sample_valid %>%
-  filter(region == "california",
-         life_stage %in% c("adult", "subadult"))
-
-sn_summary = sn_sample_valid %>%
-  group_by(population) %>%
-  summarise(n = n(),
-            adult_n = sum(life_stage == "adult"),
-            subadult_n = sum(life_stage == "subadult"))
-  
-
-ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-  geom_point() +
-  ylab("ln( Bd_load )") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 23, label = paste0("n = ", n)),
-            color = "#000000") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 20, label = paste0("adult_n = ", adult_n)),
-            color = "#F8766D") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 17, label = paste0("subadult_n = ", subadult_n)),
-            color = "#00BFC4") +
-  facet_wrap("population",
-             ncol = 4)
-
-ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-  geom_point() +
-  ylab("ln( Bd_load )") +
-  facet_wrap("geographic_area",
-             ncol = 4) +
-  geom_smooth(method = "lm")
-
-```
-
-# SN population analysis
-```{r}
-
-select_pops = c("70550",
-                "72996",
-                "pop_70413",
-                "pop_70505",
-                "pop_72808",
-                "pop_72973",
-                "pop_84218",
-                "pop_84235")
-
-sn_pn = bd_sample_valid %>%
-  filter(population %in% select_pops,
-         !(population == "pop_72808" & date < "2015-01-01"))
-  
-sn_pn_pos = sn_pn %>%
-  filter(bd_mean_its1_copies_per_swab > 0)
-
-sn_pn_summary = sn_pn %>%
-  mutate(year = year(date)) %>%
-  group_by(population, life_stage) %>%
-  summarise(n = n(),
-            min_year = min(year),
-            max_year = max(year),
-            year_count = n_distinct(year)) %>%
-  pivot_wider(id_cols = c(population, min_year, max_year, year_count),
-              values_from = n,
-              names_from = life_stage)
-
-ggplot(sn_pn_pos, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-  geom_point() +
-  geom_smooth(method = "lm") +
-  ylab("ln( Bd_load )") +
-  facet_wrap("population")
-
-```
-
-# climate variables
-```{r}
-db_ts_temp = tbl(dbcon, Id("microclimate_data", "ts_temperature"))
-db_sensor = tbl(dbcon, Id("microclimate_data", "sensor"))
-db_logger = tbl(dbcon, Id("microclimate_data", "logger"))
-
-surveys_valid = bd_sample_valid %>%
-  select(survey_id, population, site_id, date) %>%
-  distinct()
-
-temp_water_5 = db_ts_temp %>%
-  left_join(db_sensor, by = "sensor_id") %>%
-  left_join(db_logger, by = "logger_id") %>%
-  filter(microhabitat == "water",
-         sensor_type == "temperature",
-         height_cm == 5) %>%
-  select(all_of(colnames(db_ts_temp)))  # fix this bug!
-
-temp_water_35 = db_ts_temp %>%
-  left_join(db_sensor, by = "sensor_id") %>%
-  left_join(db_logger, by = "logger_id") %>%
-  filter(microhabitat == "water",
-         sensor_type == "temperature",
-         height_cm == 35) %>%
-  select(all_of(colnames(db_ts_temp)))  # fix this bug!
-
-test_1 = microclimate_presurvey(surveys_valid, dbcon, buffer = days(14), temp_water_5, time_sensitive = FALSE, output_timezone = "America/Los_Angeles")
 
 ```
