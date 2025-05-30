@@ -481,15 +481,47 @@ bd_ca_200 = bd_sample %>%
   collect()
 ```
 
+# SN population selection
 ```{r}
+#| fig-width: 10
+#| fig-height: 40
+sn_pops = bd_sample_valid %>%
+  filter(region == "california") %>%
+  group_by(population, taxon_capture) %>%
+  count() %>%
+  arrange(desc(n))
 
-relocation_site = tbl(dbcon, Id("survey_data", "site_history")) %>%
-  left_join(db_site, by = "site_id") %>%
-  select(site, treatment_type, site_latitude, site_longitude) %>%
-  distinct() %>%
-  collect() %>%
-  arrange(site)
+sn_sample_valid = bd_sample_valid %>%
+  filter(region == "california",
+         life_stage %in% c("adult", "subadult"))
 
-write_csv(relocation_site, here("relocation_sites.csv"))
+sn_summary = sn_sample_valid %>%
+  group_by(population) %>%
+  summarise(n = n(),
+            adult_n = sum(life_stage == "adult"),
+            subadult_n = sum(life_stage == "subadult"))
+  
+
+ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  ylab("ln( Bd_load )") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 23, label = paste0("n = ", n)),
+            color = "#000000") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 20, label = paste0("adult_n = ", adult_n)),
+            color = "#F8766D") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 17, label = paste0("subadult_n = ", subadult_n)),
+            color = "#00BFC4") +
+  facet_wrap("population",
+             ncol = 4)
+
+# ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+#   geom_point() +
+#   ylab("ln( Bd_load )") +
+#   facet_wrap("geographic_area",
+#              ncol = 4) +
+#   geom_smooth(method = "lm")
 
 ```
