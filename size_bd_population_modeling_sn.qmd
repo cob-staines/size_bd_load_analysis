@@ -1,0 +1,95 @@
+---
+title: "size_bd_population_modeling_sn"
+format: html
+---
+
+# SN population selection
+```{r}
+#| fig-width: 10
+#| fig-height: 40
+sn_pops = bd_sample_valid %>%
+  filter(region == "california") %>%
+  group_by(population, taxon_capture) %>%
+  count() %>%
+  arrange(desc(n))
+
+sn_sample_valid = bd_sample_valid %>%
+  filter(region == "california",
+         life_stage %in% c("adult", "subadult"))
+
+sn_summary = sn_sample_valid %>%
+  group_by(population) %>%
+  summarise(n = n(),
+            adult_n = sum(life_stage == "adult"),
+            subadult_n = sum(life_stage == "subadult"))
+  
+
+ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  ylab("ln( Bd_load )") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 23, label = paste0("n = ", n)),
+            color = "#000000") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 20, label = paste0("adult_n = ", adult_n)),
+            color = "#F8766D") +
+  geom_text(data = sn_summary, 
+            aes(x = as.Date("2020-01-01"), y = 17, label = paste0("subadult_n = ", subadult_n)),
+            color = "#00BFC4") +
+  facet_wrap("population",
+             ncol = 4)
+
+# ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+#   geom_point() +
+#   ylab("ln( Bd_load )") +
+#   facet_wrap("geographic_area",
+#              ncol = 4) +
+#   geom_smooth(method = "lm")
+
+```
+
+# SN population analysis
+```{r}
+
+select_pops = c("70550",
+                "72996",
+                "70413_pop",
+                "70505_pop",
+                "72808_pop",
+                "72973_pop",
+                "84218_pop",
+                "84235_pop")
+
+sn_pn = bd_sample_valid %>%
+  filter(population %in% select_pops,
+         !(population == "pop_72808" & date < "2015-01-01"))
+  
+sn_pn_pos = sn_pn %>%
+  filter(bd_mean_its1_copies_per_swab > 0)
+
+sn_pn_summary = sn_pn %>%
+  mutate(year = year(date)) %>%
+  group_by(population, life_stage) %>%
+  summarise(n = n(),
+            min_year = min(year),
+            max_year = max(year),
+            year_count = n_distinct(year)) %>%
+  pivot_wider(id_cols = c(population, min_year, max_year, year_count),
+              values_from = n,
+              names_from = life_stage)
+
+ggplot(sn_pn_pos, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  ylab("ln( Bd_load )") +
+  facet_wrap("population")
+```
+
+
+## hist bd load by lifestage
+```{r}
+ggplot(bd_size_temp_15dmm %>% filter(bd_detected,
+                                     taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
+  geom_histogram() +
+  facet_wrap(~ life_stage, scales = "free")
+```
