@@ -66,7 +66,7 @@ bd_population = bd_sample %>%
   left_join(data_pop, by = "site", copy = TRUE) %>%
   mutate(population = ifelse(is.na(population), site, population),
          population = ifelse(country %in% c("brazil", "panama"), region, population),
-         pop_tax = paste0(population, "_", taxon_capture),
+         tax_pop = paste0(taxon_capture, "_", population),
          year = year(date))
 
 # determine populations which meet criteria
@@ -98,6 +98,7 @@ bd_sample_valid = bd_population %>%
                         bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
                         .groups = "drop"),
             by = "sample_id") %>%
+  mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
   select(sample_id,
          bd_swab_count,
          bd_detected,
@@ -115,7 +116,7 @@ bd_sample_valid = bd_population %>%
          site_id,
          geographic_area,
          population,
-         pop_tax,
+         tax_pop,
          region,
          country) %>%
   collect() %>%
@@ -132,236 +133,82 @@ bd_sample_valid = bd_population %>%
               year_count = n_distinct(year(date)),
               pop_count = n_distinct(population)) %>%
     arrange(country, taxon_capture))
-```
 
-# bd model dataset
-```{r}
 bd_model = bd_sample_valid %>%
   filter(!is.na(bd_mean_its1_copies_per_swab),
          !is.na(svl_mm),
          life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed")) %>%
-  mutate(bd_load = bd_mean_its1_copies_per_swab) %>%
+  mutate(bd_load = bd_mean_its1_copies_per_swab,
+         bd_load_int = as.integer(bd_load)) %>%
   select(bd_load,
+         bd_load_int,
          bd_detected,
          svl_mm,
+         svl_mm_noise,
          population,
          taxon_capture,
+         tax_pop,
          life_stage,
          date,
          population,
          region)
+
+bd_model_sn = bd_model %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))
 ```
 
-# SN population selection
-```{r}
-#| fig-width: 10
-#| fig-height: 40
-sn_pops = bd_sample_valid %>%
-  filter(region == "california") %>%
-  group_by(population, taxon_capture) %>%
-  count() %>%
-  arrange(desc(n))
-
-sn_sample_valid = bd_sample_valid %>%
-  filter(region == "california",
-         life_stage %in% c("adult", "subadult"))
-
-sn_summary = sn_sample_valid %>%
-  group_by(population) %>%
-  summarise(n = n(),
-            adult_n = sum(life_stage == "adult"),
-            subadult_n = sum(life_stage == "subadult"))
-  
-
-ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-  geom_point() +
-  ylab("ln( Bd_load )") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 23, label = paste0("n = ", n)),
-            color = "#000000") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 20, label = paste0("adult_n = ", adult_n)),
-            color = "#F8766D") +
-  geom_text(data = sn_summary, 
-            aes(x = as.Date("2020-01-01"), y = 17, label = paste0("subadult_n = ", subadult_n)),
-            color = "#00BFC4") +
-  facet_wrap("population",
-             ncol = 4)
-
-# ggplot(sn_sample_valid, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-#   geom_point() +
-#   ylab("ln( Bd_load )") +
-#   facet_wrap("geographic_area",
-#              ncol = 4) +
-#   geom_smooth(method = "lm")
-
-```
-
-
-
-# SN population analysis
-```{r}
-
-select_pops = c("70550",
-                "72996",
-                "70413_pop",
-                "70505_pop",
-                "72808_pop",
-                "72973_pop",
-                "84218_pop",
-                "84235_pop")
-
-sn_pn = bd_sample_valid %>%
-  filter(population %in% select_pops,
-         !(population == "pop_72808" & date < "2015-01-01"))
-  
-sn_pn_pos = sn_pn %>%
-  filter(bd_mean_its1_copies_per_swab > 0)
-
-sn_pn_summary = sn_pn %>%
-  mutate(year = year(date)) %>%
-  group_by(population, life_stage) %>%
-  summarise(n = n(),
-            min_year = min(year),
-            max_year = max(year),
-            year_count = n_distinct(year)) %>%
-  pivot_wider(id_cols = c(population, min_year, max_year, year_count),
-              values_from = n,
-              names_from = life_stage)
-
-ggplot(sn_pn_pos, aes(x = date, y = log(bd_mean_its1_copies_per_swab), color = life_stage)) +
-  geom_point() +
-  geom_smooth(method = "lm") +
-  ylab("ln( Bd_load )") +
-  facet_wrap("population")
-```
-
-# climate variables
-```{r}
-surveys_valid = bd_sample_valid %>%
-  select(population, site, site_id, survey_id, start_timestamp_utc, date) %>%
-  distinct()
-
-water_temperature = db_ts_temp %>%
-  left_join(db_sensor, by = "sensor_id") %>%
-  left_join(db_logger, by = "logger_id") %>%
-  filter(microhabitat == "water",
-         sensor_type == "temperature",
-         site_id %in% surveys_valid$site_id) %>%
-  pivot_wider(id_cols = c("site_id", "timestamp_utc"),
-              names_from = c("microhabitat", "height_cm"),
-              values_from = temperature_c_01_raw) %>%
-  collect()
-
-# convert data_temperature to data.table
-water_temp = as.data.table(water_temperature)
-
-# include "sensor_time" column for nearest joins
-water_temp_st = water_temp %>%
-  mutate(sensor_time = timestamp_utc)
-
-# NEAREST in time
-# align with site & nearest temp measurements in time
-bd_size_temp_nearest = water_temp_st[bd_sample_valid, on = .(site_id, timestamp_utc = start_timestamp_utc), roll = "nearest"] %>%
-  rename(start_timestamp_utc = timestamp_utc) %>%
-  select(capture_id,
-         any_of(colnames(db_capture)),
-         everything())
-
-
-# 15-day MEDIAN
-# align with site & 15-day rolling median temp measurements in time
-bd_sample_dt = as.data.table(bd_sample_valid %>%
-                               select(capture_id,
-                                      site_id,
-                                      date)) %>%
-  mutate(date_time = force_tz(as_datetime(paste0(date, " 17:00:00"))), tzone = "UTC")
-
-bd_size_temp_15dmm = bd_sample_dt[water_temp, on = .(site_id, date_time = timestamp_utc), roll = days(-15), nomatch = NULL] %>%
-  group_by(capture_id, date) %>%
-  summarise(across(starts_with("water_"), ~ max(.x, na.rm = TRUE), .names = "{.col}")) %>%
-  group_by(capture_id) %>%
-  summarise(across(starts_with("water_"), ~ mean(.x, na.rm = TRUE), .names = "{.col}_15d_max_mean")) %>%
-  right_join(bd_sample_valid, by = "capture_id") %>%
-  select(capture_id,
-         any_of(colnames(db_capture)),
-         everything()) %>%
-  mutate(across(starts_with("water_"), ~ ifelse(!is.finite(.x), NA_real_, .x)))
-
-```
-
-# plot bd vs temp
-```{r}
-
-ggplot(bd_size_temp_15dmm %>% filter(taxon_capture == "rana_sierrae"), aes(x = svl_mm_noise, y = log( 1 + bd_mean_its1_copies_per_swab))) +
-  geom_point() +
-  geom_smooth(method = "lm")
-
-# bd load vs 5cm water 15d
-ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_5_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
-  geom_point()
-
-#bd load vs 35cm water 15d
-ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_35_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
-  geom_point()
-
-```
-
-## histogram of size classes for each species
-```{r}
-
-ggplot(bd_size_temp_15dmm, aes(x = svl_mm_noise)) +
-  geom_histogram() +
-  facet_wrap(~ taxon_capture, scales = "free")
-
-```
+# descriptive stats and plots
 
 ## histogram of bd load for each species
 ```{r}
-# hist with zeros
-ggplot(bd_size_temp_15dmm, aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
+# hist of all samples
+ggplot(bd_model, aes(x = log(bd_load + 1))) +
   geom_histogram() +
   facet_wrap(~ taxon_capture, scales = "free")
 
-# hist withour zeros
-ggplot(bd_size_temp_15dmm %>% filter(bd_detected), aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
+# Q-Q plot of all samples
+ggplot(bd_model, aes(sample = log(bd_load + 1))) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_wrap(~ taxon_capture)
+
+# hist of positives
+ggplot(bd_model %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
   geom_histogram() +
   facet_wrap(~ taxon_capture, scales = "free")
 
 # Q-Q plot of positives
-ggplot(bd_size_temp_15dmm %>% filter(bd_detected), aes(sample = log(bd_mean_its1_copies_per_swab + 1))) +
+ggplot(bd_model %>%
+         filter(bd_detected), aes(sample = log(bd_load + 1))) +
   stat_qq() +
   stat_qq_line() +
   facet_wrap(~ taxon_capture)
 ```
 
-# hist bd load by lifestage
-```{r}
-ggplot(bd_size_temp_15dmm %>% filter(bd_detected,
-                                     taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
-  geom_histogram() +
-  facet_wrap(~ life_stage, scales = "free")
-```
-# distributions by population
+
+
+## bd load positive distributions by population
 ```{r}
 #| fig-width: 15
 #| fig-height: 30
 
-# all
-ggplot(bd_size_temp_15dmm %>% filter(bd_detected), aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
+# positives
+ggplot(bd_model %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
   geom_histogram() +
-  facet_wrap(~ pop_tax, scales = "free_y", ncol = 6)
+  facet_wrap(~ tax_pop, scales = "free_y", ncol = 6)
 
-# Sn
-ggplot(bd_size_temp_15dmm %>% filter(bd_detected,
-                                     taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = log(bd_mean_its1_copies_per_swab + 1))) +
+# SN positives
+ggplot(bd_model_sn %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
   geom_histogram() +
-  facet_wrap(~ pop_tax, scales = "free_y", ncol = 6)
-
+  facet_wrap(~ tax_pop, scales = "free_y", ncol = 6)
 
 
 ```
-# prevalence binning
+
+## prevalence binning
 ```{r}
 # prevalence binning
 prev_bin = bd_model %>%
@@ -369,78 +216,48 @@ prev_bin = bd_model %>%
   group_by(svl_mm_bin, taxon_capture) %>%
   summarise(n = n(),
             prevalence = sum(bd_detected) / n,
-            median_bd_load = median(bd_load),
+            median_bd_load_positive = median(bd_load[bd_detected]),
             .groups = "drop")
 
 ggplot(prev_bin, aes(x = svl_mm_bin, y = prevalence)) +
   geom_point() +
-  geom_line() +
   labs(x = "SVL Bin (mm)",
        y = "Prevalence",
        title = "Bd Prevalence by SVL Bin") +
   scale_x_discrete(breaks = seq(0, 100, by = 5)) +
   facet_wrap(~ taxon_capture, scales = "free_x")
 
-ggplot(prev_bin, aes(x = svl_mm_bin, y = log(median_bd_load))) +
+ggplot(prev_bin, aes(x = svl_mm_bin, y = log(median_bd_load_positive))) +
   geom_point() +
-  geom_line() +
   labs(x = "SVL Bin (mm)",
-       y = "log(Median Bd Load)",
+       y = "log(Median Bd Load positive)",
        title = "Bd Prevalence by SVL Bin") +
   scale_x_discrete(breaks = seq(0, 100, by = 5)) +
   facet_wrap(~ taxon_capture, scales = "free_x")
   
   
 ```
-
-
-# logistic fx
+## histogram of size classes for each species
 ```{r}
 
-bd_size_temp = bd_size_temp_15dmm %>%
-  mutate(water_temp = coalesce(water_5_15d_max_mean,
-                               water_10_15d_max_mean,
-                               water_35_15d_max_mean))
-
-m1 <- brm(
-  formula = bd_detected ~ svl_mm * taxon_capture,
-  data = bd_size_temp,
-  family = bernoulli(link = "logit"),
-  chains = 4,
-  iter = 4000,
-  warmup = 1000,
-  cores = 4
-)
-
-summary(m1)
-plot(m1)
-plot(conditional_effects(m1), ask = FALSE)
-
-ce <- conditional_effects(m1, effects = "svl_mm:taxon_capture")
-
-df <- ce$`svl_mm:taxon_capture`
-
-# Plot with ggplot2
-ggplot(df, aes(x = svl_mm, y = estimate__, color = taxon_capture)) +
-  geom_line(size = 1.2) +
-  geom_ribbon(aes(ymin = lower__, ymax = upper__, fill = taxon_capture), alpha = 0.2, color = NA) +
-  labs(
-    x = "Snout-Vent Length (mm)",
-    y = "Estimated Probability of Infection",
-    color = "Species",
-    fill = "Species",
-    title = "Effect of Size on Infection Probability by Species"
-  ) +
-  theme_minimal() +
-  facet_wrap(~ taxon_capture)
+ggplot(bd_model, aes(x = svl_mm)) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
 
 ```
 
-# logistic load
+# sierra nevada modeling
+
+# mlog -- logistic load (positive bd load only)
+
+Notes
+- poor convergence between chains
+- xoffset and xscale are showing a large spread of values spanning zero, suggesting that model in inconclusive or does not describe the data well (H1 would show xscale negative)
+- xoffset shows a subset of surprisingly high values (100), suggesting model is being fit with x far outside the range of svl_mm. Consider rerunning limiting xoffset to the range of svl, forcing the model to use xscale to indicate if no breakpoint is present.
 ```{r}
-model_data = bd_model %>%
-  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
-         bd_load > 0)
+model_data = bd_model_sn %>%
+  filter(bd_load > 0)
+
 
 nl_formula <- bf(
   bd_load ~ yoffset + yscale / (1 + exp(-(svl_mm - xoffset) / xscale)),
@@ -484,7 +301,8 @@ plot(conditional_effects(m_logistic_load), ask = FALSE)
 
 ```
 
-# negative binomial
+# negative binomial -- zero inflationand population effects
+## m0 -- negative binomial
 ```{r}
 
 bd_size_temp_sn = bd_size_temp %>%
@@ -549,7 +367,7 @@ ppc_dens_overlay(y = m0$y,
 
 
 ```
-
+## m0p -- zero inflated negative binomial
 ```{r}
 # prior_summary(m0)
 # summary(m0)
@@ -592,7 +410,7 @@ peace = rbind(prep_summary(m0, "nb"), prep_summary(m0p, "nb_zi"))
 
 ```
 
-
+## m1 -- negative binomial with population random effects
 ```{r}
 
 m1 <- brm(
@@ -607,7 +425,10 @@ plot(conditional_effects(m1), ask = FALSE)
 
 saveRDS(m1, file = "model_results_m1.rds")
 m1 = readRDS("model_results_m1.rds")
+```
 
+## m1p -- zero inflated negative binomial with population random effects
+```{r}
 m1p <- brm(
   formula = bd_load_int ~ svl_mm + (1 | population),
   data = bd_size_temp_sn,
@@ -652,7 +473,7 @@ bd_size_temp_sn %>%
 
 ```
 
-# model comparison
+## m0 m0p m1 m1p --  model comparison
 ```{r}
 
 peace = rbind(prep_summary(m0, "nb"),
@@ -670,42 +491,105 @@ loo_comp
 
 ```
 
-# model infection
+Notes:
+- m1p shows best performance (loo_comp)
+- zero-inflated models are better than not, and random effects from population are better than not.
+
+# negative binomial zero inflated lifestage & population
+
 ```{r}
-fit <- brm(
-  formula = infection ~ predictors,
-  data = bd_size_temp_sn,
-  family = bernoulli(link = "logit")
+m1lp <- brm(
+  formula = bf(
+    # Mean structure: intercept + life stage effect + population random effects
+    bd_load_int ~ 1 + life_stage + (1 | population),
+    # Zero-inflation: separate for each life stage
+    zi ~ 1 + life_stage,
+    # Shape parameter: separate for each life stage (optional)
+    shape ~ 1 + life_stage
+  ),
+  data = bd_model_sn,  # Your data
+  family = zero_inflated_negbinomial(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
 )
+
+
+saveRDS(m1lp, file = "model_results_znb_life_pop.rds")
+m1lp = readRDS("model_results_znb_life_pop.rds")
+
+summary(m1lsp)
+plot((m1lsp), ask = FALSE)
+plot(conditional_effects(m1lsp), ask = FALSE)
+
+loo_m1p <- loo(m1p, save_psis = TRUE)
+yrep_m1p <- posterior_predict(m1p)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1p,
+  lw = weights(loo_m1p$psis_object))
+
+bd_size_temp_sn %>%
+  data_grid(population) %>%
+  add_epred_draws(m1p) %>%
+  ggplot(aes(x = .epred, y = population)) +
+  stat_halfeye() +
+  geom_point(data = bd_size_temp_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+
 ```
 
-# break
+# negative binomial zero inflated svl_mm lifestage & population
+
 ```{r}
-b1 <- brm(
-  formula = bd_load_int ~ 0 + svl_mm,  # no global intercept, separate intercepts per segment
-  data = bd_size_temp_sn,
-  family = gaussian()
+brmsf = bf(bd_load_int ~ svl_mm + life_stage + (1 | population))
+
+peace = get_prior(brmsf,
+                  data = bd_model_sn)
+
+m1lsp <- brm(
+  formula = bd_load_int ~ svl_mm + life_stage + (1 | population),
+  data = bd_model_sn,
+  family = zero_inflated_negbinomial(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
 )
 
-fit <- brm(
-  formula = bd_load ~ svl_mm + hinge_svl + (1 | population),
-  data = bd_size_temp,
-  family = negbinomial())
-  
-bf_formula <- bf(
-  bd_load ~ negbinomial_2(mu, phi),
-  mu = ifelse(svl_mm < c, b0 + b1 * svl_mm, b0 + b1 * c + b2 * (svl_mm - c)),
-  phi ~ 1,
-  nl = TRUE
-)
 
-summary(b1)
-pp_check(b1, ndraws = 30)
+saveRDS(m1lsp, file = "model_results_znb_lifestage_pop.rds")
+m1lsp = readRDS("model_results_znb_lifestage_pop.rds")
+
+summary(m1lsp)
+plot((m1lsp), ask = FALSE)
+plot(conditional_effects(m1lsp), ask = FALSE)
+
+loo_m1p <- loo(m1p, save_psis = TRUE)
+yrep_m1p <- posterior_predict(m1p)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1p,
+  lw = weights(loo_m1p$psis_object))
+
+bd_size_temp_sn %>%
+  data_grid(population) %>%
+  add_epred_draws(m1p) %>%
+  ggplot(aes(x = .epred, y = population)) +
+  stat_halfeye() +
+  geom_point(data = bd_size_temp_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
 
 ```
 
-
-# zero inflated lognormal with breakpoint model
+# zero inflated lognormal with continuous breakpoint model
 ```{r}
 # Load required libraries
 library(rstan)
@@ -998,7 +882,10 @@ cat("Population-level variation: infection SD =", round(median(samples$sigma_u_i
 
 print("Model fitting complete!")
 ```
-# infection model with breakpoint
+
+Notes
+- continuous may be a good assumption, but then may also be forcing unrealistic slopes both before and after breakpoint. Better to allow this to be continuous to describe the data, and then let discontinuity (and linearity in general) be a limitation of the model
+# binomial infection model with breakpoint
 ```{r}
 # Load required libraries
 library(rstan)
@@ -1250,7 +1137,8 @@ cat("Population-level variation: infection SD =", round(median(samples$sigma_u_i
 
 print("Model fitting complete!")
 ```
-# load model with breakpoint
+
+# lognormal load model with breakpoint
 ```{r}
 # Load required libraries
 library(rstan)
@@ -1501,3 +1389,118 @@ cat("Population-level variation: infection SD =", round(median(samples$sigma_u_i
 print("Model fitting complete!")
 
 ```
+
+
+# add climate variables
+```{r}
+surveys_valid = bd_sample_valid %>%
+  select(population, site, site_id, survey_id, start_timestamp_utc, date) %>%
+  distinct()
+
+water_temperature = db_ts_temp %>%
+  left_join(db_sensor, by = "sensor_id") %>%
+  left_join(db_logger, by = "logger_id") %>%
+  filter(microhabitat == "water",
+         sensor_type == "temperature",
+         site_id %in% surveys_valid$site_id) %>%
+  pivot_wider(id_cols = c("site_id", "timestamp_utc"),
+              names_from = c("microhabitat", "height_cm"),
+              values_from = temperature_c_01_raw) %>%
+  collect()
+
+# convert data_temperature to data.table
+water_temp = as.data.table(water_temperature)
+
+# include "sensor_time" column for nearest joins
+water_temp_st = water_temp %>%
+  mutate(sensor_time = timestamp_utc)
+
+# NEAREST in time
+# align with site & nearest temp measurements in time
+bd_size_temp_nearest = water_temp_st[bd_sample_valid, on = .(site_id, timestamp_utc = start_timestamp_utc), roll = "nearest"] %>%
+  rename(start_timestamp_utc = timestamp_utc) %>%
+  select(capture_id,
+         any_of(colnames(db_capture)),
+         everything())
+
+
+# 15-day MEDIAN
+# align with site & 15-day rolling median temp measurements in time
+bd_sample_dt = as.data.table(bd_sample_valid %>%
+                               select(capture_id,
+                                      site_id,
+                                      date)) %>%
+  mutate(date_time = force_tz(as_datetime(paste0(date, " 17:00:00"))), tzone = "UTC")
+
+bd_size_temp_15dmm = bd_sample_dt[water_temp, on = .(site_id, date_time = timestamp_utc), roll = days(-15), nomatch = NULL] %>%
+  group_by(capture_id, date) %>%
+  summarise(across(starts_with("water_"), ~ max(.x, na.rm = TRUE), .names = "{.col}")) %>%
+  group_by(capture_id) %>%
+  summarise(across(starts_with("water_"), ~ mean(.x, na.rm = TRUE), .names = "{.col}_15d_max_mean")) %>%
+  right_join(bd_sample_valid, by = "capture_id") %>%
+  select(capture_id,
+         any_of(colnames(db_capture)),
+         everything()) %>%
+  mutate(across(starts_with("water_"), ~ ifelse(!is.finite(.x), NA_real_, .x)))
+
+```
+
+## plot bd vs temp
+```{r}
+
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture == "rana_sierrae"), aes(x = svl_mm_noise, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+# bd load vs 5cm water 15d
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_5_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point()
+
+#bd load vs 35cm water 15d
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_35_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point()
+
+```
+
+# mlog -- all species logistic load
+```{r}
+
+bd_size_temp = bd_size_temp_15dmm %>%
+  mutate(water_temp = coalesce(water_5_15d_max_mean,
+                               water_10_15d_max_mean,
+                               water_35_15d_max_mean))
+
+m1 <- brm(
+  formula = bd_detected ~ svl_mm * taxon_capture,
+  data = bd_size_temp,
+  family = bernoulli(link = "logit"),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4
+)
+
+summary(m1)
+plot(m1)
+plot(conditional_effects(m1), ask = FALSE)
+
+ce <- conditional_effects(m1, effects = "svl_mm:taxon_capture")
+
+df <- ce$`svl_mm:taxon_capture`
+
+# Plot with ggplot2
+ggplot(df, aes(x = svl_mm, y = estimate__, color = taxon_capture)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = lower__, ymax = upper__, fill = taxon_capture), alpha = 0.2, color = NA) +
+  labs(
+    x = "Snout-Vent Length (mm)",
+    y = "Estimated Probability of Infection",
+    color = "Species",
+    fill = "Species",
+    title = "Effect of Size on Infection Probability by Species"
+  ) +
+  theme_minimal() +
+  facet_wrap(~ taxon_capture)
+
+```
+
