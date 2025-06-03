@@ -521,25 +521,25 @@ m1lp <- brm(
 saveRDS(m1lp, file = "model_results_znb_life_pop.rds")
 m1lp = readRDS("model_results_znb_life_pop.rds")
 
-summary(m1lsp)
-plot((m1lsp), ask = FALSE)
-plot(conditional_effects(m1lsp), ask = FALSE)
+summary(m1lp)
+plot((m1lp), ask = FALSE)
+plot(conditional_effects(m1lp), ask = FALSE)
 
-loo_m1p <- loo(m1p, save_psis = TRUE)
-yrep_m1p <- posterior_predict(m1p)
+loo_m1lp <- loo(m1lp, save_psis = TRUE)
+yrep_m1lp <- posterior_predict(m1lp)
 ppc_loo_pit_overlay(
-  y = bd_size_temp_sn %>%
+  y = bd_model_sn %>%
     filter(!is.na(bd_load_int)) %>%
     pull(bd_load_int), 
-  yrep = yrep_m1p,
-  lw = weights(loo_m1p$psis_object))
+  yrep = yrep_m1lp,
+  lw = weights(loo_m1lp$psis_object))
 
-bd_size_temp_sn %>%
+bd_model_sn %>%
   data_grid(population) %>%
-  add_epred_draws(m1p) %>%
+  add_epred_draws(m1lp) %>%
   ggplot(aes(x = .epred, y = population)) +
   stat_halfeye() +
-  geom_point(data = bd_size_temp_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+  geom_point(data = bd_model_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
 
 ```
 
@@ -564,8 +564,8 @@ m1lsp <- brm(
 )
 
 
-saveRDS(m1lsp, file = "model_results_znb_lifestage_pop.rds")
-m1lsp = readRDS("model_results_znb_lifestage_pop.rds")
+saveRDS(m1lsp, file = "model_results_znb_svl_life_pop.rds")
+m1lsp = readRDS("model_results_znb_svl_life_pop.rds")
 
 summary(m1lsp)
 plot((m1lsp), ask = FALSE)
