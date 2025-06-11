@@ -62,15 +62,35 @@ bd_sample = db_sample %>%
 # identify populations
 bd_population = bd_sample %>%
   # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
-  filter(!is.na(svl_mm)) %>%
+  filter(!is.na(svl_mm),
+         life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed")) %>%
   left_join(data_pop, by = "site", copy = TRUE) %>%
   mutate(population = ifelse(is.na(population), site, population),
          population = ifelse(country %in% c("brazil", "panama"), region, population),
          tax_pop = paste0(taxon_capture, "_", population),
-         year = year(date))
+         year = year(date),
+         life_stage_simple = case_match(life_stage,
+                                        "adult" ~ "adult",
+                                        "juvenile" ~ "subadult",
+                                        "metamorph" ~ "subadult",
+                                        "metamorphosed" ~ "subadult",
+                                        "subadult" ~ "subadult",
+                                        .default = NA_character_))
+
+# selection criteria
+## - 60 samples per pupulation
+## - 3 years of sampleing
+## - 2 populations per species
+## - at least 15 each adult and subadult per population
 
 # determine populations which meet criteria
 bd_population_valid = bd_population %>%
+  group_by(population, taxon_capture, life_stage_simple) %>%
+  summarise(ls_gt_15 = n() > 15,
+            .groups = "drop") %>%
+  group_by(population, taxon_capture) %>%
+  filter(sum(as.integer(ls_gt_15)) == 2) %>%
+  left_join(bd_population, by = c("taxon_capture", "population")) %>%
   group_by(population, region, country, taxon_capture) %>%
   summarise(count = n(),
             sample_count = n(),
@@ -86,6 +106,36 @@ bd_population_valid = bd_population %>%
   filter(population_count >= 2) %>%
   arrange(desc(sample_count), taxon_capture) %>%
   collect()
+# 
+# bd_population_valid = bd_population %>%
+#   group_by(population, region, country, taxon_capture, life_stage_simple) %>%
+#   summarise(life_stage_count = n(), .groups = "drop") %>%
+#   # Check that each population has at least 15 individuals of each life stage
+#   group_by(population, region, country, taxon_capture) %>%
+#   filter(all(life_stage_simple %in% c("adult", "subadult")) & 
+#          all(life_stage_count >= 15)) %>%
+#   # Now get the overall population statistics
+#   summarise(sample_count = sum(life_stage_count),
+#             .groups = "drop") %>%
+#   # Add back the year information
+#   left_join(
+#     bd_population %>%
+#       group_by(population, region, country, taxon_capture) %>%
+#       summarise(year_first = min(year),
+#                 year_last = max(year),
+#                 year_count = n_distinct(year),
+#                 .groups = "drop"),
+#     by = c("population", "region", "country", "taxon_capture")
+#   ) %>%
+#   # Apply your existing filters
+#   filter(sample_count >= 60,
+#          year_count >= 3) %>%
+#   group_by(taxon_capture) %>%
+#   mutate(population_count = n()) %>%
+#   ungroup() %>%
+#   filter(population_count >= 2) %>%
+#   arrange(desc(sample_count), taxon_capture) %>%
+#   collect()
 
 # join with bd data, select
 bd_sample_valid = bd_population %>%
@@ -106,6 +156,7 @@ bd_sample_valid = bd_population %>%
          capture_id,
          taxon_capture,
          life_stage,
+         life_stage_simple,
          svl_mm,
          body_mass_g,
          sex,
@@ -136,8 +187,7 @@ bd_sample_valid = bd_population %>%
 
 bd_model = bd_sample_valid %>%
   filter(!is.na(bd_mean_its1_copies_per_swab),
-         !is.na(svl_mm),
-         life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed")) %>%
+         !is.na(svl_mm)) %>%
   mutate(bd_load = bd_mean_its1_copies_per_swab,
          bd_load_int = as.integer(bd_load)) %>%
   select(bd_load,
@@ -149,12 +199,19 @@ bd_model = bd_sample_valid %>%
          taxon_capture,
          tax_pop,
          life_stage,
+         life_stage_simple,
          date,
          population,
          region)
 
 bd_model_sn = bd_model %>%
   filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))
+
+bd_model_not_sn = bd_model %>%
+  filter(!(taxon_capture %in% c("rana_muscosa", "rana_sierrae")))
+
+taxa = sort(unique(bd_model$taxon_capture))
+
 ```
 
 # descriptive stats and plots
@@ -175,6 +232,12 @@ ggplot(bd_model, aes(sample = log(bd_load + 1))) +
 # hist of positives
 ggplot(bd_model %>%
          filter(bd_detected), aes(x = log(bd_load + 1))) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
+
+# hist of positives by life stage
+ggplot( bd_model %>%
+          filter(bd_detected), aes(x = log(bd_load + 1), col = life_stage_simple, fill = life_stage_simple)) +
   geom_histogram() +
   facet_wrap(~ taxon_capture, scales = "free")
 
@@ -240,9 +303,13 @@ ggplot(prev_bin, aes(x = svl_mm_bin, y = log(median_bd_load_positive))) +
 ## histogram of size classes for each species
 ```{r}
 
-ggplot(bd_model, aes(x = svl_mm)) +
+ggplot(bd_model, aes(x = svl_mm, color = life_stage_simple, fill = life_stage_simple)) +
   geom_histogram() +
   facet_wrap(~ taxon_capture, scales = "free")
+
+peace = bd_model %>%
+  filter(taxon_capture == "rana_pipiens") %>%
+  arrange(life_stage, svl_mm)
 
 ```
 
@@ -497,17 +564,16 @@ Notes:
 
 # negative binomial zero inflated lifestage & population
 
+## SN
+
 ```{r}
 m1lp <- brm(
   formula = bf(
-    # Mean structure: intercept + life stage effect + population random effects
     bd_load_int ~ 1 + life_stage + (1 | population),
-    # Zero-inflation: separate for each life stage
     zi ~ 1 + life_stage,
-    # Shape parameter: separate for each life stage (optional)
     shape ~ 1 + life_stage
   ),
-  data = bd_model_sn,  # Your data
+  data = bd_model_sn,
   family = zero_inflated_negbinomial(),
   chains = 4,
   iter = 2000,
@@ -540,6 +606,232 @@ bd_model_sn %>%
   ggplot(aes(x = .epred, y = population)) +
   stat_halfeye() +
   geom_point(data = bd_model_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+
+```
+## all
+```{r}
+
+run_m1_ltp = function(taxon){
+  # colostethus_panamansis
+  m1_ltp_copa <- brm(
+    formula = bf(
+      bd_load_int ~ 1 + life_stage_simple + (1 | population),
+      zi ~ 1 + life_stage_simple,
+      shape ~ 1 + life_stage_simple
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = zero_inflated_negbinomial(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+
+taxon_m = "colostethus_panamansis"
+m1_ltp_copa = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_copa, file = "model_results_znb_life_tax_pop_copa.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_copa.rds")
+
+taxon_m = "lithobates_sphenocephalus"
+m1_ltp_lisp = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_lisp, file = "model_results_znb_life_tax_pop_lisp.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_lisp.rds")
+
+taxon_m = "lithobates_warszewitschii"
+m1_ltp_liwa = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_liwa, file = "model_results_znb_life_tax_pop_liwa.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_liwa.rds")
+
+taxon_m = "plethodon_glutinosus"
+m1_ltp_plgl = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_plgl, file = "model_results_znb_life_tax_pop_plgl.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_plgl.rds")
+
+taxon_m = "pseudacris_crucifer"
+m1_ltp_pscr = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_pscr, file = "model_results_znb_life_tax_pop_pscr.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_pscr.rds")
+
+taxon_m = "rana_catesbeiana"
+m1_ltp_raca = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_raca, file = "model_results_znb_life_tax_pop_raca.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_raca.rds")
+
+taxon_m = "rana_clamitans"
+m1_ltp_racl = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_racl, file = "model_results_znb_life_tax_pop_racl.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_racl.rds")
+
+taxon_m = "rana_muscosa"
+m1_ltp_ramu = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_ramu, file = "model_results_znb_life_tax_pop_ramu.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_ramu.rds")
+
+taxon_m = "rana_pipiens"
+m1_ltp_rapi = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rapi, file = "model_results_znb_life_tax_pop_rapi.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rapi.rds")
+
+taxon_m = "rana_sierrae"
+m1_ltp_rasi = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rasi, file = "model_results_znb_life_tax_pop_rasi.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rasi.rds")
+
+taxon_m = "rhaebo_haematiticus"
+m1_ltp_rhha = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rhha, file = "model_results_znb_life_tax_pop_rhha.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rhha.rds")
+
+# evaluation
+summary(m1_ltp)
+plot((m1_ltp), ask = FALSE)
+plot(conditional_effects(m1_ltp), ask = FALSE)
+
+pp_check(m1_ltp) +
+  scale_x_log10()
+
+loo_m1_ltp <- loo(m1_ltp, save_psis = TRUE)
+yrep_m1_ltp <- posterior_predict(m1_ltp)
+ppc_loo_pit_overlay(
+  y = bd_model %>%
+    filter(
+      !is.na(bd_load_int),
+      taxon_capture == taxon_m) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1_ltp,
+  lw = weights(loo_m1_ltp$psis_object))
+
+```
+
+# lognormal zero inflated lifestage & population
+```{r}
+run_m2_ltp = function(taxon){
+  # colostethus_panamansis
+  m2_ltp <- brm(
+    formula = bf(
+      bd_load_int ~ 1 + life_stage_simple + (1 | population),
+      hu ~ 1 + life_stage_simple,
+      sigma ~ 1 + life_stage_simple
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = hurdle_lognormal(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+
+
+taxon_m = "colostethus_panamansis"
+m2_ltp_copa = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_copa, file = "model_results_zln_life_tax_pop_copa.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_copa.rds")
+
+taxon_m = "lithobates_sphenocephalus"
+m2_ltp_lisp = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_lisp, file = "model_results_zln_life_tax_pop_lisp.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_lisp.rds")
+
+taxon_m = "lithobates_warszewitschii"
+m2_ltp_liwa = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_liwa, file = "model_results_zln_life_tax_pop_liwa.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_liwa.rds")
+
+taxon_m = "plethodon_glutinosus"
+m2_ltp_plgl = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_plgl, file = "model_results_zln_life_tax_pop_plgl.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_plgl.rds")
+
+taxon_m = "pseudacris_crucifer"
+m2_ltp_pscr = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_pscr, file = "model_results_zln_life_tax_pop_pscr.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_pscr.rds")
+
+taxon_m = "rana_catesbeiana"
+m2_ltp_raca = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_raca, file = "model_results_zln_life_tax_pop_raca.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_raca.rds")
+
+taxon_m = "rana_clamitans"
+m2_ltp_racl = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_racl, file = "model_results_zln_life_tax_pop_racl.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_racl.rds")
+
+taxon_m = "rana_muscosa"
+m2_ltp_ramu = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_ramu, file = "model_results_zln_life_tax_pop_ramu.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_ramu.rds")
+
+taxon_m = "rana_pipiens"
+m2_ltp_rapi = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rapi, file = "model_results_zln_life_tax_pop_rapi.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rapi.rds")
+
+taxon_m = "rana_sierrae"
+m2_ltp_rasi = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rasi, file = "model_results_zln_life_tax_pop_rasi.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rasi.rds")
+
+taxon_m = "rhaebo_haematiticus"
+m2_ltp_rhha = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rhha, file = "model_results_zln_life_tax_pop_rhha.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rhha.rds")
+
+# evaluation
+summary(m2_ltp)
+plot((m2_ltp), ask = FALSE)
+plot(conditional_effects(m2_ltp), ask = FALSE)
+
+pp_check(m2_ltp) +
+  scale_x_log10()
+
+loo_m2_ltp <- loo(m2_ltp, save_psis = TRUE)
+yrep_m2_ltp <- posterior_predict(m2_ltp)
+ppc_loo_pit_overlay(
+  y = bd_model %>%
+    filter(
+      !is.na(bd_load_int),
+      taxon_capture == taxon_m) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m2_ltp,
+  lw = weights(loo_m2_ltp$psis_object))
+
+ loo_compare(list(loo_m1_ltp,
+                  loo_m2_ltp))
+
+```
+
+## plot comparison of posterior predictive
+```{r}
+prefix_list = c("copa",
+                "lisp",
+                "liwa",
+                "plgl",
+                "pscr",
+                "raca",
+                "racl",
+                "ramu",
+                "rapi",
+                "rasi",
+                "rhha")
+
+
+prefix = prefix_list[11]
+print(prefix)
+m2_ltp = readRDS(paste0("model_results_zln_life_tax_pop_", prefix, ".rds"))
+summary(m2_ltp)
+plot((m2_ltp), ask = FALSE)
+plot(conditional_effects(m2_ltp), ask = FALSE)
+pp_check(m2_ltp) +
+  scale_x_log10()
 
 ```
 
