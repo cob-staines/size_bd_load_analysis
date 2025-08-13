@@ -1,0 +1,472 @@
+---
+title: "size_bd_modeling_presentation_zln"
+format: html
+---
+
+# Working hypotheses:
+
+a. Younger individuals are more likely to be infected with Bd than older individuals in a given population
+b. Younger individuals are more likely to carry higher Bd loads than older individuals in a given population
+
+# Setup
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes)
+
+## Connect to DB
+dbcon <- hopToDB("ribbitr")
+
+# load populations
+data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_))
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+```
+# Data selection
+#### Preliminary selection criteria:
+
+- Bd swab + body size (SVL) data for at least 60 individuals in a given population
+- populations sampled over at least 3 years
+- species found in at least valid 2 populations
+- at least 15 adult and subadult each
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+# identify populations
+bd_population = bd_sample %>%
+  # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  filter(life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed"),
+         !is.na(svl_mm)) %>%
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(population = ifelse(is.na(population), site, population),
+         population = ifelse(country %in% c("brazil", "panama"), region, population),
+         tax_pop = paste0(taxon_capture, "_", population),
+         year = year(date),
+         life_stage_simple = case_match(life_stage,
+                                        "adult" ~ "adult",
+                                        "juvenile" ~ "subadult",
+                                        "metamorph" ~ "subadult",
+                                        "metamorphosed" ~ "subadult",
+                                        "subadult" ~ "subadult",
+                                        .default = NA_character_))
+
+# selection criteria
+## - 60 samples per population
+## - 3 years of sampling
+## - 2 populations per species
+## - at least 15 each adult and subadult per population
+
+# determine populations which meet criteria
+bd_population_valid = bd_population %>%
+  group_by(population, taxon_capture, life_stage_simple) %>%
+  summarise(ls_gt_15 = n() > 15,
+            .groups = "drop") %>%
+  group_by(population, taxon_capture) %>%
+  filter(sum(as.integer(ls_gt_15)) == 2) %>%
+  left_join(bd_population, by = c("taxon_capture", "population")) %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarise(count = n(),
+            sample_count = n(),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            .groups = "drop") %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  filter(population_count >= 2) %>%
+  arrange(country, taxon_capture, desc(sample_count)) %>%
+  collect()
+
+# join with bd data, select
+bd_sample_valid = bd_population %>%
+  filter(population %in% bd_population_valid$population &
+           taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
+  mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
+  select(sample_id,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         tax_pop,
+         region,
+         country) %>%
+  collect() %>%
+  mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
+  filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
+
+bd_model = bd_sample_valid %>%
+  filter(!is.na(bd_mean_its1_copies_per_swab),
+         !is.na(svl_mm)) %>%
+  mutate(bd_load = bd_mean_its1_copies_per_swab,
+         bd_load_int = as.integer(bd_load)) %>%
+  select(bd_load,
+         bd_load_int,
+         bd_detected,
+         svl_mm,
+         svl_mm_noise,
+         site,
+         population,
+         taxon_capture,
+         tax_pop,
+         life_stage,
+         life_stage_simple,
+         date,
+         population,
+         region,
+         country)
+
+```
+
+de zero
+```{r}
+bd_population = bd_sample %>%
+  # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  filter(!is.na(svl_mm),
+         life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed")) %>%
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(population = ifelse(is.na(population), site, population),
+         population = ifelse(country %in% c("brazil", "panama"), region, population),
+         tax_pop = paste0(taxon_capture, "_", population),
+         year = year(date),
+         life_stage_simple = case_match(life_stage,
+                                        "adult" ~ "adult",
+                                        "juvenile" ~ "subadult",
+                                        "metamorph" ~ "subadult",
+                                        "metamorphosed" ~ "subadult",
+                                        "subadult" ~ "subadult",
+                                        .default = NA_character_))
+
+bd_population_valid = bd_population %>%
+  group_by(population, taxon_capture, life_stage_simple) %>%
+  summarise(ls_gt_15 = n() > 15,
+            .groups = "drop") %>%
+  group_by(population, taxon_capture) %>%
+  filter(sum(as.integer(ls_gt_15)) == 2) %>%
+  left_join(bd_population, by = c("taxon_capture", "population")) %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarise(count = n(),
+            sample_count = n(),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            .groups = "drop") %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  filter(population_count >= 2) %>%
+  arrange(desc(sample_count), taxon_capture) %>%
+  collect()
+
+bd_sample_valid = bd_population %>%
+  filter(population %in% bd_population_valid$population &
+           taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
+  mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
+  select(sample_id,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         tax_pop,
+         region,
+         country) %>%
+  collect() %>%
+  mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
+  filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
+
+bd_model = bd_sample_valid %>%
+  filter(!is.na(bd_mean_its1_copies_per_swab),
+         !is.na(svl_mm)) %>%
+  mutate(bd_load = bd_mean_its1_copies_per_swab,
+         bd_load_int = as.integer(bd_load)) %>%
+  select(bd_load,
+         bd_load_int,
+         bd_detected,
+         svl_mm,
+         svl_mm_noise,
+         population,
+         taxon_capture,
+         tax_pop,
+         life_stage,
+         life_stage_simple,
+         date,
+         population,
+         region,
+         country)
+```
+
+# Descriptive stats
+```{r}
+bd_model_stats = bd_model %>%
+  group_by(taxon_capture, country) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            population_n = n_distinct(population),
+            site_n = n_distinct(site),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  arrange(country,
+          taxon_capture)
+
+```
+
+# panama by temporada
+```{r}
+#| fig-width: 10
+#| fig-height: 5
+
+colnames(bd_model_pa)
+
+# panama data query
+bd_sample_pa = bd_sample %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
+  filter(country == "panama") %>%
+  mutate(population = region,
+         life_stage_simple = case_match(life_stage,
+                                        "adult" ~ "adult",
+                                        "juvenile" ~ "subadult",
+                                        "metamorph" ~ "subadult",
+                                        "metamorphosed" ~ "subadult",
+                                        "subadult" ~ "subadult",
+                                        .default = NA_character_),
+         year = year(date),
+         svl_mm_noise = svl_mm + runif(1) -.5) %>%
+  select(sample_id,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         region,
+         country) %>%
+  collect()
+
+bd_model_pa = bd_sample_pa %>%
+  filter(country == "panama") %>%
+  mutate(month = month(date),
+         temporada = case_match(month,
+                                c(5, 6, 7, 8) ~ "lluvia",
+                                c(10, 11, 12, 1) ~ "seca",
+                                .default = NA_character_))
+
+bd_model_pa = bd_model %>%
+  filter(country == "panama") %>%
+  mutate(month = month(date),
+         temporada = case_match(month,
+                                c(5, 6, 7, 8) ~ "lluvia",
+                                c(10, 11, 12, 1) ~ "seca",
+                                .default = NA_character_))
+
+ggplot(bd_model_pa, aes(x = svl_mm, fill = life_stage_simple)) +
+  geom_histogram(color = "black", bins = 20, alpha = 0.7) +
+  facet_grid( ~ taxon_capture)
+
+bd_pa_sp_tp = bd_model_pa %>%
+  group_by(taxon_capture,
+           temporada,
+           life_stage_simple) %>%
+  count() %>%
+  pivot_wider(names_from = "life_stage_simple",
+              values_from = "n")
+
+peace = sort(unique(bd_model_pa$month))
+
+
+```
+
+# Define model
+```{r}
+run_m2_ltp = function(taxon){
+  m2_ltp <- brm(
+    formula = bf(
+      bd_load_int ~ 1 + life_stage_simple + (1 | population),
+      hu ~ 1 + life_stage_simple,
+      sigma ~ 1 + life_stage_simple
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = hurdle_lognormal(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+```
+
+# Load model results
+```{r}
+extract_abbr <- function(name) {
+  parts <- strsplit(name, "_")[[1]]
+  genus_abbr <- substr(parts[1], 1, 2)
+  species_abbr <- substr(parts[2], 1, 2)
+  paste0(genus_abbr, species_abbr)
+}
+
+model_by_taxa = tibble(
+  taxon_capture = sort(unique(bd_model$taxon_capture))) %>%
+  mutate(prefix = map_chr(taxon_capture, ~extract_abbr(.x)),
+         results_file = paste0("model_results_zln_life_tax_pop_", prefix, ".rds"))
+
+results_list = list()
+for(ii in 1:11){
+  cat("loading: ", model_by_taxa$results_file[ii], "\n")
+  results_list[[ii]] = readRDS(model_by_taxa$results_file[ii])
+}
+
+
+id = 11
+print(model_by_taxa$taxon_capture[id])
+m2_ltp = readRDS(model_by_taxa$results_file[id])
+summary(m2_ltp)
+plot((m2_ltp), ask = FALSE)
+plot(conditional_effects(m2_ltp), ask = FALSE)
+pp_check(m2_ltp) +
+  scale_x_log10()
+
+```
+
+# pp checks
+```{r}
+pp_check_by_category <- function(taxon, fit, ndraws) {
+  # Subset data for this category
+  bd_model_tx <- bd_model %>%
+    filter(taxon_capture == taxon,
+           !is.na(bd_load_int))
+  
+  # Run posterior predictive check on this subset
+  # Note: posterior_predict returns predictions for all data; 
+  # we subset to the rows for this category.
+  
+  # Get row indices for this category
+  rows_adult <- which(bd_model_tx$life_stage_simple == "adult")
+  rows_sub <- which(bd_model_tx$life_stage_simple == "subadult")
+  
+  # Extract posterior predictive samples for these rows
+  yrep = posterior_predict(fit, ndraws = ndraws)
+  yrep_adult <- yrep[, rows_adult]
+  yrep_sub <- yrep[, rows_sub]
+  
+  # Observed data for this category
+  y_adult <- bd_model_tx$bd_load_int[rows_adult]
+  y_sub <- bd_model_tx$bd_load_int[rows_sub]
+  
+  # Use bayesplot or brms pp_check on subset
+  p1 = bayesplot::ppc_dens_overlay(y = y_adult, yrep = yrep_adult)  +
+    scale_x_log10()
+  p2 = bayesplot::ppc_dens_overlay(y = y_sub, yrep = yrep_sub) +
+    scale_x_log10()
+  
+  return(list(p1, p2))
+}
+
+id = 1
+
+taxon = model_by_taxa$taxon_capture[id]
+fit = results_list[[id]]
+print(taxon)
+
+pp_check(results_list[[id]]) +
+  scale_x_log10()
+
+pp_plots = pp_check_by_category(taxon, fit, 50)
+
+pp_plots[1]
+pp_plots[2]
+
+
+```
