@@ -16,7 +16,7 @@ b. Younger individuals are more likely to carry higher Bd loads than older indiv
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2, ggpattern)
 
 ## Connect to DB
 dbcon <- hopToDB("ribbitr")
@@ -314,12 +314,13 @@ model_report = function(model_m){
     scale_x_log10()
 }
 
-samp_pos = function(m_zln, lifestage, season, n){
+samp_pos = function(m_zln, lifestage, season, n, s = 1){
   pp = data.frame(
     life_stage_simple = lifestage,
     season = season,
     population = "NA"
-  )
+  ) %>%
+    slice(rep(1:n(), s))
   
   p_samp = posterior_predict(m_zln,
                              newdata = pp,
@@ -327,49 +328,50 @@ samp_pos = function(m_zln, lifestage, season, n){
                              allow_new_levels = TRUE)
 }
 
-
-
-sample_posterior_life_sea = function(m_zln, species_name, n = 10000){
-  ps_adult_lluvia = samp_pos(m_zln, "adult", "lluvia", n)
-  ps_adult_seca = samp_pos(m_zln, "adult", "seca", n)
-  ps_subadult_lluvia = samp_pos(m_zln, "subadult", "lluvia", n)
-  ps_subadult_seca = samp_pos(m_zln, "subadult", "seca", n)
+sample_posterior_life_sea = function(m_zln, species_name, n = 1000, s = 1000){
+  ps_adult_lluvia = samp_pos(m_zln, "adult", "lluvia", n, s)
+  ps_adult_seca = samp_pos(m_zln, "adult", "seca", n, s)
+  ps_subadult_lluvia = samp_pos(m_zln, "subadult", "lluvia", n, s)
+  ps_subadult_seca = samp_pos(m_zln, "subadult", "seca", n, s)
+  
+  # develop a better way to pass matrix data along with life stage and season
   
   df_samps_adult_lluvia = data.frame(
     life_stage_simple = "adult",
     season = "lluvia",
-    bd_load = ps_adult_lluvia
+    bd_load = I(list(ps_adult_lluvia))
   )
   
   df_samps_adult_seca = data.frame(
     life_stage_simple = "adult",
     season = "seca",
-    bd_load = ps_adult_seca
+    bd_load = I(list(ps_adult_seca))
   )
   df_samps_subadult_lluvia = data.frame(
     life_stage_simple = "subadult",
     season = "lluvia",
-    bd_load = ps_subadult_lluvia
+    bd_load = I(list(ps_subadult_lluvia))
   )
   df_samps_subadult_seca = data.frame(
     life_stage_simple = "subadult",
     season = "seca",
-    bd_load = ps_subadult_seca
+    bd_load = I(list(ps_subadult_seca))
   )
   
   df_samps = bind_rows(df_samps_adult_lluvia,
                        df_samps_adult_seca,
                        df_samps_subadult_lluvia,
-                       df_samps_subadult_seca) %>%
-    mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
-           log_bd_load = log(bd_load + 1),
-           taxon_capture = species_name)
+                       df_samps_subadult_seca)
+  # %>%
+  #   mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
+  #          log_bd_load = log(bd_load + 1),
+  #          taxon_capture = species_name)
   
 }
 
 # draws
-collect_draws = function(posterior_samps){
-  draws_coma = m_zln_coma %>%
+collect_draws = function(m_spec){
+  m_spec %>%
     spread_draws(b_Intercept,
                  b_sigma_Intercept,
                  b_hu_Intercept,
@@ -387,7 +389,11 @@ collect_draws = function(posterior_samps){
            b_hu_adult_lluvia = b_hu_Intercept,
            b_hu_adult_seca = b_hu_Intercept + b_hu_seasonseca,
            b_hu_subadult_lluvia = b_hu_Intercept + b_hu_life_stage_simplesubadult,
-           b_hu_subadult_seca = b_hu_Intercept + b_hu_life_stage_simplesubadult + b_hu_seasonseca) %>%
+           b_hu_subadult_seca = b_hu_Intercept + b_hu_life_stage_simplesubadult + b_hu_seasonseca,
+           b_sigma_adult_lluvia = b_sigma_Intercept,
+           b_sigma_adult_seca = b_sigma_Intercept + b_sigma_seasonseca,
+           b_sigma_subadult_lluvia = b_sigma_Intercept + b_sigma_life_stage_simplesubadult,
+           b_sigma_subadult_seca = b_sigma_Intercept + b_sigma_life_stage_simplesubadult + b_sigma_seasonseca) %>%
     select(.draw,
            b_adult_lluvia,
            b_adult_seca,
@@ -396,7 +402,12 @@ collect_draws = function(posterior_samps){
            b_hu_adult_lluvia,
            b_hu_adult_seca,
            b_hu_subadult_lluvia,
-           b_hu_subadult_seca) %>%
+           b_hu_subadult_seca,
+           b_sigma_adult_lluvia,
+           b_sigma_adult_seca,
+           b_sigma_subadult_lluvia,
+           b_sigma_subadult_seca,
+           sd_population__Intercept) %>%
     pivot_longer(cols = c(b_adult_lluvia,
                           b_adult_seca,
                           b_subadult_lluvia,
@@ -404,42 +415,31 @@ collect_draws = function(posterior_samps){
                           b_hu_adult_lluvia,
                           b_hu_adult_seca,
                           b_hu_subadult_lluvia,
-                          b_hu_subadult_seca),
+                          b_hu_subadult_seca,
+                          b_sigma_adult_lluvia,
+                          b_sigma_adult_seca,
+                          b_sigma_subadult_lluvia,
+                          b_sigma_subadult_seca),
                  values_to = "param") %>% 
-    mutate(param_name = case_match(name,
-                                   c("b_adult_lluvia",
-                                     "b_adult_seca",
-                                     "b_subadult_lluvia",
-                                     "b_subadult_seca") ~ "b",
-                                   c("b_hu_adult_lluvia",
-                                     "b_hu_adult_seca",
-                                     "b_hu_subadult_lluvia",
-                                     "b_hu_subadult_seca") ~ "b_hu",
-                                   .default = NA_character_),
-           life_stage_simple = case_match(name,
-                                          c("b_adult_lluvia",
-                                            "b_adult_seca",
-                                            "b_hu_adult_lluvia",
-                                            "b_hu_adult_seca") ~ "adult",
-                                          c("b_subadult_lluvia",
-                                            "b_subadult_seca",
-                                            "b_hu_subadult_lluvia",
-                                            "b_hu_subadult_seca") ~ "subadult",
-                                          .default = NA_character_),
-           season = case_match(name,
-                               c("b_adult_lluvia",
-                                 "b_subadult_lluvia",
-                                 "b_hu_adult_lluvia",
-                                 "b_hu_subadult_lluvia") ~ "lluvia",
-                               c("b_adult_seca",
-                                 "b_subadult_seca",
-                                 "b_hu_adult_seca",
-                                 "b_hu_subadult_seca") ~ "seca",
-                               .default = NA_character_)) %>%
-    pivot_wider(id_cols = c(.draw, life_stage_simple, season),
+    mutate(
+      param_name = case_when(
+        grepl("b_hu", name) ~ "b_hu",
+        grepl("b_sigma", name) ~ "b_sigma",
+        grepl("b_", name) ~ "b",
+        .default = NA_character_),
+      life_stage_simple = case_when(
+        grepl("subadult", name) ~ "subadult",
+        grepl("adult", name) ~ "adult",
+        .default = NA_character_),
+      season = case_when(
+        grepl("lluvia", name) ~ "lluvia",
+        grepl("seca", name) ~ "seca",
+        .default = NA_character_)) %>%
+    pivot_wider(id_cols = c(.draw, life_stage_simple, season, sd_population__Intercept),
                 values_from = param,
                 names_from = param_name) %>%
-    mutate(p0 = 1/(1 + exp(b_hu)))
+    mutate(p0 = 1/(1 + exp(b_hu)),
+           sd_eff = sqrt(b_sigma^2 + sd_population__Intercept))
 }
 
 sample_stats = function(pps) {
@@ -473,41 +473,75 @@ sample_stats = function(pps) {
 # }
 
 plot_prev_obs = function(obs_stats, species_name) {
-  ggplot(obs_stats_coma, aes(y = bd_prevalence, x = season, color = life_stage_simple, linetype = season)) +
+  ggplot(obs_stats, aes(y = bd_prevalence, x = season, color = life_stage_simple, linetype = season)) +
     geom_boxplot(stat = "identity",
                  aes(ymin = bd_prevalence - 1.96*se,
                      lower = bd_prevalence,
                      middle = bd_prevalence,
                      upper = bd_prevalence,
                      ymax = bd_prevalence + 1.96*se)) +
-    ggtitle(paste0("Observed prevalence: ", spec_name)) +
+    ggtitle(paste0("Observed prevalence: ", species_name)) +
     xlab("Season") +
     ylab("Bd prevalence [-]") +
     labs(color = "Life stage") +
-    geom_text(data = obs_stats_coma,
+    geom_text(data = obs_stats,
               aes(y = bd_prevalence, label = paste0("n=", n)),
               position = position_dodge(width = 1), vjust = -4) +
     theme_minimal() +
     ylim(0, 1)
 }
 
-plot_prev_mod = function(sample_stats, species_name){
-  ggplot(sample_stats, aes(y = bd_prevalence, x = season, color = life_stage_simple, linetype = season)) +
-    ylim(0, 1) +
-    geom_point() +
-    geom_errorbar(aes(ymin = bd_prevalence, ymax = bd_prevalence), width = 0.3, linewidth = 1) +
-    ggtitle(paste0("Modeled prevalence: ", species_name)) +
+# plot_prev_mod = function(sample_stats, species_name){
+#   ggplot(sample_stats, aes(y = bd_prevalence, x = season, color = life_stage_simple, linetype = season)) +
+#     ylim(0, 1) +
+#     geom_point() +
+#     geom_errorbar(aes(ymin = bd_prevalence, ymax = bd_prevalence), width = 0.3, linewidth = 1) +
+#     ggtitle(paste0("Modeled prevalence: ", species_name)) +
+#     xlab("Season") +
+#     ylab("Bd prevalence [-]") +
+#     labs(color = "Life stage")
+# }
+
+plot_prev_mod = function(draws_spec, species_name){
+  ggplot(draws_spec, aes(p0, x = season, color = life_stage_simple, linetype = season)) +
+    geom_boxplot(coef = NULL) + 
+    theme_minimal() +
+    ggtitle(paste0("Observed infected load: ", species_name)) +
     xlab("Season") +
-    ylab("Bd prevalence [-]") +
-    labs(color = "Life stage")
+    ylab("log(Bd load + 1) [-]") +
+    labs(color = "Life stage") +
+    ylim(0, 1)
 }
+
+# plot_load_obs = function(bd_model_spec, obs_stats, species_name){
+#   ggplot(bd_model_spec %>%
+#            filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot(coef = NULL) + 
+#     theme_minimal() +
+#     ggtitle(paste0("Observed infected load: ", species_name)) +
+#     xlab("Season") +
+#     ylab("log(Bd load + 1) [-]") +
+#     labs(color = "Life stage") +
+#     geom_text(
+#       data = obs_stats,
+#       aes(
+#         x = season,
+#         y = max(bd_model_spec$log_bd_load) * 1.05,
+#         label = paste0("n=", n),
+#         group = life_stage_simple
+#       ),
+#       position = position_dodge(width = 0.75),
+#       vjust = 0,
+#       color = "black"
+#     )
+# }
 
 plot_load_obs = function(bd_model_spec, obs_stats, species_name){
   ggplot(bd_model_spec %>%
            filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
-    geom_boxplot(coef = NULL) + 
+    geom_boxplot() + 
     theme_minimal() +
-    ggtitle(paste0("Observed infected load: ", species_name)) +
+    ggtitle(paste0("Observed infected load: ", spec_name)) +
     xlab("Season") +
     ylab("log(Bd load + 1) [-]") +
     labs(color = "Life stage") +
@@ -520,21 +554,33 @@ plot_load_obs = function(bd_model_spec, obs_stats, species_name){
         group = life_stage_simple
       ),
       position = position_dodge(width = 0.75),
-      vjust = 0,
-      color = "black"
-    )
+      vjust = 0
+    ) +
+    ylim(0, 20)
 }
+  
 
-plot_load_mod = function(mod_stats, species_name) {
-  ggplot(mod_stats, aes(x = season, color = life_stage_simple, linetype = season)) +
-    geom_boxplot(stat = "identity", aes(
-      ymin = min_log_load_inf, lower = q_25_log_load_inf, middle = q_50_log_load_inf, upper = q_75_log_load_inf, ymax = max_log_load_inf
-    )) +
+# plot_load_mod = function(mod_stats, species_name) {
+#   ggplot(mod_stats, aes(x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot(stat = "identity", aes(
+#       ymin = min_log_load_inf, lower = q_25_log_load_inf, middle = q_50_log_load_inf, upper = q_75_log_load_inf, ymax = max_log_load_inf
+#     )) +
+#     theme_minimal() +
+#     ggtitle(paste0("Modeled infected load: ", species_name)) +
+#     xlab("Season") +
+#     ylab("log(Bd load + 1) [-]") +
+#     labs(color = "Life stage")
+# }
+
+plot_load_mod = function(draws_spec, species_name) {
+  ggplot(draws_spec, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+    geom_boxplot() + 
     theme_minimal() +
-    ggtitle(paste0("Modeled infected load: ", species_name)) +
+    ggtitle(paste0("Observed infected load: ", species_name)) +
     xlab("Season") +
     ylab("log(Bd load + 1) [-]") +
-    labs(color = "Life stage")
+    labs(color = "Life stage") +
+    ylim(0, 20)
 }
 
 plot_pdf = function(pps, species_name) {
@@ -642,9 +688,11 @@ spec_name = "Colostethus panamansis"
 
 m_zln_coma = load_model(2)
 
-pps_coma = sample_posterior_life_sea(m_zln_coma, spec_name, 10000)
+pps_coma = sample_posterior_life_sea(m_zln_coma, spec_name, 1000, 1000)
 
-draws_coma = collect_draws(pps_coma)
+## bookmark - passing these data on to plotting functions plz
+
+draws_coma = collect_draws(m_zln_coma)
 
 mod_stats_coma = sample_stats(pps_coma) %>%
   mutate(src = "model",
@@ -662,61 +710,97 @@ obs_stats_coma = sample_stats(bd_model_coma) %>%
 
 # prevalence
 ## observed prevalence
-
 (plo1_1 = plot_prev_obs(obs_stats_coma, spec_name))
-
-## modeled prevalence
-ggplot(draws_coma, aes(p0, x = season, color = life_stage_simple, linetype = season)) +
-  geom_boxplot(coef = NULL) + 
-  theme_minimal() +
-  ggtitle(paste0("Observed infected load: ", spec_name)) +
-  xlab("Season") +
-  ylab("log(Bd load + 1) [-]") +
-  labs(color = "Life stage") +
-  ylim(0, 1)
-
-# 
-# (plot_2 = plot_prev_mod(mod_stats_coma, spec_name))
+## modeled prevalence 
+(plot_2 = plot_prev_mod(draws_coma, spec_name))
 
 # infected Bd load
 ## observed log load data
-ggplot(bd_model_coma %>%
-         filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
-    geom_boxplot() + 
-    theme_minimal() +
-    ggtitle(paste0("Observed infected load: ", spec_name)) +
-    xlab("Season") +
-    ylab("log(Bd load + 1) [-]") +
-    labs(color = "Life stage") +
-    geom_text(
-      data = obs_stats_coma,
-      aes(
-        x = season,
-        y = max(bd_model_coma$log_bd_load) * 1.05,
-        label = paste0("n=", n),
-        group = life_stage_simple
-      ),
-      position = position_dodge(width = 0.75),
-      vjust = 0
-    ) +
-  ylim(0, 20)
-
-# (plot_3 = plot_load_obs(bd_model_coma, obs_stats_coma, spec_name))
+(plot_3 = plot_load_obs(bd_model_coma, obs_stats_coma, spec_name))
 # modeled logload data
-ggplot(draws_coma, aes(b, x = season, color = life_stage_simple, linetype = season)) +
-  geom_boxplot() + 
-  theme_minimal() +
-  ggtitle(paste0("Observed infected load: ", spec_name)) +
-  xlab("Season") +
-  ylab("log(Bd load + 1) [-]") +
-  labs(color = "Life stage") +
-  ylim(0, 20)
-# 
-# (plot_4 = plot_load_mod(mod_stats_coma, spec_name))
+(plot_4 = plot_load_mod(draws_coma, spec_name))
 
 # modeled distributions
+
+peace = draws_coma %>% slice(22)
+pdf_grid = function(draw) {
+  
+}
+
+density_grid <- seq(log(1.3), 20, length.out = 100)
+colnames(draws_coma)
+
+grouped_draws <- draws_coma %>%
+  group_by(life_stage_simple, season) %>%
+  group_split()
+
+group_summaries <- map(grouped_draws, function(group_df) {
+  # Get the group labels
+  life_stage <- unique(group_df$life_stage_simple)
+  season <- unique(group_df$season)
+  
+  # Compute density matrix
+  density_mat <- pmap(
+    list(group_df$b, group_df$sd_eff, group_df$p0),
+    function(b, sd_eff, p0) {
+      (1 - pnorm(density_grid, mean = b, sd = sd_eff)) * (1 - p0 + pnorm(density_grid[1], mean = b, sd = sd_eff))
+    }
+  ) %>%
+    simplify2array() %>%
+    t()
+
+
+  # Summary statistics: mean and 95% CI
+  median <- apply(density_mat, 2, quantile, probs = 0.5)
+  lower_ci <- apply(density_mat, 2, quantile, probs = 0.025)
+  upper_ci <- apply(density_mat, 2, quantile, probs = 0.975)
+
+  # Return a tidy tibble for plotting or analysis
+  tibble(
+    life_stage_simple = life_stage,
+    season = season,
+    density = density_grid,
+    median = median,
+    lower = lower_ci,
+    upper = upper_ci
+  )
+})
+
+summary_df <- bind_rows(group_summaries)
+
+ggplot(summary_df, aes(x = density, y = median, color = life_stage_simple, linetype = season)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.3)
+
+ggplot(summary_df, aes(x = density,
+                       y = median,
+                       color = life_stage_simple, 
+                       fill = life_stage_simple,   # add fill mapping
+                       linetype = season)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +  # no borders on ribbons
+  geom_line() +
+  theme_minimal() +
+  xlab("log(1 + Bd load)") +
+  ylab("1 - Cumulative probability") +
+  ylim(0, 1) +
+  xlim(log(1.3), 20)
+  
+
 ## PDF
+ggplot(pps_coma, aes(x = log_bd_load, color = life_stage_simple, linetype = season)) +
+  geom_density(kernel="epanechnikov") +
+  theme_minimal() +
+  ggtitle(paste0("Bd load PDF: ", spec_name)) +
+  xlab("log(Bd load + 1) [-]") +
+  ylab("Probability density [-]") +
+  labs(color = "Life stage",
+       linetype = "Season")
+
+linpred_draws <- posterior_linpred(m_zln_coma, transform = TRUE)
+
 (plot_5 = plot_pdf(pps_coma, spec_name))
+
+
 ## CDF
 (plot_6 = plot_cdf(pps_coma, spec_name))
 
