@@ -1,14 +1,33 @@
 ---
-title: "size_bd_modeling_presentation_zln"
-format: html
+title: "Size vs. Bd modeling: Panamá preliminary results"
+author: Cob Staines
+date: 2025-08-20
+format:
+  html:
+    toc: true
+df-print: kable
+bibliography: references.bib
+csl: ecology.csl
 ---
+# Introduction
 
-# Working hypotheses:
+## Motivation
 
-a. Younger individuals are more likely to be infected with Bd than older individuals in a given population
-b. Younger individuals are more likely to carry higher Bd loads than older individuals in a given population
+Patterns of greater Bd load in recently metamorphosed individuals have been documented in some cases[@adams_chytridiomycosis-induced_2020] [@humphries_immune_2022] [@humphries_chytridiomycosis_2024] [@humphries_chytridiomycosis_2025] (and the opposite pattern in others[@bradley_host_2019]), with possible implications for:
 
-# Setup
+  - population dynamics (Q2)
+  - assessing Bd resistance/tolerance mechanisms (Q3)
+  - resilience trajectory assessment (Q1)
+
+... with the goal of complementing ongoing RIBBiTR research efforts
+
+## Working hypotheses:
+
+  a. Younger individuals are more likely to be infected with Bd than older individuals across species
+  b. Younger individuals are more likely to carry higher Bd loads than older individuals across species
+
+# Methods
+## Setup
 ```{r}
 #| eval: true
 #| output: false
@@ -45,19 +64,30 @@ bd_sample = db_sample %>%
   left_join(db_country, by = "country_id") %>%
   filter(sample_type == "bd")
 ```
-# Data selection
-#### Preliminary selection criteria:
+## Data selection
+### Classifying by life stage
+These analysis were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" with a threshold snout-vent-length (SVL [mm]), identified independently for each species from the literature (see data collection code for specific thresholds used and sources).
 
-- Bd swab + body size (SVL) data for at least 60 individuals in a given population
-- populations sampled over at least 3 years
-- species found in at least valid 2 populations
-- at least 15 adult and subadult each
+### Classification by season
+The data were also classified into two seasons:
+
+  - Lluvia (wet) -- May - August
+  - Seca (dry) -- October - January
+
+### Population selection criteria:
+Populations comprised of sites grouped to the "region" level, with the following selection criteria used to determine which species to include in the analysis:
+
+  1. Bd swab + body size (SVL) data for at least 60 individuals in a given population
+  2. populations sampled over at least 3 years
+  3. species found in at least valid 2 populations
+  4. at least 15 adult and subadult each
+
 
 ```{r}
 #| eval: true
 #| warning: false
 #| code-fold: true
-#| code-summary: "Show data selection code"
+#| code-summary: "Show data collection code"
 
 # identify populations
 bd_population = bd_sample %>%
@@ -206,16 +236,18 @@ bd_model = bd_sample_valid %>%
          population,
          region,
          country)
+
+head(bd_model)
 ```
 
-# Descriptive stats
+## Descriptive stats
 ```{r}
 #| eval: true
 #| warning: false
 #| code-fold: true
 #| code-summary: "Show selected data stats code"
 
-bd_model_stats = bd_model %>%
+(bd_model_stats = bd_model %>%
   filter(!is.na(season)) %>%
   group_by(taxon_capture, country, season) %>%
   summarise(regions = paste(sort(unique(region)), collapse = ", "),
@@ -228,11 +260,13 @@ bd_model_stats = bd_model %>%
             subadult_n = sum(life_stage_simple == "subadult"),
             .groups = "drop") %>%
   arrange(country,
-          taxon_capture)
+          taxon_capture))
 
 ```
 
-# lognormal zero inflated model
+## Modeling
+I modeled Bd load using a Baysian zero-inflated log-normal model [@schrock2025fungi] with fixed effects of life stage and season, and considering population as a random effect. The "hurdle" infection probability (hu) and the variability in Bd load (sigma) are allowed to vary with life stage and season. 
+
 ```{r}
 #| eval: false
 #| code-fold: true
@@ -296,12 +330,12 @@ saveRDS(m2_ltp, file = output_m)
 
 ```
 
-# define functions
+## Processing and visualization
 ```{r}
 #| eval: true
 #| warning: false
 #| code-fold: true
-#| code-summary: "Show processing functions"
+#| code-summary: "Show processing & plotting functions"
 
 extract_abbr <- function(name) {
   parts <- strsplit(name, "_")[[1]]
@@ -624,7 +658,11 @@ plot_ccdf = function(density_mat, species_name) {
 ```
 
 # Results
+Results are broken out first by species, then combined for comparison between species
+
 ```{r}
+#| eval: false
+#| include: false
 # atelopus
 spec_name = "Atelopus varius"
 
@@ -665,7 +703,13 @@ obs_stats_atva = sample_stats(bd_model_atva) %>%
 # model_report(m_zln_atva)
 ```
 
+## Colostethus panamansis
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show Colos code"
+
 # colos
 spec_name = "Colostethus panamansis"
 
@@ -706,8 +750,13 @@ obs_stats_coma = sample_stats(bd_model_coma) %>%
 # model_report(m_zln_coma)
 ```
 
-
+## Lithobates warszewitschii
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show Warsze code"
+
 # wartz
 spec_name = "Lithobates warszewitschii"
 
@@ -748,7 +797,13 @@ obs_stats_liwa = sample_stats(bd_model_liwa) %>%
 # model_report(m_zln_liwa)
 ```
 
+## Rhaebo haematiticus
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show Rhaebo code"
+
 # rhaebo
 spec_name = "Rhaebo haematiticus"
 
@@ -789,7 +844,13 @@ obs_stats_rhha = sample_stats(bd_model_rhha) %>%
 # model_report(m_zln_rhha)
 ```
 
+## Sachatamia albomaculata
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show Albomac code"
+
 # albomac
 spec_name = "Sachatamia albomaculata"
 
@@ -830,7 +891,13 @@ obs_stats_saal = sample_stats(bd_model_saal) %>%
 # model_report(m_zln_saal)
 ```
 
+## Silverstoneia flotator
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show Flotator code"
+
 # flotator
 spec_name = "Silverstoneia flotator"
 
@@ -871,8 +938,12 @@ obs_stats_sifl = sample_stats(bd_model_sifl) %>%
 # model_report(m_zln_sifl)
 ```
 
-# combined plots
+## Combined results
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show combined results code"
 #| fig-width: 12
 #| fig-height: 6
 
@@ -1071,13 +1142,17 @@ ggplot(density_mat_all, aes(x = density,
 # dummy box
 ```
 
-# discussion
- * bled & blipps, table 3 como guia de factores/caracteristicas
- * Ana Longo -- sequia aumenta infeccion, accumulacion de ranas arededor de pozos, sube el contactp
- * Jordan Gas (Jaime)n 2022 - experiemento de aumentar humedad, ver el effecto en Bd
+# Discussion
+  - General patterns
+    - Most species show greater Bd prevalence & load in juveniles, with Rhaebos showing the opposite pattern
+    - Most species show greater Bd prevalence in the wet season, with Rhaebos showing the opposite pattern
+    - A variety of relationships are seen for Bd-positive load with season.
+  - Bringing in more context (suggestions from Deli)
+    - Bled & Blipps, table 3 como guia de factores/caracteristicas entre especies
+    - Ana Longo -- sequia aumenta infeccion, accumulacion de ranas alrededor de pozos, sube el contacto
+    - Jordan Gas ( & Jaime) 2022 - experiemento de aumentar humedad, ver effecto en Bd
  
-# next steps:
-  * include error/uncertainty in visualizations
-  * change min/max viz for uncertainty model vals to match whiskers for obs
-  * run analysis for species which only have data from 1 season
+# Next steps:
+  - Expand analysis to include species which only have data from 1 season
+  - Expand analysis to Sierra Nevada, Pennsylvania, Brazil
  
