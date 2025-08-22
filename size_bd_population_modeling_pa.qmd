@@ -149,7 +149,7 @@ peace = bd_population %>%
 # determine populations which meet criteria
 bd_population_valid = bd_population %>%
   group_by(population, taxon_capture, life_stage_simple) %>%
-  summarise(ls_gt_15 = n() > 15,
+  summarise(ls_gt_15 = n() >= 15,
             .groups = "drop") %>%
   group_by(population, taxon_capture) %>%
   filter(sum(as.integer(ls_gt_15)) == 2) %>%
@@ -217,11 +217,9 @@ bd_model = bd_sample_valid %>%
          !is.na(svl_mm)) %>%
   mutate(bd_load = bd_mean_its1_copies_per_swab,
          # log_bd_load = log(bd_load + 1),
-         log_bd_load = log(bd_load),
-         bd_load_int = as.integer(bd_load)) %>%
+         log_bd_load = log(bd_load)) %>%
   select(bd_load,
          log_bd_load,
-         bd_load_int,
          bd_detected,
          svl_mm,
          svl_mm_noise,
@@ -276,7 +274,7 @@ run_m2_ltp = function(taxon){
   # colostethus_panamansis
   m2_ltp <- brm(
     formula = bf(
-      bd_load_int ~ 1 + life_stage_simple + season + (1 | population),
+      bd_load ~ 1 + life_stage_simple + season + (1 | population),
       hu ~ 1 + life_stage_simple + season,
       sigma ~ 1 + life_stage_simple + season
     ),
@@ -335,7 +333,7 @@ saveRDS(m2_ltp, file = output_m)
 #| eval: true
 #| warning: false
 #| code-fold: true
-#| code-summary: "Show processing & plotting functions"
+#| code-summary: "Show processing & visualization functions"
 
 extract_abbr <- function(name) {
   parts <- strsplit(name, "_")[[1]]
@@ -446,8 +444,9 @@ collect_draws = function(m_spec){
     pivot_wider(id_cols = c(.draw, life_stage_simple, season, sd_population__Intercept),
                 values_from = param,
                 names_from = param_name) %>%
-    mutate(p0 = 1/(1 + exp(b_hu)),
-           sd_eff = sqrt(b_sigma^2 + sd_population__Intercept))
+    mutate(p0 = plogis(b_hu),
+           prevalence = 1 - p0,
+           sd_eff = sqrt(b_sigma^2 + sd_population__Intercept^2))
 }
 
 
@@ -476,7 +475,7 @@ density_mat = function(lower, upper, len, draws){
     ccdf_density_mat = pmap(
       list(group_df$b, group_df$sd_eff, group_df$p0),
       function(b, sd_eff, p0) {
-        (1 - pnorm(density_grid, mean = b, sd = sd_eff)) * (1 - p0 + pnorm(density_grid[1], mean = b, sd = sd_eff))
+        (1 - pnorm(density_grid, mean = b, sd = sd_eff)) * (1 - p0)
       }
     ) %>%
       simplify2array() %>%
@@ -537,6 +536,7 @@ sample_stats = function(pps) {
     group_by(life_stage_simple,
              season) %>%
     summarise(n = n(),
+              n_pos = sum(bd_load > 0),
               bd_prevalence = sum(bd_load > 0) / n(),
               bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
               bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
@@ -568,7 +568,7 @@ plot_prev_obs = function(obs_stats, species_name) {
 }
 
 plot_prev_mod = function(draws_spec, species_name){
-  ggplot(draws_spec, aes(p0, x = season, color = life_stage_simple, linetype = season)) +
+  ggplot(draws_spec, aes(prevalence, x = season, color = life_stage_simple, linetype = season)) +
     geom_boxplot(coef = NULL) + 
     theme_minimal() +
     ggtitle(paste0("Modeled prevalence: ", species_name)) +
@@ -591,12 +591,12 @@ plot_load_obs = function(bd_model_spec, obs_stats, species_name){
       data = obs_stats,
       aes(
         x = season,
-        y = max(bd_model_spec$log_bd_load) * 1.05,
-        label = paste0("n=", n),
+        y = q_50_log_load_inf,
+        label = paste0("n=", n_pos),
         group = life_stage_simple
       ),
-      position = position_dodge(width = 0.75),
-      vjust = 0
+      position = position_dodge(width = .75),
+      vjust = -0.25
     ) +
     ylim(log(0.3), 15)
 }
@@ -936,6 +936,7 @@ obs_stats_sifl = sample_stats(bd_model_sifl) %>%
 (plot_6 = plot_ccdf(density_mat_sifl, spec_name))
 
 # model_report(m_zln_sifl)
+# get_prior(m_zln_sifl)
 ```
 
 ## Combined results
@@ -1009,7 +1010,7 @@ ggplot(obs_stats_all, aes(y = bd_prevalence, x = season, color = life_stage_simp
   facet_grid(. ~ taxon_capture)
 
 # model prevalence
-ggplot(draws_all, aes(p0, x = season, color = life_stage_simple, linetype = season)) +
+ggplot(draws_all, aes(prevalence, x = season, color = life_stage_simple, linetype = season)) +
   geom_boxplot(coef = NULL) + 
   theme_minimal() +
   ggtitle("Modeled prevalence") +
@@ -1033,7 +1034,7 @@ ggplot(bd_model_all %>%
     aes(
       x = season,
       y = max(bd_model_all$log_bd_load) * 1.10 * label_y,
-      label = paste0("n=", n),
+      label = paste0("n=", n_pos),
       group = life_stage_simple
     ),
     position = position_dodge(width = 0.75),
@@ -1149,10 +1150,14 @@ ggplot(density_mat_all, aes(x = density,
     - A variety of relationships are seen for Bd-positive load with season.
   - Bringing in more context (suggestions from Deli)
     - Bled & Blipps, table 3 como guia de factores/caracteristicas entre especies
-    - Ana Longo -- sequia aumenta infeccion, accumulacion de ranas alrededor de pozos, sube el contacto
+    - Ana Longo -- sequia aumenta infeccion, accumulacion de ranas alrededor de pozos sube el contacto
     - Jordan Gas ( & Jaime) 2022 - experiemento de aumentar humedad, ver effecto en Bd
  
 # Next steps:
+  - Explore discrepancies between observations and models
   - Expand analysis to include species which only have data from 1 season
-  - Expand analysis to Sierra Nevada, Pennsylvania, Brazil
+  - Expand analysis to Brazil, Pennsylvania, Sierra Nevada
+  - Should distributions be done with b_eff of b_sigma? Currently with b_eff
+  - Rerun model on bd_load (not bd_load_int)
+  - When box-plotting bd-load, b_eff (or b_sigma?) needs to feature (currently only shows distribution of b)
  
