@@ -410,11 +410,11 @@ density_mat = fugroup_df_savedensity_mat = function(lower, upper, len, draws){
     ) %>%
       simplify2array() %>%
       t()
-    
-    print(sum(is.na(pdf_density_mat)))
-    print(sum(is.nan(pdf_density_mat)))
-    print(sum(is.na(ccdf_density_mat)))
-    print(sum(is.nan(ccdf_density_mat)))
+    # 
+    # print(sum(is.na(pdf_density_mat)))
+    # print(sum(is.nan(pdf_density_mat)))
+    # print(sum(is.na(ccdf_density_mat)))
+    # print(sum(is.nan(ccdf_density_mat)))
     
     ccdf_density_mat = pmap(
       list(group_df$b, group_df$b_sigma, group_df$p0),
