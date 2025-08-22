@@ -390,9 +390,6 @@ collect_draws = function(m_spec){
            season = "seca")
 }
 
-draws = draws_ishe %>%
-  filter(life_stage_simple == "subadult")
-
 density_mat = fugroup_df_savedensity_mat = function(lower, upper, len, draws){
   density_grid = seq(lower, upper, length.out = len)
   
