@@ -1,5 +1,5 @@
 ---
-title: "Size vs. Bd modeling: Panamá preliminary results"
+title: "Size vs. Bd modeling: Brasil preliminary results"
 author: Cob Staines
 date: 2025-08-20
 format:
@@ -68,10 +68,10 @@ bd_sample = db_sample %>%
 ### Classifying by life stage
 These analysis were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" (ie. "juvenile") based on field notes.
 
-### Species selection criteria (Brazil):
+### Species selection criteria (Brasil):
 Species were grouped across regions, years, and seasons, and were included if
 
-  1. at least 14 adult and subadult each per species
+  1. at least 14 adult and subadult each present per species ("seca" only)
 
 
 ```{r}
@@ -93,42 +93,6 @@ bd_population = bd_sample %>%
          life_stage_simple = case_match(life_stage,
                                         "adult" ~ "adult",
                                         c("subadult", "juvenile") ~ "subadult")
-         # life_stage_simple = case_when(
-         #   # Savage 1972 & Crump 1988
-         #   ((taxon_capture == "atelopus_varius") & (svl_mm >= 25)) ~ "adult",
-         #   ((taxon_capture == "atelopus_varius") & (svl_mm < 25)) ~ "subadult",
-         #   # Lynch and Myers 1983
-         #   ((taxon_capture == "craugastor_crassidigitus") & (svl_mm >= 20.2)) ~ "adult",
-         #   ((taxon_capture == "craugastor_crassidigitus") & (svl_mm < 20.2)) ~ "subadult",
-         #   # Lynch and Myers 1983
-         #   ((taxon_capture == "craugastor_fitzingeri") & (svl_mm >= 23.5)) ~ "adult",
-         #   ((taxon_capture == "craugastor_fitzingeri") & (svl_mm < 23.5)) ~ "subadult",
-         #   # Amphibiaweb
-         #   ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 18.8)) ~ "adult",
-         #   ((taxon_capture == "colostethus_panamansis") & (svl_mm < 18.8)) ~ "subadult",
-         #   # Leenders 2001
-         #   ((taxon_capture == "dendrobates_auratus") & (svl_mm >= 25)) ~ "adult",
-         #   ((taxon_capture == "dendrobates_auratus") & (svl_mm < 25)) ~ "subadult",
-         #   # Amphibiaweb
-         #   ((taxon_capture == "espadarana_prosoblepon") & (svl_mm >= 21)) ~ "adult",
-         #   ((taxon_capture == "espadarana_prosoblepon") & (svl_mm < 21)) ~ "subadult",
-         #   # Basante 2025
-         #   ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 35)) ~ "adult",
-         #   ((taxon_capture == "lithobates_warszewitschii") & (svl_mm < 35)) ~ "subadult",
-         #   # Savage 2002
-         #   ((taxon_capture == "rhaebo_haematiticus") & (svl_mm >= 42)) ~ "adult",
-         #   ((taxon_capture == "rhaebo_haematiticus") & (svl_mm < 42)) ~ "subadult",
-         #   # Savage 2002
-         #   ((taxon_capture == "sachatamia_albomaculata") & (svl_mm >= 20.5)) ~ "adult",
-         #   ((taxon_capture == "sachatamia_albomaculata") & (svl_mm < 20.5)) ~ "subadult",
-         #   # Ibunez & Smith 1995
-         #   ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 15.1)) ~ "adult",
-         #   ((taxon_capture == "silverstoneia_flotator") & (svl_mm < 15.1)) ~ "subadult",
-         #   # Duellman, W. E. 2001
-         #   ((taxon_capture == "smilisca_sila") & (svl_mm >= 31.6)) ~ "adult",
-         #   ((taxon_capture == "smilisca_sila") & (svl_mm < 31.6)) ~ "subadult",
-         #   .default = NA_character_
-         # ))
   )
 
 
@@ -241,7 +205,7 @@ head(bd_model)
 ```
 
 ## Modeling
-I modeled Bd load using a Baysian zero-inflated log-normal model [@schrock2025fungi] with fixed effects of life stage and season, and considering population as a random effect. The "hurdle" infection probability (hu) and the variability in Bd load (sigma) are allowed to vary with life stage and season. 
+I modeled Bd load using a Baysian zero-inflated log-normal model [@schrock2025fungi] with fixed effects of life stage. Life stages were grouped across all regions due to low subadult counts. Only season "seca" was used due to very few subadult samples in the "cuvosa" season. The "hurdle" infection probability (hu) and the variability in Bd load (sigma) are allowed to vary with life stage and season. 
 
 ```{r}
 #| eval: false
@@ -249,14 +213,6 @@ I modeled Bd load using a Baysian zero-inflated log-normal model [@schrock2025fu
 #| code-summary: "Show model code"
 
 run_m3_zln = function(taxon, bd_model){
-  priors <- c(
-    prior(student_t(3, 0, 2.5), class = "b"),
-    prior(student_t(3, 0, 2.5), class = "Intercept"),
-    prior(exponential(1), class = "sigma"),
-    prior(logistic(0, 1), class = "b", dpar = "hu")
-  )
-  
-  # colostethus_panamansis
   m3_zln <- brm(
     formula = bf(
       bd_load ~ 1 + life_stage_simple,
@@ -265,7 +221,6 @@ run_m3_zln = function(taxon, bd_model){
     ),
     data = bd_model %>%
       filter(taxon_capture == taxon),
-    prior = priors,
     family = hurdle_lognormal(),
     chains = 4,
     iter = 4000,
@@ -385,7 +340,8 @@ collect_draws = function(m_spec){
     pivot_wider(id_cols = c(.draw, life_stage_simple),
                 values_from = param,
                 names_from = param_name) %>%
-    mutate(p0 = plogis(b_hu),
+    mutate(sigma = exp(b_sigma),
+           p0 = plogis(b_hu),
            prevalence = 1 - p0,
            season = "seca")
 }
@@ -403,23 +359,18 @@ density_mat = fugroup_df_savedensity_mat = function(lower, upper, len, draws){
     
     # Compute density matrices
     pdf_density_mat = pmap(
-      list(group_df$b, group_df$b_sigma, group_df$p0),
-      function(b, b_sigma, p0) {
-        dnorm(density_grid, mean = b, sd = b_sigma) / (p0 + pnorm(density_grid[1]))
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        dnorm(density_grid, mean = b, sd = sigma) * (1 - p0)
       }
     ) %>%
       simplify2array() %>%
       t()
-    # 
-    # print(sum(is.na(pdf_density_mat)))
-    # print(sum(is.nan(pdf_density_mat)))
-    # print(sum(is.na(ccdf_density_mat)))
-    # print(sum(is.nan(ccdf_density_mat)))
     
     ccdf_density_mat = pmap(
-      list(group_df$b, group_df$b_sigma, group_df$p0),
-      function(b, b_sigma, p0) {
-        (1 - pnorm(density_grid, mean = b, sd = b_sigma)) * (1 - p0)
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        (1 - pnorm(density_grid, mean = b, sd = sigma)) * (1 - p0)
       }
     ) %>%
       simplify2array() %>%
@@ -449,6 +400,44 @@ density_mat = fugroup_df_savedensity_mat = function(lower, upper, len, draws){
   })
   
   summary_df <- bind_rows(group_summaries)
+}
+
+samp_pos = function(m_zln, lifestage, season, n){
+
+  pp = data.frame(
+    life_stage_simple = lifestage,
+    season = season,
+    population = "NA"
+  )
+  
+  p_samp = posterior_predict(m_zln,
+                             newdata = pp,
+                             ndraws = n,
+                             allow_new_levels = TRUE)
+
+}
+
+sample_posterior_life = function(m_zln, species_name, n = 10000){
+  ps_adult_seca = samp_pos(m_zln, "adult", "seca", n)
+  ps_subadult_seca = samp_pos(m_zln, "subadult", "seca", n)
+
+  df_samps_adult_seca = data.frame(
+    life_stage_simple = "adult",
+    season = "seca",
+    bd_load = ps_adult_seca
+  )
+  
+  df_samps_subadult_seca = data.frame(
+    life_stage_simple = "subadult",
+    season = "seca",
+    bd_load = ps_subadult_seca
+  )
+
+  df_samps = bind_rows(df_samps_adult_seca,
+                       df_samps_subadult_seca) %>%
+    mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
+           log_bd_load = log(bd_load + 1),
+           taxon_capture = species_name)
 }
 
 wilson_ci = function(p_hat, n, conf.level = 0.95) {
@@ -542,18 +531,30 @@ plot_load_obs = function(bd_model_spec, obs_stats, species_name){
       position = position_dodge(width = .75),
       vjust = -0.25
     ) +
-    ylim(log(0.3), 15)
+    ylim(log(0.3), 20)
 }
 
-plot_load_mod = function(draws_spec, species_name) {
-  ggplot(draws_spec, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+# plot_load_mod = function(draws_spec, species_name) {
+#   ggplot(draws_spec, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot() + 
+#     theme_minimal() +
+#     ggtitle(paste0("Modeled Bd-positive load: ", species_name)) +
+#     xlab("Season") +
+#     ylab("log(Bd load) [-]") +
+#     labs(color = "Life stage") +
+#     ylim(log(0.3), 20)
+# }
+
+plot_load_mod = function(pps, species_name) {
+  ggplot(pps %>%
+           filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
     geom_boxplot() + 
     theme_minimal() +
     ggtitle(paste0("Modeled Bd-positive load: ", species_name)) +
     xlab("Season") +
     ylab("log(Bd load) [-]") +
     labs(color = "Life stage") +
-    ylim(log(0.3), 15)
+    ylim(log(0.3), 20)
 }
 
 plot_pdf = function(density_mat, species_name) {
@@ -574,7 +575,7 @@ plot_pdf = function(density_mat, species_name) {
          linetype = "Season") +
     xlab("log(Bd load) [-]") +
     ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
-    scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0))
+    scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0))
 }
 
 plot_ccdf = function(density_mat, species_name) {
@@ -595,7 +596,7 @@ plot_ccdf = function(density_mat, species_name) {
          linetype = "Season") +
     xlab("log(Bd load) [-]") +
     ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
-    scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0)) +
+    scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
     ylim(0, 1)
 }
 
@@ -619,8 +620,11 @@ m_zln_bofa = load_model(1)
 draws_bofa = collect_draws(m_zln_bofa) %>%
   mutate(taxon_capture = spec_name)
 
-density_mat_bofa = density_mat(log(0.3), 15, 100, draws_bofa) %>%
-  mutate(taxon_capture = spec_name)
+density_mat_bofa = density_mat(log(0.3), 20, 100, draws_bofa) %>%
+  mutate(taxon_capture = spec_name,
+         season = "seca")
+
+pps_bofa = sample_posterior_life(m_zln_bofa, "boana_faber", 10000)
 
 bd_model_bofa = bd_model %>%
   filter(taxon_capture == "boana_faber")
@@ -631,23 +635,23 @@ obs_stats_bofa = sample_stats(bd_model_bofa) %>%
 
 # prevalence
 ## observed prevalence
-(plo1_1 = plot_prev_obs(obs_stats_bofa, spec_name))
+(plot_1 = plot_prev_obs(obs_stats_bofa, spec_name))
 ## modeled prevalence 
 (plot_2 = plot_prev_mod(draws_bofa, spec_name))
 
 # only 1 Bd-positive subadult, load abnalysis ignored
 
-# # infected Bd load
-# ## observed log load
-# (plot_3 = plot_load_obs(bd_model_bofa, obs_stats_bofa, spec_name))
-# ## modeled log load
-# (plot_4 = plot_load_mod(draws_bofa, spec_name))
-# 
-# # modeled distributions
-# ## pdf
-# (plot_5 = plot_pdf(density_mat_bofa, spec_name))
-# ## ccdf
-# (plot_6 = plot_ccdf(density_mat_bofa, spec_name))
+# infected Bd load
+## observed log load
+(plot_3 = plot_load_obs(bd_model_bofa, obs_stats_bofa, spec_name))
+## modeled log load
+(plot_4 = plot_load_mod(pps_bofa, spec_name))
+
+# modeled distributions
+## pdf
+(plot_5 = plot_pdf(density_mat_bofa, spec_name))
+## ccdf
+(plot_6 = plot_ccdf(density_mat_bofa, spec_name))
 
 # model_report(m_zln_bofa)
 ```
@@ -667,8 +671,11 @@ m_zln_ishe = load_model(2)
 draws_ishe = collect_draws(m_zln_ishe) %>%
   mutate(taxon_capture = spec_name)
 
-density_mat_ishe = density_mat(log(0.3), 15, 100, draws_ishe) %>%
-  mutate(taxon_capture = spec_name)
+density_mat_ishe = density_mat(log(0.3), 20, 100, draws_ishe) %>%
+  mutate(taxon_capture = spec_name,
+         season = "seca")
+
+pps_ishe = sample_posterior_life(m_zln_ishe, "ischnocnema_henselii", 10000)
 
 bd_model_ishe = bd_model %>%
   filter(taxon_capture == "ischnocnema_henselii")
@@ -679,7 +686,7 @@ obs_stats_ishe = sample_stats(bd_model_ishe) %>%
 
 # prevalence
 ## observed prevalence
-(plo1_1 = plot_prev_obs(obs_stats_ishe, spec_name))
+(plot_1 = plot_prev_obs(obs_stats_ishe, spec_name))
 ## modeled prevalence 
 (plot_2 = plot_prev_mod(draws_ishe, spec_name))
 
@@ -687,7 +694,7 @@ obs_stats_ishe = sample_stats(bd_model_ishe) %>%
 ## observed log load
 (plot_3 = plot_load_obs(bd_model_ishe, obs_stats_ishe, spec_name))
 ## modeled log load
-(plot_4 = plot_load_mod(draws_ishe, spec_name))
+(plot_4 = plot_load_mod(pps_ishe, spec_name))
 
 # modeled distributions
 ## pdf
@@ -713,8 +720,11 @@ m_zln_rhor = load_model(3)
 draws_rhor = collect_draws(m_zln_rhor) %>%
   mutate(taxon_capture = spec_name)
 
-density_mat_rhor = density_mat(log(0.3), 15, 100, draws_rhor) %>%
-  mutate(taxon_capture = spec_name)
+density_mat_rhor = density_mat(log(0.3), 20, 100, draws_rhor) %>%
+  mutate(taxon_capture = spec_name,
+         season = "seca")
+
+pps_rhor = sample_posterior_life(m_zln_rhor, "rhinella_ornata", 10000)
 
 bd_model_rhor = bd_model %>%
   filter(taxon_capture == "rhinella_ornata")
@@ -725,7 +735,7 @@ obs_stats_rhor = sample_stats(bd_model_rhor) %>%
 
 # prevalence
 ## observed prevalence
-(plo1_1 = plot_prev_obs(obs_stats_rhor, spec_name))
+(plot_1 = plot_prev_obs(obs_stats_rhor, spec_name))
 ## modeled prevalence 
 (plot_2 = plot_prev_mod(draws_rhor, spec_name))
 
@@ -733,7 +743,7 @@ obs_stats_rhor = sample_stats(bd_model_rhor) %>%
 ## observed log load
 (plot_3 = plot_load_obs(bd_model_rhor, obs_stats_rhor, spec_name))
 ## modeled log load
-(plot_4 = plot_load_mod(draws_rhor, spec_name))
+(plot_4 = plot_load_mod(pps_rhor, spec_name))
 
 # modeled distributions
 ## pdf
@@ -754,49 +764,28 @@ obs_stats_rhor = sample_stats(bd_model_rhor) %>%
 #| fig-width: 12
 #| fig-height: 6
 
-# pps_all = bind_rows(pps_atva,
-#                     pps_coma,
-#                     pps_liwa,
-#                     pps_rhha,
-#                     pps_saal,
-#                     pps_sifl)
-# 
-# mod_stats_all = bind_rows(mod_stats_atva,
-#                           mod_stats_coma,
-#                           mod_stats_liwa,
-#                           mod_stats_rhha,
-#                           mod_stats_saal,
-#                           mod_stats_sifl)
-
 obs_stats_all = bind_rows(
-  # obs_stats_atva,
-  obs_stats_coma,
-  obs_stats_liwa,
-  obs_stats_rhha,
-  obs_stats_saal,
-  obs_stats_sifl) %>%
+  obs_stats_bofa,
+  obs_stats_ishe,
+  obs_stats_rhor) %>%
   mutate(label_y = ifelse(life_stage_simple == "adult", 0.95, 0.91))
 
 draws_all = bind_rows(
-  # draws_atva,
-  draws_coma,
-  draws_liwa,
-  draws_rhha,
-  draws_saal,
-  draws_sifl)
+  draws_bofa,
+  draws_ishe,
+  draws_rhor)
 
 density_mat_all = bind_rows(
-  # density_mat_atva,
-  density_mat_coma,
-  density_mat_liwa,
-  density_mat_rhha,
-  density_mat_saal,
-  density_mat_sifl)
+  density_mat_bofa,
+  density_mat_ishe,
+  density_mat_rhor)
+
+pps_all = bind_rows(pps_bofa,
+                    pps_ishe,
+                    pps_rhor)
 
 
 bd_model_all = bd_model %>%
-  filter(!is.na(season),
-         taxon_capture != "atelopus_varius") %>%
   mutate(taxon_capture = str_to_sentence(gsub("_", " ", taxon_capture)))
 
 # observed prevalence
@@ -839,7 +828,7 @@ ggplot(bd_model_all %>%
     data = obs_stats_all,
     aes(
       x = season,
-      y = max(bd_model_all$log_bd_load) * 1.10 * label_y,
+      y = 20 * 1.05 * label_y,
       label = paste0("n=", n_pos),
       group = life_stage_simple
     ),
@@ -850,8 +839,18 @@ ggplot(bd_model_all %>%
   facet_grid(. ~ taxon_capture)
 
 # model bd load
+# ggplot(draws_all, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+#   geom_boxplot() + 
+#   theme_minimal() +
+#   ggtitle("Modeled Bd-positive load") +
+#   xlab("Season") +
+#   ylab("log(Bd load) [-]") +
+#   labs(color = "Life stage") +
+#   ylim(log(0.3), 20) +
+#   facet_grid(. ~ taxon_capture)
 
-ggplot(draws_all, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+ggplot(pps_all %>%
+         filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
   geom_boxplot() + 
   theme_minimal() +
   ggtitle("Modeled Bd-positive load") +
@@ -865,8 +864,7 @@ ggplot(draws_all, aes(b, x = season, color = life_stage_simple, linetype = seaso
 ggplot(density_mat_all, aes(x = density,
                             y = pdf_median,
                             color = life_stage_simple, 
-                            fill = life_stage_simple,
-                            linetype = season)) +
+                            fill = life_stage_simple)) +
   geom_ribbon(aes(ymin = pdf_lower,
                   ymax = pdf_upper), 
               alpha = 0.15,
@@ -879,7 +877,7 @@ ggplot(density_mat_all, aes(x = density,
        linetype = "Season") +
   xlab("log(Bd load) [-]") +
   ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0)) +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
   facet_grid(. ~ taxon_capture)
 
 # PDF -- facet by life_stage & season
@@ -898,15 +896,14 @@ ggplot(density_mat_all, aes(x = density,
        fill = "Species") +
   xlab("log(Bd load) [-]") +
   ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0)) +
-  facet_grid(life_stage_simple ~ season)
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+  facet_grid(. ~ life_stage_simple)
 
 # CCDF -- facet by species
 ggplot(density_mat_all, aes(x = density,
                             y = ccdf_median,
                             color = life_stage_simple, 
-                            fill = life_stage_simple,
-                            linetype = season)) +
+                            fill = life_stage_simple)) +
   geom_ribbon(aes(ymin = ccdf_lower,
                   ymax = ccdf_upper), 
               alpha = 0.15,
@@ -919,7 +916,7 @@ ggplot(density_mat_all, aes(x = density,
        linetype = "Season") +
   xlab("log(Bd load) [-]") +
   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0)) +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
   ylim(0, 1) +
   facet_grid(. ~ taxon_capture)
 
@@ -939,9 +936,9 @@ ggplot(density_mat_all, aes(x = density,
        fill = "Species") +
   xlab("log(Bd load) [-]") +
   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 15), expand = c(0, 0)) +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
   ylim(0, 1) +
-  facet_grid(life_stage_simple ~ season)
+  facet_grid(. ~ life_stage_simple)
 
 ```
 
@@ -950,17 +947,8 @@ ggplot(density_mat_all, aes(x = density,
 ```
 
 # Discussion
+  - Small subadult sample size puts prebalence trends within error bars
   - General patterns
-    - Most species show greater Bd prevalence & load in juveniles, with Rhaebos showing the opposite pattern
-    - Most species show greater Bd prevalence in the wet season, with Rhaebos showing the opposite pattern
-    - A variety of relationships are seen for Bd-positive load with season.
-  - Bringing in more context (suggestions from Deli)
-    - Bled & Blipps, table 3 como guia de factores/caracteristicas entre especies
-    - Ana Longo -- sequia aumenta infeccion, accumulacion de ranas alrededor de pozos sube el contacto
-    - Jordan Gas ( & Jaime) 2022 - experiemento de aumentar humedad, ver effecto en Bd
- 
-# Next steps:
-  - Explore discrepancies between observations and models
-  - Expand analysis to include species which only have data from 1 season
-  - Expand analysis to Brazil, Pennsylvania, Sierra Nevada
+    - Boana & Isnochnema show lower prevalence in subadults compared with adults, with Rhinella ornata showing the opposite pattern
+    - Bd load trends are not obvious, in part due to small bd-positive, subadult sample sizes
  
