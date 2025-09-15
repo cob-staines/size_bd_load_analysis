@@ -1,7 +1,7 @@
 ---
-title: "Size vs. Bd modeling: Panamá preliminary results"
+title: "Size vs. Bd modeling: SIerra Nevada preliminary results"
 author: Cob Staines
-date: 2025-08-20
+date: 2025-09-05
 format:
   html:
     toc: true
@@ -69,19 +69,13 @@ bd_sample = db_sample %>%
 ### Classifying by life stage
 These analysis were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" with a threshold snout-vent-length (SVL [mm]), identified independently for each species from the literature (see data collection code for specific thresholds used and sources).
 
-### Classification by season
-The data were also classified into two seasons:
-
-  - Lluvia (wet) -- May - August
-  - Seca (dry) -- October - January
-
 ### Population selection criteria:
-Populations comprised of sites grouped to the "region" level, with the following selection criteria used to determine which species to include in the analysis:
+Populations comprised of sites grouped to the "population" level (where gene flow between sites is indicated or expected on the scale of a year), with the following selection criteria used to determine which species to include in the analysis:
 
   1. Bd swab + body size (SVL) data for at least 60 individuals in a given population
   2. populations sampled over at least 3 years
   3. species found in at least valid 2 populations
-  4. at least 15 adult and subadult each
+  4. at least 15 adult and subadult each per population
 
 
 ```{r}
@@ -136,41 +130,77 @@ bd_species_valid = bd_population %>%
 ## - at least 15 each adult and subadult per population
 
 # determine populations which meet criteria
-# bd_population_valid = bd_population %>%
-#   group_by(population, taxon_capture, life_stage_simple) %>%
-#   summarise(ls_gt_15 = n() >= 15,
-#             .groups = "drop") %>%
-#   group_by(population, taxon_capture) %>%
-#   filter(sum(as.integer(ls_gt_15)) == 2) %>%
-#   left_join(bd_population, by = c("taxon_capture", "population")) %>%
-#   group_by(population, region, country, taxon_capture) %>%
-#   summarise(count = n(),
-#             sample_count = n(),
-#             year_first = min(year),
-#             year_last = max(year),
-#             year_count = n_distinct(year),
-#             .groups = "drop") %>%
-#   filter(sample_count >= 60,
-#          year_count >= 3) %>%
-#   group_by(taxon_capture) %>%
-#   mutate(population_count = n()) %>%
-#   ungroup() %>%
-#   # filter(population_count >= 2) %>%
-#   arrange(country, taxon_capture, desc(sample_count)) %>%
-#   collect()
+bd_population_valid = bd_population %>%
+  group_by(population, taxon_capture, life_stage_simple) %>%
+  summarise(ls_gt_15 = n() >= 15,
+            .groups = "drop") %>%
+  group_by(population, taxon_capture) %>%
+  filter(sum(as.integer(ls_gt_15)) == 2) %>%
+  left_join(bd_population, by = c("taxon_capture", "population")) %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarise(count = n(),
+            sample_count = n(),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            .groups = "drop") %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  # filter(population_count >= 2) %>%
+  arrange(country, taxon_capture, desc(sample_count)) %>%
+  collect()
 
-# # join with bd data, select
+# join with bd data, select
+bd_sample_valid = bd_population %>%
+  filter(population %in% bd_population_valid$population &
+           taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
+  mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
+  select(sample_id,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         tax_pop,
+         region,
+         country) %>%
+  collect() %>%
+  mutate(month = month(date),
+         year = year(date))
+
+# # use all samples instead
 # bd_sample_valid = bd_population %>%
-#   filter(population %in% bd_population_valid$population &
-#            taxon_capture %in% bd_population_valid$taxon_capture) %>%
+#   filter(taxon_capture %in% bd_species_valid$taxon_capture) %>%
 #   left_join(db_bd %>%
+#               filter(!is.na(detected)) %>%
 #               group_by(sample_id) %>%
 #               summarise(bd_swab_count = n(),
 #                         bd_detected = any(detected),
 #                         bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
 #                         .groups = "drop"),
 #             by = "sample_id") %>%
-#   mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
 #   select(sample_id,
 #          bd_swab_count,
 #          bd_detected,
@@ -194,59 +224,13 @@ bd_species_valid = bd_population %>%
 #          country) %>%
 #   collect() %>%
 #   mutate(month = month(date),
-#                 season = case_match(month,
-#                                     c(5, 6, 7, 8) ~ "lluvia",
-#                                     c(10, 11, 12, 1) ~ "seca",
-#                                     .default = NA_character_),
-#          svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
-#   filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
+#          year = year(date))
 
-bd_sample_valid = bd_population %>%
-  filter(taxon_capture %in% bd_species_valid$taxon_capture) %>%
-  left_join(db_bd %>%
-              filter(!is.na(detected)) %>%
-              group_by(sample_id) %>%
-              summarise(bd_swab_count = n(),
-                        bd_detected = any(detected),
-                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
-                        .groups = "drop"),
-            by = "sample_id") %>%
-  select(sample_id,
-         bd_swab_count,
-         bd_detected,
-         bd_mean_its1_copies_per_swab,
-         capture_id,
-         taxon_capture,
-         life_stage,
-         life_stage_simple,
-         svl_mm,
-         body_mass_g,
-         sex,
-         survey_id,
-         start_timestamp_utc,
-         date,
-         site,
-         site_id,
-         geographic_area,
-         population,
-         tax_pop,
-         region,
-         country) %>%
-  collect() %>%
-  mutate(month = month(date))
-
-pp = bd_sample_valid %>%
-  group_by(taxon_capture) %>%
-  summarise(no_svl = sum(is.na(svl_mm)),
-            no_ls = sum(is.na(life_stage)))
-
-# verify life stage with SVL as a check
-
+# pull all data meeting criteria
 bd_model = bd_sample_valid %>%
   filter(!is.na(bd_mean_its1_copies_per_swab),
          !is.na(svl_mm)) %>%
   mutate(bd_load = bd_mean_its1_copies_per_swab,
-         # log_bd_load = log(bd_load + 1),
          log_bd_load = log(bd_load)) %>%
   select(bd_load,
          log_bd_load,
@@ -254,17 +238,31 @@ bd_model = bd_sample_valid %>%
          svl_mm,
          site,
          population,
+         geographic_area,
          taxon_capture,
          tax_pop,
          life_stage,
          life_stage_simple,
          date,
          month,
+         year,
          population,
          region,
          country)
 
 head(bd_model)
+
+# # when did Bd first show up in a basin (at least in these data)?
+# bd_basin = bd_model %>%
+#   group_by(taxon_capture, geographic_area) %>%
+#   summarise(n = n(),
+#             first_year_sample = min(year),
+#             first_year_bdpos = min(year[bd_load > 0]),
+#             .groups = "drop") %>%
+#   arrange(taxon_capture,
+#           geographic_area)
+            
+            
 ```
 
 ## Descriptive stats
@@ -688,7 +686,7 @@ Results are broken out first by species, then combined for comparison between sp
 
 taxon_m = "rana_muscosa"
 spec_name = get_species_name(taxon_m)
-m_zln_ramu = load_model(taxon_m, template = "model_results_zln_life_tax_pop_xxxx.rds")
+m_zln_ramu = load_model(taxon_m, template = "model_results_zln_life_tax_pop_xxxx_all.rds")
 
 draws_ramu = collect_draws(m_zln_ramu) %>%
   mutate(taxon_capture = spec_name)
@@ -757,7 +755,7 @@ obs_stats_ramu = sample_stats(bd_model_ramu) %>%
 
 taxon_m = "rana_sierrae"
 spec_name = get_species_name(taxon_m)
-m_zln_rasi = load_model(taxon_m, template = "model_results_zln_life_tax_pop_xxxx.rds")
+m_zln_rasi = load_model(taxon_m, template = "model_results_zln_life_tax_pop_xxxx_all.rds")
 
 draws_rasi = collect_draws(m_zln_rasi) %>%
   mutate(taxon_capture = spec_name)
@@ -814,6 +812,7 @@ obs_stats_rasi = sample_stats(bd_model_rasi) %>%
 #| warning: false
 (plot_6 = plot_ccdf(density_mat_rasi, spec_name))
 ```
+:::
 
 ## Combined results
 ```{r}
@@ -963,26 +962,26 @@ ggplot(density_mat_all, aes(x = density,
   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
   facet_grid(. ~ gsub(" ", "\n", taxon_capture))
 
-# PDF -- facet by life_stage & season
-ggplot(density_mat_all, aes(x = density,
-                            y = pdf_median,
-                            color = taxon_capture, 
-                            fill = taxon_capture)) +
-  geom_ribbon(aes(ymin = pdf_lower,
-                  ymax = pdf_upper), 
-              alpha = 0.15,
-              color = NA) +
-  geom_line() +
-  theme_minimal() +
-  ggtitle("Modeled PDF of Bd-positive load") +
-  labs(color = "Species",
-       fill = "Species") +
-  scale_color_manual(values = c("darkgreen", "purple")) +
-  scale_fill_manual(values = c("darkgreen", "purple")) +
-  xlab("log(Bd load) [-]") +
-  ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
-  facet_grid(. ~ life_stage_simple)
+# # PDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = pdf_median,
+#                             color = taxon_capture, 
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = pdf_lower,
+#                   ymax = pdf_upper), 
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled PDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   scale_color_manual(values = c("darkgreen", "purple")) +
+#   scale_fill_manual(values = c("darkgreen", "purple")) +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   facet_grid(. ~ life_stage_simple)
 ```
 
 ### Moded Bd load CCDF
@@ -1011,26 +1010,26 @@ ggplot(density_mat_all, aes(x = density,
   ylim(0, 1) +
   facet_grid(. ~ gsub(" ", "\n", taxon_capture))
 
-# CCDF -- facet by life_stage & season
-ggplot(density_mat_all, aes(x = density,
-                            y = ccdf_median,
-                            color = taxon_capture, 
-                            fill = taxon_capture)) +
-  geom_ribbon(aes(ymin = ccdf_lower,
-                  ymax = ccdf_upper), 
-              alpha = 0.15,
-              color = NA) +
-  geom_line() +
-  theme_minimal() +
-  ggtitle("Modeled CCDF of Bd-positive load") +
-  labs(color = "Species",
-       fill = "Species") +
-  scale_color_manual(values = c("darkgreen", "purple")) +
-  scale_fill_manual(values = c("darkgreen", "purple")) +
-  xlab("log(Bd load) [-]") +
-  ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
-  ylim(0, 1) +
-  facet_grid(. ~ life_stage_simple)
+# # CCDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = ccdf_median,
+#                             color = taxon_capture, 
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = ccdf_lower,
+#                   ymax = ccdf_upper), 
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled CCDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   scale_color_manual(values = c("darkgreen", "purple")) +
+#   scale_fill_manual(values = c("darkgreen", "purple")) +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   ylim(0, 1) +
+#   facet_grid(. ~ life_stage_simple)
 ```
 :::
