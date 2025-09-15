@@ -1,7 +1,12 @@
 .Rproj.user
 .Rhistory
 .RData
+.RDataTmp
 .Ruserdata
 size_bd_modeling_presentation_files/
 papers/
 *.rds
+*.html
+*.zip
+*.png
+*_files/
