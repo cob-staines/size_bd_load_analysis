@@ -1,0 +1,130 @@
+---
+title: "Size vs. Bd modeling: Panamá preliminary results"
+author: Cob Staines
+date: 2025-08-20
+format:
+  html:
+    toc: true
+df-print: kable
+bibliography: references.bib
+csl: ecology.csl
+---
+
+## Setup
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2)
+
+## Connect to DB
+dbcon <- hopToDB("ribbitr")
+
+# load populations
+data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_))
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+db_hist = tbl(dbcon, Id("survey_data", "site_history"))
+
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+```
+
+## Methods
+
+### Data selection & classification
+
+0. Beginning with all Rana muscosa & Rana Sierrae data, grouped by population
+1. Filter out post-translocation data
+2. Population selection criteria:
+  a. minimum 15 swabbed subadult and adult
+  b. minimum 3 survey years
+3. Classify by:
+  a. Bd Naive: low (or no detected) Bd prevalence & load, high population
+  b. Epizootic: high Bd prevalence & load, followed by low population
+  c. Post-Epizootic: mid Bd prevalence & load
+    i. Persistant (low VES & Capture)
+    ii. Recovering (high VES & capture)
+4. Review:
+  a. Yosemite all post-epizootic at start of swabbing, except for Galiston (Epizootic ~2020)
+  b. Compare with SEKI outbreak map fro agreement
+  c. R. muscosa -- is Mulki the only post-epizootic site? If so, skip this analysis for R muscosa
+  
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show data collection code"
+
+# identify populations
+bd_population = bd_sample %>%
+  filter(country == "usa",
+         region == "california",
+         life_stage != "tadpole",
+         !is.na(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))) %>%
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(population = ifelse(is.na(population), site, population),
+         tax_pop = paste0(taxon_capture, "_", population),
+         year = year(date),
+         life_stage_simple = life_stage,
+         life_stage_simple = case_when(
+           is.na(svl_mm) ~ life_stage,
+           (svl_mm >= 40) ~ "adult",
+           (svl_mm < 40) ~ "subadult",
+           .default = life_stage))
+
+# identify translocation events
+site_history = db_hist %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  filter(region == "california",
+         treatment_type %in% c("translocation_release", "reintroduction_release")) %>%
+  collect()
+
+# selection criteria
+## - 3 years of sampling
+## - at least 15 each adult and subadult per population
+
+bd_population_valid = bd_population %>%
+  group_by(population) %>%
+  mutate(year_first_bd = min(year[bd_detected]),
+            .groups = "drop") %>%
+  summarise(year_first = min(year),
+            year_first_bd = min(year_first_bd),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            year_count_since_bd = n_distinct(year[year >= year_first_bd]),
+            total_n_since_bd = sum(as.integer(year >= year_first_bd)),
+            adult_n_since_bd = sum(as.integer(year >= year_first_bd & life_stage_simple == "adult")),
+            subadult_n_since_bd = sum(as.integer(year >= year_first_bd & life_stage_simple == "subadult")),
+            .groups = "drop") %>%
+    filter(year_count_since_bd >= 10,
+         adult_n_since_bd > 100,
+         subadult_n_since_bd > 100) %>%
+  collect() %>%
+  arrange(desc(year_count_since_bd))
+  
+  
+```
+  
+
+
