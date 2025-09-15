@@ -26,12 +26,14 @@ dbcon <- hopToDB("ribbitr")
 # load populations
 data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
   rename(population = pop_id) %>%
-  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_))
+  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_),
+         population = if_else(is.na(population), site, population))
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
 db_sample = tbl(dbcon, Id("survey_data", "sample"))
 db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_ves = tbl(dbcon, Id("survey_data", "ves"))
 db_survey = tbl(dbcon, Id("survey_data", "survey"))
 db_visit = tbl(dbcon, Id("survey_data", "visit"))
 db_site = tbl(dbcon, Id("survey_data", "site"))
@@ -49,6 +51,95 @@ bd_sample = db_sample %>%
   filter(sample_type == "bd")
 ```
 
+# define functions
+```{r}
+# fuzzy grouping for identifying survey periods in time
+fuzzy_grouping = function(x, delta){
+  # Make groups of x if differences are less than or equal to delta
+  # 
+  # Parameters
+  # ----------
+  # x : array of values to be grouped
+  # delta : difference in value that defines a group
+  
+  
+  if(length(x) > 1){
+    
+    run_ind = diff(x) <= delta
+    grouping = array(NA, dim=length(run_ind + 1))
+    grouping[1] = 1
+    for(i in 1:length(run_ind)){
+      
+      if(run_ind[i] == FALSE | is.na(run_ind[i])){
+        grouping[i + 1] = grouping[i] + 1
+      }
+      else{
+        grouping[i + 1] = grouping[i]
+      }
+      
+    }
+  } else{
+    grouping = 1
+  }
+  
+  return(grouping)
+
+}
+
+# binomial confidence interval
+wilson_ci = function(x, n, conf.level = 0.95) {
+  p_hat <- x / n
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(x, n, conf.level = 0.95) {
+  ws = wilson_ci(x, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(x, n, conf.level = 0.95) {
+  ws = wilson_ci(x, n, conf.level)
+  return(ws[2])
+}
+
+# normal confidence interval
+normal_ci = function(x, conf.level = 0.95) {
+  n <- length(x)
+  mean_x <- mean(x)
+  sd_x <- sd(x)
+  
+  alpha <- 1 - conf.level
+  t_value <- qt(1 - alpha/2, df = n - 1)
+  margin_error <- t_value * sd_x / sqrt(n)
+  
+  lower <- mean_x - margin_error
+  upper <- mean_x + margin_error
+  
+  return(c(lower_bound = lower, upper_bound = upper))
+}
+
+normal_ci_lower = function(x, conf.level = 0.95) {
+  no = normal_ci(x, conf.level)
+  return(no[1])
+}
+
+normal_ci_upper = function(x, conf.level = 0.95) {
+  no = normal_ci(x, conf.level)
+  return(no[2])
+}
+
+
+```
+
 ## Methods
 
 ### Data selection & classification
@@ -62,8 +153,8 @@ bd_sample = db_sample %>%
   a. Bd Naive: low (or no detected) Bd prevalence & load, high population
   b. Epizootic: high Bd prevalence & load, followed by low population
   c. Post-Epizootic: mid Bd prevalence & load
-    i. Persistant (low VES & Capture)
-    ii. Recovering (high VES & capture)
+    i. Persistant (low population)
+    ii. Recovering (high population)
 4. Review:
   a. Yosemite all post-epizootic at start of swabbing, except for Galiston (Epizootic ~2020)
   b. Compare with SEKI outbreak map fro agreement
@@ -82,8 +173,7 @@ bd_population = bd_sample %>%
          life_stage != "tadpole",
          !is.na(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))) %>%
   left_join(data_pop, by = "site", copy = TRUE) %>%
-  mutate(population = ifelse(is.na(population), site, population),
-         tax_pop = paste0(taxon_capture, "_", population),
+  mutate(tax_pop = paste0(taxon_capture, "_", population),
          year = year(date),
          life_stage_simple = life_stage,
          life_stage_simple = case_when(
@@ -92,39 +182,394 @@ bd_population = bd_sample %>%
            (svl_mm < 40) ~ "subadult",
            .default = life_stage))
 
-# identify translocation events
-site_history = db_hist %>%
-  left_join(db_site, by = "site_id") %>%
-  left_join(db_region, by = "region_id") %>%
-  filter(region == "california",
-         treatment_type %in% c("translocation_release", "reintroduction_release")) %>%
-  collect()
-
-# selection criteria
+# selection criteria for populations
 ## - 3 years of sampling
 ## - at least 15 each adult and subadult per population
 
 bd_population_valid = bd_population %>%
-  group_by(population) %>%
-  mutate(year_first_bd = min(year[bd_detected]),
-            .groups = "drop") %>%
-  summarise(year_first = min(year),
-            year_first_bd = min(year_first_bd),
-            year_last = max(year),
-            year_count = n_distinct(year),
-            year_count_since_bd = n_distinct(year[year >= year_first_bd]),
-            total_n_since_bd = sum(as.integer(year >= year_first_bd)),
-            adult_n_since_bd = sum(as.integer(year >= year_first_bd & life_stage_simple == "adult")),
-            subadult_n_since_bd = sum(as.integer(year >= year_first_bd & life_stage_simple == "subadult")),
-            .groups = "drop") %>%
-    filter(year_count_since_bd >= 10,
-         adult_n_since_bd > 100,
-         subadult_n_since_bd > 100) %>%
   collect() %>%
-  arrange(desc(year_count_since_bd))
-  
-  
-```
+  group_by(population) %>%
+  summarise(n_years = n_distinct(year),
+            n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_years >= 3,
+         n_adult >= 15,
+         n_subadult >= 15)
+
+bd_site_valid = data_pop %>%
+  filter(population %in% bd_population_valid$population)
+
+bd_capture_valid = bd_population %>%
+  filter(population %in% bd_population_valid$population)
+
+# all years of data for valid pops
+data_year_valid = bd_capture_valid %>%
+  distinct(population, year) %>%
+  collect()
   
 
+# all population - year combinations
+pop_year = expand_grid(bd_population_valid$population,
+                       unique(data_year_valid$year)) %>%
+  rename(population = 1,
+         year = 2)
+
+# identify translocation events
+release_events = db_hist %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  filter(region == "california",
+         treatment_type %in% c("translocation_release", "reintroduction_release")) %>%
+  collect() %>%
+  left_join(data_pop, by = "site") %>%
+  mutate(year = year(treatment_date),
+         release_event = TRUE) %>%
+  select(population,
+         year,
+         release_event) %>%
+  distinct()
+
+# pass on to pop year
+pop_year_tx = pop_year %>%
+  left_join(release_events, by = c("population", "year"))
+
+```
+
+# Calculate adult abundance indicators
+```{r}
+# sites of interest
+site_oi = db_site %>%
+  filter(site %in% bd_site_valid$site)
+
+# visits of interest
+visit_oi = db_visit %>%
+  left_join(site_oi, by = "site_id") %>%
+  mutate(year = year(date)) %>%
+  filter(visit_status == "suitable",
+         year %in% year_valid$year) %>%
+  select(visit_id,
+         site,
+         site_id,
+         year,
+         date,
+         comments_visit) %>%
+  collect() %>%
+  left_join(data_pop, by = "site") %>%
+  arrange(population,
+          date) %>%
+  group_by(population, year) %>%
+  mutate(survey_period = fuzzy_grouping(as.integer(date), 7)) %>% # consider surveys within a rolling 7 days to be within the same survey period
+  ungroup()
+
+# join with survey table
+survey_oi = db_survey %>%
+  filter(visit_id %in% visit_oi$visit_id,
+         detection_type %in% c("capture", "visual")) %>%
+  select(detection_type,
+         detection_subtype,
+         survey_quality,
+         description,
+         comments_survey,
+         number_observers,
+         survey_id,
+         visit_id) %>%
+  collect() %>%
+  mutate(detection_type = ifelse(detection_type == "capture",
+                                 detection_subtype,
+                                 detection_type)) %>%
+  select(-detection_subtype) %>%
+  right_join(visit_oi, by = "visit_id") %>%
+  arrange(site,
+          date,
+          survey_period)
+
+# # Survey periods of interest
+# 
+# Selection criteria when more than 1 survey period available for a given & year:
+# 
+# 0) greatest number of sites within survey period (for populations with multiple sites)
+# 1) greatest number of survey types (capture, ves, swab) within survey period
+# 2) greatest mean survey_quality within survey period: good (3) > fair (2) > poor (1) > NA (0)
+# 3) greatest number of surveys within survey period
+# 4) randomly select one
+# 
+# * Note that this prioritizes using concurrent surveys between different detection types, but it is possible for some detection types for a given site/year to have different survey periods when concurrent surveys are not available.
+# 
+# ** where more than 1 VES survey was conducted in a survey period (rare) the 1st survey is used.
+
+# set random seed for consistent selection
+set.seed(482)
+
+# calculate selection criteria
+survey_oi_priority = survey_oi %>%
+  mutate(survey_quality_score = case_match(survey_quality,
+                                           "good" ~ 3,
+                                           "fair" ~ 2,
+                                           "poor" ~ 1,
+                                           NA ~ 0,
+                                           .default = NA)) %>%
+  group_by(site,
+           year) %>%
+  mutate(period_count = n_distinct(survey_period)) %>%
+  ungroup() %>%
+  group_by(site,
+           year,
+           survey_period) %>%
+   mutate(detection_type_count = n_distinct(detection_type),
+         mean_survey_quality_score = mean(survey_quality_score),
+         survey_count = n(),
+         random_val = runif(1)) %>%
+  ungroup()
+
+# select survey periods for cmr
+period_select_cmr = survey_oi_priority %>%
+  filter(detection_type == "cmr") %>%
+  distinct(population,
+           site,
+           year,
+           survey_period,
+           detection_type_count,
+           mean_survey_quality_score,
+           survey_count,
+           random_val,
+           detection_type) %>%
+  arrange(site,
+          year,
+          survey_period,
+          detection_type_count,
+          mean_survey_quality_score,
+          survey_count,
+          random_val) %>%
+  group_by(site,
+           year) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# select survey periods for swab
+period_select_swab = survey_oi_priority %>%
+  filter(detection_type == "swab") %>%
+  distinct(population,
+           site,
+           year,
+           survey_period,
+           detection_type_count,
+           mean_survey_quality_score,
+           survey_count,
+           random_val,
+           detection_type) %>%
+  arrange(site,
+          year,
+          survey_period,
+          detection_type_count,
+          mean_survey_quality_score,
+          survey_count,
+          random_val) %>%
+  group_by(site,
+           year) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# select survey periods for visual
+period_select_visual = survey_oi_priority %>%
+  filter(detection_type == "visual") %>%
+  distinct(population,
+           site,
+           year,
+           survey_period,
+           detection_type_count,
+           mean_survey_quality_score,
+           survey_count,
+           random_val,
+           detection_type) %>%
+  arrange(site,
+          year,
+          survey_period,
+          detection_type_count,
+          mean_survey_quality_score,
+          survey_count,
+          random_val) %>%
+  group_by(site,
+           year) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# bring selected periods together across detection types
+period_select = bind_rows(period_select_cmr,
+                          period_select_swab,
+                          period_select_visual) %>%
+  select(population,
+         site,
+         year,
+         survey_period,
+         detection_type) %>%
+  rename(survey_period_select = survey_period)
+
+# check for duplicates
+dupes_period_select = get_dupes(period_select, site, year, detection_type)
+
+# wider table for visual inspection of available surveys
+period_select_wide = period_select %>%
+  mutate(detection_type = paste0(detection_type, "_survey_period")) %>%
+  pivot_wider(id_cols = c(population, site, year),
+              names_from = detection_type,
+              values_from = survey_period_select) %>%
+  arrange(site,
+          year)
+
+# visually check selections where multiple periods present for a site/year, to see if any should be flagged
+check_period_select = survey_oi_priority %>%
+  left_join(period_select, by = c("population", "site", "year", "detection_type")) %>%
+  filter(period_count > 1) %>%
+  select(population,
+         site,
+         year,
+         survey_period,
+         survey_period_select,
+         detection_type,
+         description,
+         comments_survey,
+         comments_visit,
+         detection_type_count,
+         mean_survey_quality_score,
+         survey_count,
+         random_val,
+         everything()) %>%
+  arrange(site,
+          year,
+          survey_period,
+          detection_type)
+
+# surveys selected using criteria, across all detection types
+survey_select = survey_oi_priority %>%
+  right_join(period_select, by = c("population", "site", "year", "survey_period" = "survey_period_select", "detection_type")) %>%
+  arrange(site,
+          date,
+          detection_type) %>%
+  group_by(site,
+           year,
+           detection_type) %>%
+  mutate(id = row_number()) %>%
+  ungroup() %>%
+  filter((detection_type == "visual" & id == 1) | detection_type %in% c("cmr", "swab"))
+
+# adult frog abundance
+
+# ## visual
+# visual detection per survey period (1 survey per survey period)
+# 
+# ## cmr
+# cmr detection within survey period (across all surveys in survey period)
+
+# visual data pull
+data_visual = survey_select %>%
+  filter(detection_type == "visual") %>%
+  select(population,
+         site,
+         date,
+         survey_period,
+         year,
+         survey_id,
+         visit_id,
+         detection_type,
+         comments_survey,
+         comments_visit) %>%
+  left_join(db_ves %>%
+               filter(survey_id %in% survey_select$survey_id,
+                      life_stage == "adult",
+                      visual_animal_state != "dead") %>%
+               select(count_ves,
+                      ves_id,
+                      survey_id) %>%
+               collect(), by = "survey_id") %>%
+  mutate(count_ves = ifelse(is.na(count_ves), 0, count_ves))
+
+# visual abundance calc
+abundance_visual = data_visual %>%
+  group_by(population,
+           year,
+           date,
+           ) %>%
+  rename(date_ves = date) %>%
+  summarise(adult_count_visual = sum(count_ves),
+            .groups = "drop")
+
+# cmr data pull
+data_cmr = survey_select %>%
+  filter(detection_type == "cmr") %>%
+  select(population,
+         site,
+         date,
+         survey_period,
+         year,
+         survey_id,
+         visit_id,
+         detection_type,
+         comments_survey,
+         comments_visit) %>%
+  inner_join(db_capture %>%
+               filter(survey_id %in% survey_select$survey_id,
+                     life_stage == "adult",
+                     capture_animal_state != "dead") %>%
+               select(cmr_id,
+                      capture_id,
+                      survey_id,
+                      life_stage,
+                      capture_animal_state) %>%
+               collect(), by = "survey_id")
+
+# cmr abundance calc
+abundance_cmr = data_cmr %>%
+  group_by(population,
+           year) %>%
+  summarise(date_cmr_first = first(date),
+            cmr_days = n_distinct(date),
+            adult_count_cmr = n_distinct(cmr_id),
+            .groups = "drop")
+
+# join visual and cmr abundance data
+abundance_stats = abundance_visual %>%
+  full_join(abundance_cmr, by = c("population", "year"))
+
+# join with pop_year_tx
+pop_year_ab = pop_year_tx %>%
+  left_join(abundance_stats %>%
+              select(population,
+                     year,
+                     adult_count_cmr,
+                     adult_count_visual), by = c("population", "year"))
+
+```
+
+
+# Calculate adult Bd stats
+```{r}
+bd_stats = bd_capture_valid %>%
+  filter(life_stage_simple == "adult") %>%
+  inner_join(db_bd %>%
+              filter(!is.na(detected)) %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+             by = "sample_id") %>%
+  collect() %>%
+  group_by(population,
+           year) %>%
+  summarise(adult_swab_n = n(),
+            adult_bd_prevalence = sum(bd_detected) / n(),
+            adult_bd_prevalence_ci_lower = wilson_ci_lower(sum(bd_detected), n(), conf.level = 0.95),
+            adult_bd_prevalence_ci_upper = wilson_ci_upper(sum(bd_detected), n(), conf.level = 0.95),
+            adult_positive_bd_load_median = median(bd_mean_its1_copies_per_swab[bd_detected]),
+            adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
+            adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
+            .groups = "drop")
+
+# join with pop_year_ab
+pop_year_bd = pop_year_ab %>%
+  left_join(bd_stats, by = c("population", "year")) %>%
+  arrange(population, year)
+
+```
 
