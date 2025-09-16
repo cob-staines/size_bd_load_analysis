@@ -204,14 +204,14 @@ bd_capture_valid = bd_population %>%
   filter(population %in% bd_population_valid$population)
 
 # all years of data for valid pops
-data_year_valid = bd_capture_valid %>%
+year_valid = bd_capture_valid %>%
   distinct(population, year) %>%
   collect()
   
 
 # all population - year combinations
 pop_year = expand_grid(bd_population_valid$population,
-                       unique(data_year_valid$year)) %>%
+                       unique(year_valid$year)) %>%
   rename(population = 1,
          year = 2)
 
@@ -515,7 +515,8 @@ data_cmr = survey_select %>%
                       capture_id,
                       survey_id,
                       life_stage,
-                      capture_animal_state) %>%
+                      capture_animal_state,
+                      comments_capture) %>%
                collect(), by = "survey_id")
 
 # cmr abundance calc
@@ -533,11 +534,7 @@ abundance_stats = abundance_visual %>%
 
 # join with pop_year_tx
 pop_year_ab = pop_year_tx %>%
-  left_join(abundance_stats %>%
-              select(population,
-                     year,
-                     adult_count_cmr,
-                     adult_count_visual), by = c("population", "year"))
+  left_join(abundance_stats, by = c("population", "year"))
 
 ```
 
@@ -573,3 +570,29 @@ pop_year_bd = pop_year_ab %>%
 
 ```
 
+# visulaize to understand what kinds of patterns we want to ID
+```{r, fig.width=10, fig.height=15}
+
+pop_adult_swab_counts = bd_stats %>%
+  group_by(population) %>%
+  summarise(adult_swab_n = sum(adult_swab_n))
+
+ggplot(pop_year_bd, aes(x = year)) +
+  geom_point(aes(y = log(adult_count_visual), color = "VES")) +
+  geom_line(aes(y = log(adult_count_visual), color = "VES")) +
+  geom_point(aes(y = log(adult_count_cmr), color = "CMR")) +
+  geom_line(aes(y = log(adult_count_cmr), color = "CMR")) +
+  geom_point(aes(y = adult_bd_prevalence * 15, color = "Bd Prev")) +
+  geom_line(aes(y = adult_bd_prevalence * 15, color = "Bd Prev")) +
+  geom_point(aes(y = log(adult_positive_bd_load_median), color = "Bd Load")) +
+  geom_line(aes(y = log(adult_positive_bd_load_median), color = "Bd Load")) +
+  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
+  facet_wrap(population ~ .) +
+  scale_color_manual(values = c("VES" = "orange",
+                                "CMR" = "red",
+                                "Bd Prev" = "green",
+                                "Bd Load" = "blue")) +
+  labs(color = "Timeseries")
+
+
+```
