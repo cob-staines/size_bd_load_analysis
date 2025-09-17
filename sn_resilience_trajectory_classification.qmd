@@ -182,40 +182,7 @@ bd_population = bd_sample %>%
            (svl_mm < 40) ~ "subadult",
            .default = life_stage))
 
-# selection criteria for populations
-## - 3 years of sampling
-## - at least 15 each adult and subadult per population
-
-bd_population_valid = bd_population %>%
-  collect() %>%
-  group_by(population) %>%
-  summarise(n_years = n_distinct(year),
-            n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop") %>%
-  filter(n_years >= 3,
-         n_adult >= 15,
-         n_subadult >= 15)
-
-bd_site_valid = data_pop %>%
-  filter(population %in% bd_population_valid$population)
-
-bd_capture_valid = bd_population %>%
-  filter(population %in% bd_population_valid$population)
-
-# all years of data for valid pops
-year_valid = bd_capture_valid %>%
-  distinct(population, year) %>%
-  collect()
-  
-
-# all population - year combinations
-pop_year = expand_grid(bd_population_valid$population,
-                       unique(year_valid$year)) %>%
-  rename(population = 1,
-         year = 2)
-
-# identify translocation events
+# identify translocation release events by population
 release_events = db_hist %>%
   left_join(db_site, by = "site_id") %>%
   left_join(db_region, by = "region_id") %>%
@@ -230,9 +197,59 @@ release_events = db_hist %>%
          release_event) %>%
   distinct()
 
+first_release_events =  release_events %>%
+  group_by(population) %>%
+  summarise(first_release_year = min(year),
+            .groups = "drop")
+
+# selection criteria for populations
+## - 3 years of sampling
+## - at least 15 each adult and subadult per population
+
+
+
+bd_population_valid = bd_population %>%
+  collect() %>%
+  left_join(first_release_events, by = "population") %>%
+  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
+  group_by(population) %>%
+  summarise(n_years = n_distinct(year),
+            n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_years >= 3,
+         n_adult >= 15,
+         n_subadult >= 15)
+
+pop_year_valid = bd_population %>%
+  distinct(population, year) %>%
+  filter(population %in% bd_population_valid$population) %>%
+  collect() %>%
+  left_join(first_release_events, by = "population") %>%
+  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
+  select(population, year)
+  
+bd_site_valid = data_pop %>%
+  filter(population %in% bd_population_valid$population)
+
+bd_capture_valid = bd_population %>%
+  inner_join(pop_year_valid, by = c("population", "year"), copy = TRUE)
+
+# all years of data for valid pops
+year_valid = bd_capture_valid %>%
+  distinct(population, year) %>%
+  collect()
+
+# all population - year combinations
+pop_year = expand_grid(bd_population_valid$population,
+                       unique(year_valid$year)) %>%
+  rename(population = 1,
+         year = 2)
+
 # pass on to pop year
 pop_year_tx = pop_year %>%
-  left_join(release_events, by = c("population", "year"))
+  left_join(release_events, by = c("population", "year")) %>%
+  mutate(release_event = if_else(is.na(release_event), FALSE, release_event))
 
 ```
 
@@ -256,6 +273,8 @@ visit_oi = db_visit %>%
          comments_visit) %>%
   collect() %>%
   left_join(data_pop, by = "site") %>%
+  left_join(first_release_events, by = "population") %>%
+  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
   arrange(population,
           date) %>%
   group_by(population, year) %>%
@@ -286,172 +305,7 @@ survey_oi = db_survey %>%
 
 # # Survey periods of interest
 # 
-# Selection criteria when more than 1 survey period available for a given & year:
-# 
-# 0) greatest number of sites within survey period (for populations with multiple sites)
-# 1) greatest number of survey types (capture, ves, swab) within survey period
-# 2) greatest mean survey_quality within survey period: good (3) > fair (2) > poor (1) > NA (0)
-# 3) greatest number of surveys within survey period
-# 4) randomly select one
-# 
-# * Note that this prioritizes using concurrent surveys between different detection types, but it is possible for some detection types for a given site/year to have different survey periods when concurrent surveys are not available.
-# 
-# ** where more than 1 VES survey was conducted in a survey period (rare) the 1st survey is used.
-
-# set random seed for consistent selection
-set.seed(482)
-
-# calculate selection criteria
-survey_oi_priority = survey_oi %>%
-  mutate(survey_quality_score = case_match(survey_quality,
-                                           "good" ~ 3,
-                                           "fair" ~ 2,
-                                           "poor" ~ 1,
-                                           NA ~ 0,
-                                           .default = NA)) %>%
-  group_by(site,
-           year) %>%
-  mutate(period_count = n_distinct(survey_period)) %>%
-  ungroup() %>%
-  group_by(site,
-           year,
-           survey_period) %>%
-   mutate(detection_type_count = n_distinct(detection_type),
-         mean_survey_quality_score = mean(survey_quality_score),
-         survey_count = n(),
-         random_val = runif(1)) %>%
-  ungroup()
-
-# select survey periods for cmr
-period_select_cmr = survey_oi_priority %>%
-  filter(detection_type == "cmr") %>%
-  distinct(population,
-           site,
-           year,
-           survey_period,
-           detection_type_count,
-           mean_survey_quality_score,
-           survey_count,
-           random_val,
-           detection_type) %>%
-  arrange(site,
-          year,
-          survey_period,
-          detection_type_count,
-          mean_survey_quality_score,
-          survey_count,
-          random_val) %>%
-  group_by(site,
-           year) %>%
-  slice_head(n = 1) %>%
-  ungroup()
-
-# select survey periods for swab
-period_select_swab = survey_oi_priority %>%
-  filter(detection_type == "swab") %>%
-  distinct(population,
-           site,
-           year,
-           survey_period,
-           detection_type_count,
-           mean_survey_quality_score,
-           survey_count,
-           random_val,
-           detection_type) %>%
-  arrange(site,
-          year,
-          survey_period,
-          detection_type_count,
-          mean_survey_quality_score,
-          survey_count,
-          random_val) %>%
-  group_by(site,
-           year) %>%
-  slice_head(n = 1) %>%
-  ungroup()
-
-# select survey periods for visual
-period_select_visual = survey_oi_priority %>%
-  filter(detection_type == "visual") %>%
-  distinct(population,
-           site,
-           year,
-           survey_period,
-           detection_type_count,
-           mean_survey_quality_score,
-           survey_count,
-           random_val,
-           detection_type) %>%
-  arrange(site,
-          year,
-          survey_period,
-          detection_type_count,
-          mean_survey_quality_score,
-          survey_count,
-          random_val) %>%
-  group_by(site,
-           year) %>%
-  slice_head(n = 1) %>%
-  ungroup()
-
-# bring selected periods together across detection types
-period_select = bind_rows(period_select_cmr,
-                          period_select_swab,
-                          period_select_visual) %>%
-  select(population,
-         site,
-         year,
-         survey_period,
-         detection_type) %>%
-  rename(survey_period_select = survey_period)
-
-# check for duplicates
-dupes_period_select = get_dupes(period_select, site, year, detection_type)
-
-# wider table for visual inspection of available surveys
-period_select_wide = period_select %>%
-  mutate(detection_type = paste0(detection_type, "_survey_period")) %>%
-  pivot_wider(id_cols = c(population, site, year),
-              names_from = detection_type,
-              values_from = survey_period_select) %>%
-  arrange(site,
-          year)
-
-# visually check selections where multiple periods present for a site/year, to see if any should be flagged
-check_period_select = survey_oi_priority %>%
-  left_join(period_select, by = c("population", "site", "year", "detection_type")) %>%
-  filter(period_count > 1) %>%
-  select(population,
-         site,
-         year,
-         survey_period,
-         survey_period_select,
-         detection_type,
-         description,
-         comments_survey,
-         comments_visit,
-         detection_type_count,
-         mean_survey_quality_score,
-         survey_count,
-         random_val,
-         everything()) %>%
-  arrange(site,
-          year,
-          survey_period,
-          detection_type)
-
-# surveys selected using criteria, across all detection types
-survey_select = survey_oi_priority %>%
-  right_join(period_select, by = c("population", "site", "year", "survey_period" = "survey_period_select", "detection_type")) %>%
-  arrange(site,
-          date,
-          detection_type) %>%
-  group_by(site,
-           year,
-           detection_type) %>%
-  mutate(id = row_number()) %>%
-  ungroup() %>%
-  filter((detection_type == "visual" & id == 1) | detection_type %in% c("cmr", "swab"))
+# Selection criteria when more than 1 survey period available for a given & year: Use survey with max count (independent for CMR and Visual)
 
 # adult frog abundance
 
@@ -462,7 +316,7 @@ survey_select = survey_oi_priority %>%
 # cmr detection within survey period (across all surveys in survey period)
 
 # visual data pull
-data_visual = survey_select %>%
+data_visual = survey_oi %>%
   filter(detection_type == "visual") %>%
   select(population,
          site,
@@ -475,8 +329,7 @@ data_visual = survey_select %>%
          comments_survey,
          comments_visit) %>%
   left_join(db_ves %>%
-               filter(survey_id %in% survey_select$survey_id,
-                      life_stage == "adult",
+               filter(life_stage == "adult",
                       visual_animal_state != "dead") %>%
                select(count_ves,
                       ves_id,
@@ -489,13 +342,20 @@ abundance_visual = data_visual %>%
   group_by(population,
            year,
            date,
+           survey_period
            ) %>%
   rename(date_ves = date) %>%
   summarise(adult_count_visual = sum(count_ves),
-            .groups = "drop")
+            .groups = "drop") %>%
+  arrange(population, year, desc(adult_count_visual)) %>%
+  group_by(population,
+           year) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(-survey_period)
 
 # cmr data pull
-data_cmr = survey_select %>%
+data_cmr = survey_oi %>%
   filter(detection_type == "cmr") %>%
   select(population,
          site,
@@ -508,9 +368,8 @@ data_cmr = survey_select %>%
          comments_survey,
          comments_visit) %>%
   inner_join(db_capture %>%
-               filter(survey_id %in% survey_select$survey_id,
-                     life_stage == "adult",
-                     capture_animal_state != "dead") %>%
+               filter(life_stage == "adult",
+                      capture_animal_state != "dead") %>%
                select(cmr_id,
                       capture_id,
                       survey_id,
@@ -522,11 +381,18 @@ data_cmr = survey_select %>%
 # cmr abundance calc
 abundance_cmr = data_cmr %>%
   group_by(population,
-           year) %>%
+           year,
+           survey_period) %>%
   summarise(date_cmr_first = first(date),
             cmr_days = n_distinct(date),
             adult_count_cmr = n_distinct(cmr_id),
-            .groups = "drop")
+            .groups = "drop") %>%
+  arrange(population, year, desc(adult_count_cmr)) %>%
+  group_by(population,
+           year) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(-survey_period)
 
 # join visual and cmr abundance data
 abundance_stats = abundance_visual %>%
@@ -561,6 +427,7 @@ bd_stats = bd_capture_valid %>%
             adult_positive_bd_load_median = median(bd_mean_its1_copies_per_swab[bd_detected]),
             adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
             adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
+            adult_bd_load_mean = mean(bd_mean_its1_copies_per_swab),
             .groups = "drop")
 
 # join with pop_year_ab
@@ -571,23 +438,120 @@ pop_year_bd = pop_year_ab %>%
 ```
 
 # visulaize to understand what kinds of patterns we want to ID
-```{r, fig.width=10, fig.height=15}
+```{r, fig.width=10, fig.height=8}
 
 pop_adult_swab_counts = bd_stats %>%
   group_by(population) %>%
   summarise(adult_swab_n = sum(adult_swab_n))
 
+release_event_lines <- pop_year_bd %>%
+  filter(release_event) %>%
+  select(population, year)
+
 ggplot(pop_year_bd, aes(x = year)) +
-  geom_point(aes(y = log(adult_count_visual), color = "VES")) +
-  geom_line(aes(y = log(adult_count_visual), color = "VES")) +
-  geom_point(aes(y = log(adult_count_cmr), color = "CMR")) +
-  geom_line(aes(y = log(adult_count_cmr), color = "CMR")) +
-  geom_point(aes(y = adult_bd_prevalence * 15, color = "Bd Prev")) +
-  geom_line(aes(y = adult_bd_prevalence * 15, color = "Bd Prev")) +
-  geom_point(aes(y = log(adult_positive_bd_load_median), color = "Bd Load")) +
-  geom_line(aes(y = log(adult_positive_bd_load_median), color = "Bd Load")) +
+  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_point(aes(y = adult_bd_prevalence_ci_lower * 10, color = "Mean Load")) +
+  geom_line(aes(y = adult_bd_prevalence_ci_lower * 10, color = "Mean Load")) +
+  geom_vline(data = release_event_lines, aes(xintercept = year), linetype = "dashed") +
   geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
   facet_wrap(population ~ .) +
+  geom_hline(yintercept = 7.5) +
+  scale_color_manual(values = c("VES" = "orange",
+                                "CMR" = "red",
+                                "Bd Prev" = "green",
+                                "Bd Load" = "blue",
+                                "Mean Load" = "purple")) +
+  labs(color = "Timeseries")
+
+```
+# classification criteria
+```{r, fig.width=10, fig.height=10}
+
+epi_class = pop_year_bd %>%
+  mutate(epi_prev = adult_bd_prevalence >= 0.7,
+         epi_load = adult_positive_bd_load_median >= 15000) %>%
+  group_by(population) %>%
+  arrange(year) %>%
+  mutate(
+         # Get next two adult_bd_prevalence values skipping NA
+         next1 = lead(adult_bd_prevalence, 1),
+         next2 = lead(adult_bd_prevalence, 2),
+         next3 = lead(adult_bd_prevalence, 3)) %>%
+  rowwise() %>%
+  mutate(transient = mean(c_across(c(next1, next2, next3)), na.rm = TRUE) < 0.1) %>%
+  ungroup() %>%
+  arrange(population, year) %>%
+  mutate(epizootic = (epi_load | epi_prev) & !(transient %in% TRUE)) %>%
+  select(population, year, epizootic)
+
+epi_year = pop_year_bd %>%
+  left_join(epi_class, by = c("population", "year")) %>%
+  filter(epizootic) %>%
+  select(population, year) %>%
+  mutate(epi_potential = TRUE)
+
+first_epi_year = epi_year %>%
+  group_by(population) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(population, year) %>%
+  rename(first_epi_year = year)
+
+first_bd_year = pop_year_bd %>%
+  filter(!is.na(adult_bd_prevalence)) %>%
+  group_by(population) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  mutate(first_bd_ves_lt10 = adult_count_visual < 10) %>%
+  select(population, year, first_bd_ves_lt10) %>%
+  rename(first_bd_year = year)
+
+pop_year_class = pop_year_bd %>%
+  left_join(first_epi_year, by = c("population")) %>%
+  left_join(first_bd_year, by = c("population")) %>%
+  left_join(epi_year, by = c("population", "year")) %>%
+  mutate(
+    epi_potential = if_else(is.na(epi_potential), FALSE, epi_potential),
+    res_class = case_when(
+      (first_epi_year == first_bd_year) & first_bd_ves_lt10 ~ "post",
+      year < first_epi_year ~ "naive",
+      year == first_epi_year ~ "epizootic",
+      year > first_epi_year ~ "post",
+      .default = "naive")) %>%
+  mutate(last1 = lag(res_class, 1),
+         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
+  mutate(last1 = lag(res_class, 1),
+         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
+  mutate(last1 = lag(res_class, 1),
+         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class))
+
+# epizootic: 1st time both
+#   a) positive Bd load > 10k (log load > 9.21)
+#   b) prevalence > 0.5
+#   c) ves & cmr 3 year average > before than after
+# then buffered by where only Bd load is > 10k
+ggplot(pop_year_class, aes(x = year)) +
+  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
+  geom_tile(data = pop_year_class,
+            aes(y = -0.5, fill = res_class), height = 0.6) +
+  facet_wrap(population ~ .) +
+  geom_hline(yintercept = 7, linetype = "dashed", color = "green") +
+  geom_hline(yintercept = log(15000), linetype = "dashed", color = "blue") +
   scale_color_manual(values = c("VES" = "orange",
                                 "CMR" = "red",
                                 "Bd Prev" = "green",
