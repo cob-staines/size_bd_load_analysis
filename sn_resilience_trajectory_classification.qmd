@@ -24,10 +24,10 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 dbcon <- hopToDB("ribbitr")
 
 # load populations
-data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
+data_pop = read.csv(here("data", "sn_site_pop_2_2025-09-19.csv")) %>%
   rename(population = pop_id) %>%
-  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_),
-         population = if_else(is.na(population), site, population))
+  mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), NA_character_),
+         population = if_else(is.na(population), as.character(site), as.character(population)))
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -202,6 +202,16 @@ first_release_events =  release_events %>%
   summarise(first_release_year = min(year),
             .groups = "drop")
 
+
+# mask for populations/years after a release event
+post_release_mask = expand_grid(unique(first_release_events$population),
+                       seq(min(first_release_events$first_release_year), 2025)) %>%
+  rename(population = 1,
+         year = 2) %>%
+  left_join(first_release_events, by = "population") %>%
+  filter(year >= first_release_year) %>%
+  select(-first_release_year)
+
 # selection criteria for populations
 ## - 3 years of sampling
 ## - at least 15 each adult and subadult per population
@@ -210,8 +220,7 @@ first_release_events =  release_events %>%
 
 bd_population_valid = bd_population %>%
   collect() %>%
-  left_join(first_release_events, by = "population") %>%
-  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
+  anti_join(post_release_mask, by = c("population", "year")) %>%
   group_by(population) %>%
   summarise(n_years = n_distinct(year),
             n_adult = sum(life_stage_simple == "adult"),
@@ -221,19 +230,20 @@ bd_population_valid = bd_population %>%
          n_adult >= 15,
          n_subadult >= 15)
 
-pop_year_valid = bd_population %>%
-  distinct(population, year) %>%
-  filter(population %in% bd_population_valid$population) %>%
-  collect() %>%
-  left_join(first_release_events, by = "population") %>%
-  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
-  select(population, year)
+# pop_year_valid = bd_population %>%
+#   distinct(population, year) %>%
+#   anti_join(post_release_mask, by = c("population", "year"))
+#   filter(population %in% bd_population_valid$population) %>%
+#   collect() %>%
+#   left_join(first_release_events, by = "population") %>%
+#   filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
+#   select(population, year)
   
 bd_site_valid = data_pop %>%
   filter(population %in% bd_population_valid$population)
 
 bd_capture_valid = bd_population %>%
-  inner_join(pop_year_valid, by = c("population", "year"), copy = TRUE)
+  anti_join(post_release_mask, by = c("population", "year"), copy = TRUE)
 
 # all years of data for valid pops
 year_valid = bd_capture_valid %>%
@@ -248,8 +258,8 @@ pop_year = expand_grid(bd_population_valid$population,
 
 # pass on to pop year
 pop_year_tx = pop_year %>%
-  left_join(release_events, by = c("population", "year")) %>%
-  mutate(release_event = if_else(is.na(release_event), FALSE, release_event))
+  left_join(first_release_events, by = c("population")) %>%
+  arrange(population, year)
 
 ```
 
@@ -273,8 +283,7 @@ visit_oi = db_visit %>%
          comments_visit) %>%
   collect() %>%
   left_join(data_pop, by = "site") %>%
-  left_join(first_release_events, by = "population") %>%
-  filter(is.na(first_release_year) | !(year >= first_release_year)) %>%
+  anti_join(post_release_mask, by = c("population", "year")) %>%
   arrange(population,
           date) %>%
   group_by(population, year) %>%
@@ -438,41 +447,12 @@ pop_year_bd = pop_year_ab %>%
 ```
 
 # visulaize to understand what kinds of patterns we want to ID
-```{r, fig.width=10, fig.height=8}
-
-pop_adult_swab_counts = bd_stats %>%
-  group_by(population) %>%
-  summarise(adult_swab_n = sum(adult_swab_n))
-
-release_event_lines <- pop_year_bd %>%
-  filter(release_event) %>%
-  select(population, year)
-
-ggplot(pop_year_bd, aes(x = year)) +
-  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_point(aes(y = adult_bd_prevalence_ci_lower * 10, color = "Mean Load")) +
-  geom_line(aes(y = adult_bd_prevalence_ci_lower * 10, color = "Mean Load")) +
-  geom_vline(data = release_event_lines, aes(xintercept = year), linetype = "dashed") +
-  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
-  facet_wrap(population ~ .) +
-  geom_hline(yintercept = 7.5) +
-  scale_color_manual(values = c("VES" = "orange",
-                                "CMR" = "red",
-                                "Bd Prev" = "green",
-                                "Bd Load" = "blue",
-                                "Mean Load" = "purple")) +
-  labs(color = "Timeseries")
-
-```
 # classification criteria
 ```{r, fig.width=10, fig.height=10}
+
+pop_adult_swab_counts = pop_year_bd %>%
+  group_by(population) %>%
+  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
 
 epi_class = pop_year_bd %>%
   mutate(epi_prev = adult_bd_prevalence >= 0.7,
@@ -483,9 +463,10 @@ epi_class = pop_year_bd %>%
          # Get next two adult_bd_prevalence values skipping NA
          next1 = lead(adult_bd_prevalence, 1),
          next2 = lead(adult_bd_prevalence, 2),
-         next3 = lead(adult_bd_prevalence, 3)) %>%
+         next3 = lead(adult_bd_prevalence, 3),
+         next4 = lead(adult_bd_prevalence, 4)) %>%
   rowwise() %>%
-  mutate(transient = mean(c_across(c(next1, next2, next3)), na.rm = TRUE) < 0.1) %>%
+  mutate(transient = mean(c_across(c(next1, next2, next3, next4)), na.rm = TRUE) < 0.1) %>%
   ungroup() %>%
   arrange(population, year) %>%
   mutate(epizootic = (epi_load | epi_prev) & !(transient %in% TRUE)) %>%
@@ -530,6 +511,8 @@ pop_year_class = pop_year_bd %>%
   mutate(last1 = lag(res_class, 1),
          res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
   mutate(last1 = lag(res_class, 1),
+         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
+  mutate(last1 = lag(res_class, 1),
          res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class))
 
 # epizootic: 1st time both
@@ -550,8 +533,132 @@ ggplot(pop_year_class, aes(x = year)) +
   geom_tile(data = pop_year_class,
             aes(y = -0.5, fill = res_class), height = 0.6) +
   facet_wrap(population ~ .) +
-  geom_hline(yintercept = 7, linetype = "dashed", color = "green") +
+  geom_hline(yintercept = 0.7 * 10, linetype = "dashed", color = "green") +
   geom_hline(yintercept = log(15000), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = log(10), linetype = "dashed", color = "orange") +
+  scale_color_manual(values = c("VES" = "orange",
+                                "CMR" = "red",
+                                "Bd Prev" = "green",
+                                "Bd Load" = "blue")) +
+  labs(color = "Timeseries")
+
+
+```
+
+# criteria 2
+```{r, fig.width=10, fig.height=10}
+
+pop_adult_swab_counts = pop_year_bd %>%
+  group_by(population) %>%
+  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
+
+epi_class = pop_year_bd %>%
+  mutate(epi_prev = adult_bd_prevalence >= 0.8,
+         epi_load = adult_positive_bd_load_median >= 15000) %>%
+  arrange(population, year) %>%
+  mutate(epizootic = (epi_load | epi_prev)) %>%
+  select(population, year, epizootic)
+
+epi_year = pop_year_bd %>%
+  left_join(epi_class, by = c("population", "year")) %>%
+  filter(epizootic) %>%
+  select(population, year) %>%
+  mutate(epi_potential = TRUE)
+
+first_epi_year = epi_year %>%
+  group_by(population) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(population, year) %>%
+  rename(first_epi_year = year)
+
+first_bd_year = pop_year_bd %>%
+  filter(!is.na(adult_bd_prevalence)) %>%
+  group_by(population) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  mutate(first_bd_ves_lt10 = adult_count_visual < 10) %>%
+  select(population, year, first_bd_ves_lt10) %>%
+  rename(first_bd_year = year)
+
+epi_events = pop_year_bd %>%
+  left_join(epi_year, by = c("population", "year")) %>%
+  mutate(
+    epi_potential = if_else(is.na(epi_potential) & !is.na(adult_bd_prevalence), FALSE, epi_potential),
+    not_false = is.na(epi_potential) | epi_potential == TRUE
+  ) %>%
+  arrange(population, year) %>%
+  group_by(population) %>%
+  mutate(
+    run_id = {
+      rle_vals <- rle(epi_potential)
+      rep(seq_along(rle_vals$lengths), rle_vals$lengths)
+    }
+  ) %>%
+  filter(epi_potential) %>%
+  group_by(population, run_id) %>%
+  filter(any(epi_potential == TRUE, na.rm = TRUE)) %>%
+  summarise(
+    start_year = min(year),
+    end_year = max(year),
+    .groups = "drop"
+  ) %>%
+  left_join(pop_year_bd %>%
+              select(population,
+                     year,
+                     adult_count_visual), by = "population", relationship = "many-to-many") %>%
+  group_by(population, start_year, end_year) %>%
+  summarize(adult_ves_before = median(adult_count_visual[year <= start_year], na.rm = TRUE),
+            adult_ves_after = median(adult_count_visual[year >= end_year], na.rm = TRUE),
+            .groups = "drop") %>%
+  mutate(adult_ves_before = if_else(is.na(adult_ves_before), 0, adult_ves_before),
+         adult_ves_after = if_else(is.na(adult_ves_after), 0, adult_ves_after),
+         adult_ves_drop = adult_ves_before - adult_ves_after) %>%
+  filter(adult_ves_drop >= 30) %>%
+  arrange(population, start_year) %>%
+  group_by(population) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+
+pop_year_class = pop_year_bd %>%
+  left_join(first_epi_year, by = c("population")) %>%
+  left_join(first_bd_year, by = c("population")) %>%
+  left_join(epi_events, by = c("population")) %>%
+  group_by(population) %>%
+  mutate(median_prev = median(adult_bd_prevalence, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    res_class = case_when(
+      is.na(start_year) & median_prev >= 0.5 ~ "post",
+      is.na(start_year) & median_prev < 0.5 ~ "naive",
+      year < start_year ~ "naive",
+      year >= start_year & year <= end_year ~ "epizootic",
+      year > start_year ~ "post"))
+
+# epizootic: 1st time both
+#   a) positive Bd load > 10k (log load > 9.21)
+#   b) prevalence > 0.5
+#   c) ves & cmr 3 year average > before than after
+# then buffered by where only Bd load is > 10k
+ggplot(pop_year_class, aes(x = year)) +
+  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
+  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
+  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
+  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
+  geom_point(data = epi_events, aes(x = start_year, y = log(1 + adult_ves_drop)), color = "purple") +
+  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
+  geom_tile(data = pop_year_class,
+            aes(y = -0.5, fill = res_class), height = 0.6) +
+  facet_wrap(population ~ .) +
+  geom_hline(yintercept = 0.8 * 10, linetype = "dashed", color = "green") +
+  geom_hline(yintercept = log(15000), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = log(10), linetype = "dashed", color = "orange") +
+  geom_hline(yintercept = log(30), linetype = "dashed", color = "purple") +
   scale_color_manual(values = c("VES" = "orange",
                                 "CMR" = "red",
                                 "Bd Prev" = "green",
