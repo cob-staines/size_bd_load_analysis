@@ -30,15 +30,15 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 ## Setup
 ```{r}
 #| eval: true
-#| output: false
+#| output: true
 #| code-fold: true
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2, ggpattern)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2)
 
 ## Connect to DB
-dbcon <- hopToDB("ribbitr")
+dbcon = hopToDB("ribbitr")
 
 # load populations
 data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
@@ -271,7 +271,20 @@ bd_sample_valid = bd_population %>%
          svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
   filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
 
+# combinations to drop
+taxon_season_mask = data.frame(
+  taxon_capture = c("atelopus_varius",
+                    "craugastor_crassidigitus",
+                    "craugastor_fitzingeri",
+                    "espadarana_prosoblepon",
+                    "sachatamia_albomaculata",
+                    "smilisca_sila"),
+  season = c("seca")
+)
+
+
 bd_model = bd_sample_valid %>%
+  anti_join(taxon_season_mask, by = c("taxon_capture", "season")) %>%
   filter(!is.na(bd_mean_its1_copies_per_swab),
          !is.na(svl_mm)) %>%
   mutate(bd_load = bd_mean_its1_copies_per_swab,
@@ -333,9 +346,29 @@ run_m2_ltp = function(taxon){
   # colostethus_panamansis
   m2_ltp <- brm(
     formula = bf(
-      bd_load ~ 1 + life_stage_simple + season + (1 | population),
-      hu ~ 1 + life_stage_simple + season,
-      sigma ~ 1 + life_stage_simple + season
+      bd_load ~ 1 + life_stage_simple * season + (1 | population),
+      hu ~ 1 + life_stage_simple * season + (1 | population),
+      sigma ~ 1 + life_stage_simple * season
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = hurdle_lognormal(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+
+run_m2_ltp_1s = function(taxon){
+  # colostethus_panamansis
+  m2_ltp <- brm(
+    formula = bf(
+      bd_load ~ 1 + life_stage_simple + (1 | population),
+      hu ~ 1 + life_stage_simple + (1 | population),
+      sigma ~ 1 + life_stage_simple
     ),
     data = bd_model %>%
       filter(taxon_capture == taxon),
@@ -352,7 +385,7 @@ run_m2_ltp = function(taxon){
 # # atelopus
 taxon_m = "atelopus_varius"
 output_m = "model_results_zln_life_tax_sea_pop_atva.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 # colos
@@ -364,19 +397,19 @@ saveRDS(m2_ltp, file = output_m)
 # crassidigitus
 taxon_m = "craugastor_crassidigitus"
 output_m = "model_results_zln_life_tax_sea_pop_crcr.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 # crassidigitus
 taxon_m = "craugastor_fitzingeri"
 output_m = "model_results_zln_life_tax_sea_pop_crfi.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 # crassidigitus
 taxon_m = "espadarana_prosoblepon"
 output_m = "model_results_zln_life_tax_sea_pop_espr.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 # wartz
@@ -394,7 +427,7 @@ saveRDS(m2_ltp, file = output_m)
 # albomac
 taxon_m = "sachatamia_albomaculata"
 output_m = "model_results_zln_life_tax_sea_pop_saal.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 # flotator
@@ -406,7 +439,7 @@ saveRDS(m2_ltp, file = output_m)
 # flotator
 taxon_m = "smilisca_sila"
 output_m = "model_results_zln_life_tax_sea_pop_smsi.rds"
-m2_ltp = run_m2_ltp(taxon_m)
+m2_ltp = run_m2_ltp_1s(taxon_m)
 saveRDS(m2_ltp, file = output_m)
 
 ```
@@ -464,23 +497,27 @@ collect_draws = function(m_spec){
                  b_hu_Intercept,
                  b_life_stage_simplesubadult,
                  b_seasonseca,
+                 `b_life_stage_simplesubadult:seasonseca`,
                  b_sigma_life_stage_simplesubadult,
                  b_sigma_seasonseca,
+                 `b_sigma_life_stage_simplesubadult:seasonseca`,
                  b_hu_life_stage_simplesubadult,
                  b_hu_seasonseca,
-                 sd_population__Intercept) %>%
+                 `b_hu_life_stage_simplesubadult:seasonseca`,
+                 sd_population__Intercept,
+                 sd_population__hu_Intercept) %>%
     mutate(b_adult_lluvia = b_Intercept,
            b_adult_seca = b_Intercept + b_seasonseca,
            b_subadult_lluvia = b_Intercept + b_life_stage_simplesubadult,
-           b_subadult_seca = b_Intercept + b_life_stage_simplesubadult + b_seasonseca,
+           b_subadult_seca = b_Intercept + b_life_stage_simplesubadult + b_seasonseca + `b_life_stage_simplesubadult:seasonseca`,
            b_hu_adult_lluvia = b_hu_Intercept,
            b_hu_adult_seca = b_hu_Intercept + b_hu_seasonseca,
            b_hu_subadult_lluvia = b_hu_Intercept + b_hu_life_stage_simplesubadult,
-           b_hu_subadult_seca = b_hu_Intercept + b_hu_life_stage_simplesubadult + b_hu_seasonseca,
+           b_hu_subadult_seca = b_hu_Intercept + b_hu_life_stage_simplesubadult + b_hu_seasonseca + `b_hu_life_stage_simplesubadult:seasonseca`,
            b_sigma_adult_lluvia = b_sigma_Intercept,
            b_sigma_adult_seca = b_sigma_Intercept + b_sigma_seasonseca,
            b_sigma_subadult_lluvia = b_sigma_Intercept + b_sigma_life_stage_simplesubadult,
-           b_sigma_subadult_seca = b_sigma_Intercept + b_sigma_life_stage_simplesubadult + b_sigma_seasonseca) %>%
+           b_sigma_subadult_seca = b_sigma_Intercept + b_sigma_life_stage_simplesubadult + b_sigma_seasonseca + `b_sigma_life_stage_simplesubadult:seasonseca`) %>%
     select(.draw,
            b_adult_lluvia,
            b_adult_seca,
@@ -494,7 +531,8 @@ collect_draws = function(m_spec){
            b_sigma_adult_seca,
            b_sigma_subadult_lluvia,
            b_sigma_subadult_seca,
-           sd_population__Intercept) %>%
+           sd_population__Intercept,
+           sd_population__hu_Intercept) %>%
     pivot_longer(cols = c(b_adult_lluvia,
                           b_adult_seca,
                           b_subadult_lluvia,
@@ -522,13 +560,68 @@ collect_draws = function(m_spec){
         grepl("lluvia", name) ~ "lluvia",
         grepl("seca", name) ~ "seca",
         .default = NA_character_)) %>%
-    pivot_wider(id_cols = c(.draw, life_stage_simple, season, sd_population__Intercept),
+    pivot_wider(id_cols = c(.draw, life_stage_simple, season, sd_population__Intercept, sd_population__hu_Intercept),
                 values_from = param,
                 names_from = param_name) %>%
     mutate(p0 = plogis(b_hu),
            prevalence = 1 - p0,
            sigma = exp(b_sigma),
-           sd_eff = sqrt(sigma^2 + sd_population__Intercept^2))
+           sd_eff_bd_load = sqrt(sigma^2 + sd_population__Intercept^2)) %>%
+    rename(sd_eff_hu = sd_population__hu_Intercept)
+}
+
+collect_draws_1s = function(m_spec){
+  m_spec %>%
+    spread_draws(b_Intercept,
+                 b_sigma_Intercept,
+                 b_hu_Intercept,
+                 b_life_stage_simplesubadult,
+                 b_sigma_life_stage_simplesubadult,
+                 b_hu_life_stage_simplesubadult,
+                 sd_population__Intercept,
+                 sd_population__hu_Intercept) %>%
+    mutate(b_adult_lluvia = b_Intercept,
+           b_subadult_lluvia = b_Intercept + b_life_stage_simplesubadult,
+           b_hu_adult_lluvia = b_hu_Intercept,
+           b_hu_subadult_lluvia = b_hu_Intercept + b_hu_life_stage_simplesubadult,
+           b_sigma_adult_lluvia = b_sigma_Intercept,
+           b_sigma_subadult_lluvia = b_sigma_Intercept + b_sigma_life_stage_simplesubadult) %>%
+    select(.draw,
+           b_adult_lluvia,
+           b_subadult_lluvia,
+           b_hu_adult_lluvia,
+           b_hu_subadult_lluvia,
+           b_sigma_adult_lluvia,
+           b_sigma_subadult_lluvia,
+           sd_population__Intercept,
+           sd_population__hu_Intercept,
+           sd_population__Intercept,
+           sd_population__hu_Intercept) %>%
+    pivot_longer(cols = c(b_adult_lluvia,
+                          b_subadult_lluvia,
+                          b_hu_adult_lluvia,
+                          b_hu_subadult_lluvia,
+                          b_sigma_adult_lluvia,
+                          b_sigma_subadult_lluvia),
+                 values_to = "param") %>% 
+    mutate(
+      param_name = case_when(
+        grepl("b_hu", name) ~ "b_hu",
+        grepl("b_sigma", name) ~ "b_sigma",
+        grepl("b_", name) ~ "b",
+        .default = NA_character_),
+      life_stage_simple = case_when(
+        grepl("subadult", name) ~ "subadult",
+        grepl("adult", name) ~ "adult",
+        .default = NA_character_)) %>%
+    pivot_wider(id_cols = c(.draw, life_stage_simple, sd_population__Intercept, sd_population__hu_Intercept),
+                values_from = param,
+                names_from = param_name) %>%
+    mutate(p0 = plogis(b_hu),
+           prevalence = 1 - p0,
+           sigma = exp(b_sigma),
+           sd_eff_bd_load = sqrt(sigma^2 + sd_population__Intercept^2)) %>%
+    rename(sd_eff_hu = sd_population__hu_Intercept)
 }
 
 
@@ -546,18 +639,18 @@ density_mat = function(lower, upper, len, draws){
     
     # Compute density matrices
     pdf_density_mat = pmap(
-      list(group_df$b, group_df$sd_eff, group_df$p0),
-      function(b, sd_eff, p0) {
-        dnorm(density_grid, mean = b, sd = sd_eff) * (1 - p0)
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        dnorm(density_grid, mean = b, sd = sigma) * (1 - p0)
       }
     ) %>%
       simplify2array() %>%
       t()
     
     ccdf_density_mat = pmap(
-      list(group_df$b, group_df$sd_eff, group_df$p0),
-      function(b, sd_eff, p0) {
-        (1 - pnorm(density_grid, mean = b, sd = sd_eff)) * (1 - p0)
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        (1 - pnorm(density_grid, mean = b, sd = sigma)) * (1 - p0)
       }
     ) %>%
       simplify2array() %>%
@@ -642,6 +735,41 @@ sample_posterior_life_sea = function(m_zln, species_name, n = 10000){
     mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
            log_bd_load = log(bd_load + 1),
            taxon_capture = species_name)
+}
+
+sample_posterior_life_1s = function(m_zln, species_name, n = 10000){
+  ps_adult_lluvia = samp_pos(m_zln, "adult", "lluvia", n)
+  ps_subadult_lluvia = samp_pos(m_zln, "subadult", "lluvia", n)
+
+  df_samps_adult_lluvia = data.frame(
+    life_stage_simple = "adult",
+    season = "lluvia",
+    bd_load = ps_adult_lluvia
+  )
+
+  df_samps_subadult_lluvia = data.frame(
+    life_stage_simple = "subadult",
+    season = "lluvia",
+    bd_load = ps_subadult_lluvia
+  )
+
+  df_samps = bind_rows(df_samps_adult_lluvia,
+                       df_samps_subadult_lluvia) %>%
+    mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
+           log_bd_load = log(bd_load + 1),
+           taxon_capture = species_name)
+}
+
+simulate_bd_load_fixed = function(draws, n_per_draw = 10) {
+  draws %>%
+    filter(!is.na(b),
+           !is.na(sigma)) %>%
+    group_by(.draw, life_stage_simple, season) %>%
+    reframe(
+      log_bd_load = rnorm(n_per_draw, mean = b, sd = sigma),
+      .id = "sim_id"
+    ) %>%
+    ungroup()
 }
 
 wilson_ci = function(p_hat, n, conf.level = 0.95) {
@@ -748,9 +876,9 @@ plot_load_obs = function(bd_model_spec, obs_stats, species_name){
 #     ylim(log(0.3), 15)
 # }
 
-plot_load_mod = function(pps, species_name) {
-  ggplot(pps %>%
-           filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
+plot_load_mod = function(sim, species_name) {
+  ggplot(sim %>%
+           filter(log_bd_load > 0.3), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
     geom_boxplot() + 
     theme_minimal() +
     ggtitle(paste0("Modeled Bd-positive load: ", species_name)) +
@@ -820,13 +948,16 @@ taxon_m = "atelopus_varius"
 spec_name = get_species_name(taxon_m)
 m_zln_atva = load_model(taxon_m)
 
-draws_atva = collect_draws(m_zln_atva) %>%
-  mutate(taxon_capture = spec_name)
+draws_atva = collect_draws_1s(m_zln_atva) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_atva = density_mat(log(0.3), 20, 100, draws_atva) %>%
   mutate(taxon_capture = spec_name)
 
-pps_atva = sample_posterior_life_sea(m_zln_atva, spec_name, 10000)
+# pps_atva = sample_posterior_life_1s(m_zln_atva, spec_name, 10000)
+
+sim_load_atva = simulate_bd_load_fixed(draws_atva, 1)
 
 bd_model_atva = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -836,6 +967,7 @@ obs_stats_atva = sample_stats(bd_model_atva) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_atva)
 # model_report(m_zln_atva)
 ```
 
@@ -852,6 +984,7 @@ obs_stats_atva = sample_stats(bd_model_atva) %>%
 #| warning: false
 (plot_2 = plot_prev_mod(draws_atva, spec_name))
 ```
+
 ### Observed Bd load
 ```{r}
 #| echo: false
@@ -862,7 +995,7 @@ obs_stats_atva = sample_stats(bd_model_atva) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_atva, spec_name))
+(plot_4 = plot_load_mod(sim_load_atva, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -870,7 +1003,7 @@ obs_stats_atva = sample_stats(bd_model_atva) %>%
 #| warning: false
 (plot_5 = plot_pdf(density_mat_atva, spec_name))
 ```
-### Moded Bd load CCDF
+### Modeled Bd load CCDF
 ```{r}
 #| echo: false
 #| warning: false
@@ -896,7 +1029,9 @@ draws_copa = collect_draws(m_zln_copa) %>%
 density_mat_copa = density_mat(log(0.3), 20, 100, draws_copa) %>%
   mutate(taxon_capture = spec_name)
 
-pps_copa = sample_posterior_life_sea(m_zln_copa, spec_name, 10000)
+# pps_copa = sample_posterior_life_sea(m_zln_copa, spec_name, 10000)
+
+sim_load_copa = simulate_bd_load_fixed(draws_copa, 1)
 
 bd_model_copa = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -906,8 +1041,8 @@ obs_stats_copa = sample_stats(bd_model_copa) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_copa)
 # model_report(m_zln_copa)
-
 ```
 ::: {.panel-tabset}
 ### Observed Prevalence
@@ -932,7 +1067,7 @@ obs_stats_copa = sample_stats(bd_model_copa) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_copa, spec_name))
+(plot_4 = plot_load_mod(sim_load_copa, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -960,13 +1095,16 @@ taxon_m = "craugastor_crassidigitus"
 spec_name = get_species_name(taxon_m)
 m_zln_crcr = load_model(taxon_m)
 
-draws_crcr = collect_draws(m_zln_crcr) %>%
-  mutate(taxon_capture = spec_name)
+draws_crcr = collect_draws_1s(m_zln_crcr) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_crcr = density_mat(log(0.3), 20, 100, draws_crcr) %>%
   mutate(taxon_capture = spec_name)
 
-pps_crcr = sample_posterior_life_sea(m_zln_crcr, spec_name, 10000)
+# pps_crcr = sample_posterior_life_sea(m_zln_crcr, spec_name, 10000)
+
+sim_load_crcr = simulate_bd_load_fixed(draws_crcr, 1)
 
 bd_model_crcr = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -976,6 +1114,7 @@ obs_stats_crcr = sample_stats(bd_model_crcr) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_crcr)
 # model_report(m_zln_crcr)
 ```
 ::: {.panel-tabset}
@@ -1001,7 +1140,7 @@ obs_stats_crcr = sample_stats(bd_model_crcr) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_crcr, spec_name))
+(plot_4 = plot_load_mod(sim_load_crcr, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1029,13 +1168,16 @@ taxon_m = "craugastor_fitzingeri"
 spec_name = get_species_name(taxon_m)
 m_zln_crfi = load_model(taxon_m)
 
-draws_crfi = collect_draws(m_zln_crfi) %>%
-  mutate(taxon_capture = spec_name)
+draws_crfi = collect_draws_1s(m_zln_crfi) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_crfi = density_mat(log(0.3), 20, 100, draws_crfi) %>%
   mutate(taxon_capture = spec_name)
 
-pps_crfi = sample_posterior_life_sea(m_zln_crfi, spec_name, 10000)
+# pps_crfi = sample_posterior_life_sea(m_zln_crfi, spec_name, 10000)
+
+sim_load_crfi = simulate_bd_load_fixed(draws_crfi, 1)
 
 bd_model_crfi = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1045,6 +1187,7 @@ obs_stats_crfi = sample_stats(bd_model_crfi) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_crfi)
 # model_report(m_zln_crfi)
 ```
 ::: {.panel-tabset}
@@ -1070,7 +1213,7 @@ obs_stats_crfi = sample_stats(bd_model_crfi) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_crfi, spec_name))
+(plot_4 = plot_load_mod(sim_load_crfi, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1098,13 +1241,16 @@ taxon_m = "espadarana_prosoblepon"
 spec_name = get_species_name(taxon_m)
 m_zln_espr = load_model(taxon_m)
 
-draws_espr = collect_draws(m_zln_espr) %>%
-  mutate(taxon_capture = spec_name)
+draws_espr = collect_draws_1s(m_zln_espr) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_espr = density_mat(log(0.3), 20, 100, draws_espr) %>%
   mutate(taxon_capture = spec_name)
 
-pps_espr = sample_posterior_life_sea(m_zln_espr, spec_name, 10000)
+# pps_espr = sample_posterior_life_sea(m_zln_espr, spec_name, 10000)
+
+sim_load_espr = simulate_bd_load_fixed(draws_espr, 1)
 
 bd_model_espr = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1114,6 +1260,7 @@ obs_stats_espr = sample_stats(bd_model_espr) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_espr)
 # model_report(m_zln_espr)
 ```
 ::: {.panel-tabset}
@@ -1139,7 +1286,7 @@ obs_stats_espr = sample_stats(bd_model_espr) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_espr, spec_name))
+(plot_4 = plot_load_mod(sim_load_espr, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1173,7 +1320,9 @@ draws_liwa = collect_draws(m_zln_liwa) %>%
 density_mat_liwa = density_mat(log(0.3), 20, 100, draws_liwa) %>%
   mutate(taxon_capture = spec_name)
 
-pps_liwa = sample_posterior_life_sea(m_zln_liwa, spec_name, 10000)
+# pps_liwa = sample_posterior_life_sea(m_zln_liwa, spec_name, 10000)
+
+sim_load_liwa = simulate_bd_load_fixed(draws_liwa, 1)
 
 bd_model_liwa = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1183,6 +1332,7 @@ obs_stats_liwa = sample_stats(bd_model_liwa) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_liwa)
 # model_report(m_zln_liwa)
 ```
 ::: {.panel-tabset}
@@ -1208,7 +1358,7 @@ obs_stats_liwa = sample_stats(bd_model_liwa) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_liwa, spec_name))
+(plot_4 = plot_load_mod(sim_load_liwa, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1242,7 +1392,9 @@ draws_rhha = collect_draws(m_zln_rhha) %>%
 density_mat_rhha = density_mat(log(0.3), 20, 100, draws_rhha) %>%
   mutate(taxon_capture = spec_name)
 
-pps_rhha = sample_posterior_life_sea(m_zln_rhha, spec_name, 10000)
+# pps_rhha = sample_posterior_life_sea(m_zln_rhha, spec_name, 10000)
+
+sim_load_rhha = simulate_bd_load_fixed(draws_rhha, 1)
 
 bd_model_rhha = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1252,6 +1404,7 @@ obs_stats_rhha = sample_stats(bd_model_rhha) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_rhha)
 # model_report(m_zln_rhha)
 ```
 ::: {.panel-tabset}
@@ -1277,7 +1430,7 @@ obs_stats_rhha = sample_stats(bd_model_rhha) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_rhha, spec_name))
+(plot_4 = plot_load_mod(sim_load_rhha, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1305,13 +1458,16 @@ taxon_m = "sachatamia_albomaculata"
 spec_name = get_species_name(taxon_m)
 m_zln_saal = load_model(taxon_m)
 
-draws_saal = collect_draws(m_zln_saal) %>%
-  mutate(taxon_capture = spec_name)
+draws_saal = collect_draws_1s(m_zln_saal) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_saal = density_mat(log(0.3), 20, 100, draws_saal) %>%
   mutate(taxon_capture = spec_name)
 
-pps_saal = sample_posterior_life_sea(m_zln_saal, spec_name, 10000)
+# pps_saal = sample_posterior_life_sea(m_zln_saal, spec_name, 10000)
+
+sim_load_saal = simulate_bd_load_fixed(draws_saal, 1)
 
 bd_model_saal = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1321,6 +1477,7 @@ obs_stats_saal = sample_stats(bd_model_saal) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_saal)
 # model_report(m_zln_saal)
 ```
 ::: {.panel-tabset}
@@ -1346,7 +1503,7 @@ obs_stats_saal = sample_stats(bd_model_saal) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_saal, spec_name))
+(plot_4 = plot_load_mod(sim_load_saal, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1380,7 +1537,9 @@ draws_sifl = collect_draws(m_zln_sifl) %>%
 density_mat_sifl = density_mat(log(0.3), 20, 100, draws_sifl) %>%
   mutate(taxon_capture = spec_name)
 
-pps_sifl = sample_posterior_life_sea(m_zln_sifl, spec_name, 10000)
+# pps_sifl = sample_posterior_life_sea(m_zln_sifl, spec_name, 10000)
+
+sim_load_sifl = simulate_bd_load_fixed(draws_sifl, 1)
 
 bd_model_sifl = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1390,6 +1549,7 @@ obs_stats_sifl = sample_stats(bd_model_sifl) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_sifl)
 # model_report(m_zln_sifl)
 ```
 ::: {.panel-tabset}
@@ -1415,7 +1575,7 @@ obs_stats_sifl = sample_stats(bd_model_sifl) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_sifl, spec_name))
+(plot_4 = plot_load_mod(sim_load_sifl, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1443,13 +1603,16 @@ taxon_m = "smilisca_sila"
 spec_name = get_species_name(taxon_m)
 m_zln_smsi = load_model(taxon_m)
 
-draws_smsi = collect_draws(m_zln_smsi) %>%
-  mutate(taxon_capture = spec_name)
+draws_smsi = collect_draws_1s(m_zln_smsi) %>%
+  mutate(taxon_capture = spec_name,
+         season = "lluvia")
 
 density_mat_smsi = density_mat(log(0.3), 20, 100, draws_smsi) %>%
   mutate(taxon_capture = spec_name)
 
-pps_smsi = sample_posterior_life_sea(m_zln_smsi, spec_name, 10000)
+# pps_smsi = sample_posterior_life_sea(m_zln_smsi, spec_name, 10000)
+
+sim_load_smsi = simulate_bd_load_fixed(draws_smsi, 1)
 
 bd_model_smsi = bd_model %>%
   filter(taxon_capture == taxon_m,
@@ -1459,6 +1622,7 @@ obs_stats_smsi = sample_stats(bd_model_smsi) %>%
   mutate(src = "obs",
          taxon_capture = spec_name)
 
+# summary(m_zln_smsi)
 # model_report(m_zln_smsi)
 ```
 ::: {.panel-tabset}
@@ -1484,7 +1648,7 @@ obs_stats_smsi = sample_stats(bd_model_smsi) %>%
 ```{r}
 #| echo: false
 #| warning: false
-(plot_4 = plot_load_mod(pps_smsi, spec_name))
+(plot_4 = plot_load_mod(sim_load_smsi, spec_name))
 ```
 ### Modeled Bd load PDF
 ```{r}
@@ -1560,17 +1724,30 @@ density_mat_all = bind_rows(
   density_mat_smsi) %>%
   left_join(bd_model_n, by = c("taxon_capture", "life_stage_simple", "season"))
 
-pps_all = bind_rows(
-  pps_atva,
-  pps_copa,
-  pps_crcr,
-  pps_crfi,
-  pps_espr,
-  pps_liwa,
-  pps_rhha,
-  pps_saal,
-  pps_sifl,
-  pps_smsi) %>%
+# pps_all = bind_rows(
+#   pps_atva,
+#   pps_copa,
+#   pps_crcr,
+#   pps_crfi,
+#   pps_espr,
+#   pps_liwa,
+#   pps_rhha,
+#   pps_saal,
+#   pps_sifl,
+#   pps_smsi) %>%
+#   left_join(bd_model_n, by = c("taxon_capture", "life_stage_simple", "season"))
+
+sim_load_all = bind_rows(
+  sim_load_atva,
+  sim_load_copa,
+  sim_load_crcr,
+  sim_load_crfi,
+  sim_load_espr,
+  sim_load_liwa,
+  sim_load_rhha,
+  sim_load_saal,
+  sim_load_sifl,
+  sim_load_smsi) %>%
   left_join(bd_model_n, by = c("taxon_capture", "life_stage_simple", "season"))
 
 bd_model_all = bd_model %>%
@@ -1657,8 +1834,8 @@ ggplot(bd_model_all %>%
 #| fig-width: 12
 #| fig-height: 6
 # modeled bd load
-ggplot(pps_all %>%
-         filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
+ggplot(sim_load_all %>%
+         filter(log_bd_load > 0.3), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
   geom_boxplot() + 
   theme_minimal() +
   ggtitle("Modeled Bd-positive load") +
