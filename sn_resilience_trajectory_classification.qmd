@@ -552,9 +552,12 @@ pop_adult_swab_counts = pop_year_bd %>%
   group_by(population) %>%
   summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
 
+# adult bd prevalence threshold: 0.8
+# adult median bd load threshold: 15000
+
 epi_class = pop_year_bd %>%
-  mutate(epi_prev = adult_bd_prevalence >= 0.8,
-         epi_load = adult_positive_bd_load_median >= 15000) %>%
+  mutate(epi_prev = adult_bd_prevalence >= 0.95,
+         epi_load = adult_positive_bd_load_median >= 24000) %>%
   arrange(population, year) %>%
   mutate(epizootic = (epi_load | epi_prev)) %>%
   select(population, year, epizootic)
@@ -580,6 +583,11 @@ first_bd_year = pop_year_bd %>%
   mutate(first_bd_ves_lt10 = adult_count_visual < 10) %>%
   select(population, year, first_bd_ves_lt10) %>%
   rename(first_bd_year = year)
+
+# define epi events as consecutive years over bd prevalence/load threshold
+## calculate ves drop as difference in median pre-and post-ves for each event
+## epizootic is first event where ves drop >= 30
+## if no epizootic identified: if median prevalence < 50 ~ naive, otherwise post
 
 epi_events = pop_year_bd %>%
   left_join(epi_year, by = c("population", "year")) %>%
@@ -614,33 +622,50 @@ epi_events = pop_year_bd %>%
   mutate(adult_ves_before = if_else(is.na(adult_ves_before), 0, adult_ves_before),
          adult_ves_after = if_else(is.na(adult_ves_after), 0, adult_ves_after),
          adult_ves_drop = adult_ves_before - adult_ves_after) %>%
-  filter(adult_ves_drop >= 30) %>%
+  filter(adult_ves_drop >= 60,
+         adult_ves_after <= 200) %>%
   arrange(population, start_year) %>%
   group_by(population) %>%
   slice_head(n = 1) %>%
   ungroup()
 
-
 pop_year_class = pop_year_bd %>%
   left_join(first_epi_year, by = c("population")) %>%
   left_join(first_bd_year, by = c("population")) %>%
   left_join(epi_events, by = c("population")) %>%
+  rowwise() %>%
+  mutate(
+    low_count = all(c_across(c(adult_count_visual, adult_count_cmr)) < 20, na.rm = TRUE),
+    low_count = if_else(is.na(adult_count_visual) & is.na(adult_count_cmr), NA, low_count)
+  ) %>%
+  ungroup() %>%
   group_by(population) %>%
-  mutate(median_prev = median(adult_bd_prevalence, na.rm = TRUE)) %>%
+  mutate(
+    median_prev = median(adult_bd_prevalence, na.rm = TRUE),
+    first_low_count_year_after_epi = min(year[year >= end_year & low_count], na.rm = TRUE),
+    first_low_count_year_after_epi = if_else(first_low_count_year_after_epi > end_year, first_low_count_year_after_epi - 1, first_low_count_year_after_epi),
+    first_low_count_year_after_epi = if_else(first_low_count_year_after_epi == Inf, end_year, first_low_count_year_after_epi)
+  ) %>%
   ungroup() %>%
   mutate(
     res_class = case_when(
-      is.na(start_year) & median_prev >= 0.5 ~ "post",
-      is.na(start_year) & median_prev < 0.5 ~ "naive",
-      year < start_year ~ "naive",
-      year >= start_year & year <= end_year ~ "epizootic",
-      year > start_year ~ "post"))
+      is.na(start_year) & median_prev >= 0.5 ~ "3-post",
+      is.na(start_year) & median_prev < 0.5 ~ "1-naive",
+      year < start_year ~ "1-naive",
+      year >= start_year & year <= first_low_count_year_after_epi ~ "2-epizootic",
+      year > start_year ~ "3-post"),
+    res_class_post = case_when(
+      res_class == "1-naive" ~ "1-naive",
+      res_class == "2-epizootic" ~ "2-epizootic",
+      res_class == "3-post" & (adult_count_visual >= 20 | adult_count_cmr >= 20) ~ "3b-recovering",
+      res_class == "3-post" & !(is.na(adult_count_visual) & is.na(adult_count_cmr)) ~ "3a-persisting",
+      .default = NA_character_
+    )) %>%
+  group_by(population) %>%
+  mutate(res_class_post = zoo::na.locf(res_class_post, na.rm = FALSE),
+         res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE)) %>%
+  ungroup()
 
-# epizootic: 1st time both
-#   a) positive Bd load > 10k (log load > 9.21)
-#   b) prevalence > 0.5
-#   c) ves & cmr 3 year average > before than after
-# then buffered by where only Bd load is > 10k
 ggplot(pop_year_class, aes(x = year)) +
   geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
   geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
@@ -654,16 +679,24 @@ ggplot(pop_year_class, aes(x = year)) +
   geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
   geom_tile(data = pop_year_class,
             aes(y = -0.5, fill = res_class), height = 0.6) +
+  geom_tile(data = pop_year_class,
+            aes(y = -1, fill = res_class_post), height = 0.6) +
   facet_wrap(population ~ .) +
-  geom_hline(yintercept = 0.8 * 10, linetype = "dashed", color = "green") +
-  geom_hline(yintercept = log(15000), linetype = "dashed", color = "blue") +
-  geom_hline(yintercept = log(10), linetype = "dashed", color = "orange") +
-  geom_hline(yintercept = log(30), linetype = "dashed", color = "purple") +
+  geom_hline(yintercept = 0.95 * 10, linetype = "dashed", color = "green") +
+  geom_hline(yintercept = log(24000), linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = log(20), linetype = "dashed", color = "orange") +
+  geom_hline(yintercept = log(60), linetype = "dashed", color = "purple") +
   scale_color_manual(values = c("VES" = "orange",
                                 "CMR" = "red",
                                 "Bd Prev" = "green",
                                 "Bd Load" = "blue")) +
-  labs(color = "Timeseries")
+  scale_fill_manual(values = c("1-naive" = "#0a0",
+                               "2-epizootic" = "#a00",
+                               "3-post" = "#00f",
+                               "3a-persisting" = "#00f",
+                               "3b-recovering" = "#0ff")) +  # Replace with your actual class color keys
+  labs(color = "Timeseries", fill = "Residency Class")
+
 
 
 ```
