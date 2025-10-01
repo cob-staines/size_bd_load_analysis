@@ -1,7 +1,7 @@
 ---
-title: "Size vs. Bd modeling: Panamá preliminary results"
+title: "Sierra Resilience Trajectory Classification for Size v. Bd Analysis"
 author: Cob Staines
-date: 2025-08-20
+date: 2025-10-01
 format:
   html:
     toc: true
@@ -10,7 +10,7 @@ bibliography: references.bib
 csl: ecology.csl
 ---
 
-## Setup
+# Setup
 ```{r}
 #| eval: true
 #| output: false
@@ -51,8 +51,14 @@ bd_sample = db_sample %>%
   filter(sample_type == "bd")
 ```
 
-# define functions
+## Define functions
+For fuzzy grouping and confidence interval calcs
 ```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show function definitions"
+
 # fuzzy grouping for identifying survey periods in time
 fuzzy_grouping = function(x, delta){
   # Make groups of x if differences are less than or equal to delta
@@ -140,31 +146,22 @@ normal_ci_upper = function(x, conf.level = 0.95) {
 
 ```
 
-## Methods
+# Methods
 
-### Data selection & classification
+## Data selection & classification
 
-0. Beginning with all Rana muscosa & Rana Sierrae data, grouped by population
-1. Filter out post-translocation data
-2. Population selection criteria:
-  a. minimum 15 swabbed subadult and adult
-  b. minimum 3 survey years
-3. Classify by:
-  a. Bd Naive: low (or no detected) Bd prevalence & load, high population
-  b. Epizootic: high Bd prevalence & load, followed by low population
-  c. Post-Epizootic: mid Bd prevalence & load
-    i. Persistant (low population)
-    ii. Recovering (high population)
-4. Review:
-  a. Yosemite all post-epizootic at start of swabbing, except for Galiston (Epizootic ~2020)
-  b. Compare with SEKI outbreak map fro agreement
-  c. R. muscosa -- is Mulki the only post-epizootic site? If so, skip this analysis for R muscosa
+1. Beginning with all Rana muscosa & Rana sierrae data, grouped by population
+2. Filter out post-translocation data
+3. Population selection criteria:
+
+  - minimum 15 swabbed subadult and adult (each)
+  - minimum 3 swab survey years
   
 ```{r}
 #| eval: true
 #| warning: false
 #| code-fold: true
-#| code-summary: "Show data collection code"
+#| code-summary: "Show data selection code"
 
 # identify populations
 bd_population = bd_sample %>%
@@ -225,6 +222,8 @@ bd_population_valid = bd_population %>%
   summarise(n_years = n_distinct(year),
             n_adult = sum(life_stage_simple == "adult"),
             n_subadult = sum(life_stage_simple == "subadult"),
+            first_year = min(year),
+            last_year = max(year),
             .groups = "drop") %>%
   filter(n_years >= 3,
          n_adult >= 15,
@@ -261,10 +260,22 @@ pop_year_tx = pop_year %>%
   left_join(first_release_events, by = c("population")) %>%
   arrange(population, year)
 
+(bd_population_valid)
+
 ```
 
-# Calculate adult abundance indicators
+## Calculate adult abundance indicators
+
+VES & CMR counts
+
+  - Aggregated to survey-period using rolling 7-day window within each population & year
+  - When multiple survey periods within a population-year, the greatest (max) count was used, identified independently for VES & CMR
+
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show adult abundance indicator code"
 # sites of interest
 site_oi = db_site %>%
   filter(site %in% bd_site_valid$site)
@@ -312,18 +323,6 @@ survey_oi = db_survey %>%
           date,
           survey_period)
 
-# # Survey periods of interest
-# 
-# Selection criteria when more than 1 survey period available for a given & year: Use survey with max count (independent for CMR and Visual)
-
-# adult frog abundance
-
-# ## visual
-# visual detection per survey period (1 survey per survey period)
-# 
-# ## cmr
-# cmr detection within survey period (across all surveys in survey period)
-
 # visual data pull
 data_visual = survey_oi %>%
   filter(detection_type == "visual") %>%
@@ -339,27 +338,30 @@ data_visual = survey_oi %>%
          comments_visit) %>%
   left_join(db_ves %>%
                filter(life_stage == "adult",
-                      visual_animal_state != "dead") %>%
+                      visual_animal_state != "dead",
+                      taxon_ves %in% c("rana_muscosa", "rana_sierrae")) %>%
                select(count_ves,
                       ves_id,
                       survey_id) %>%
                collect(), by = "survey_id") %>%
   mutate(count_ves = ifelse(is.na(count_ves), 0, count_ves))
 
-# visual abundance calc
+# visual abundance calc (select max)
 abundance_visual = data_visual %>%
   group_by(population,
            year,
-           date,
+           #date,
            survey_period
            ) %>%
-  rename(date_ves = date) %>%
-  summarise(adult_count_visual = sum(count_ves),
+  # rename(date_ves = date) %>%
+  summarise(date_start_ves = first(date),
+            ves_days = n_distinct(date),
+            adult_count_visual = sum(count_ves),
             .groups = "drop") %>%
   arrange(population, year, desc(adult_count_visual)) %>%
   group_by(population,
            year) %>%
-  slice_head(n = 1) %>%
+  slice_head(n = 1) %>% # select max count
   ungroup() %>%
   select(-survey_period)
 
@@ -378,7 +380,8 @@ data_cmr = survey_oi %>%
          comments_visit) %>%
   inner_join(db_capture %>%
                filter(life_stage == "adult",
-                      capture_animal_state != "dead") %>%
+                      capture_animal_state != "dead",
+                      taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
                select(cmr_id,
                       capture_id,
                       survey_id,
@@ -392,14 +395,14 @@ abundance_cmr = data_cmr %>%
   group_by(population,
            year,
            survey_period) %>%
-  summarise(date_cmr_first = first(date),
+  summarise(date_start_cmr = first(date),
             cmr_days = n_distinct(date),
             adult_count_cmr = n_distinct(cmr_id),
             .groups = "drop") %>%
   arrange(population, year, desc(adult_count_cmr)) %>%
   group_by(population,
            year) %>%
-  slice_head(n = 1) %>%
+  slice_head(n = 1) %>%  # select max count
   ungroup() %>%
   select(-survey_period)
 
@@ -411,11 +414,23 @@ abundance_stats = abundance_visual %>%
 pop_year_ab = pop_year_tx %>%
   left_join(abundance_stats, by = c("population", "year"))
 
+head(abundance_stats)
 ```
 
 
-# Calculate adult Bd stats
+## Calculate adult Bd metrics
+All adult swabs, grouped by population & year:
+
+  - adult swab count (n)
+  - Bd prevalence (w/ 95% confidence intervals)
+  - median Bd load (w/ 95% confidence intervals)
+  
 ```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show adult Bd metrics code"
+
 bd_stats = bd_capture_valid %>%
   filter(life_stage_simple == "adult") %>%
   inner_join(db_bd %>%
@@ -436,7 +451,6 @@ bd_stats = bd_capture_valid %>%
             adult_positive_bd_load_median = median(bd_mean_its1_copies_per_swab[bd_detected]),
             adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
             adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
-            adult_bd_load_mean = mean(bd_mean_its1_copies_per_swab),
             .groups = "drop")
 
 # join with pop_year_ab
@@ -444,173 +458,85 @@ pop_year_bd = pop_year_ab %>%
   left_join(bd_stats, by = c("population", "year")) %>%
   arrange(population, year)
 
+head(bd_stats)
+
 ```
 
-# visulaize to understand what kinds of patterns we want to ID
-# classification criteria
-```{r, fig.width=10, fig.height=10}
+## Resilience Trajectory Classification
+Resilience trajectories were classified at the population-year level using adult-only VES, CMR, Bd-Prevalence and Bd-load time series.
 
+**Identification of Epizootic events**
+
+Select 1st in time for each population:
+
+  - Start year:
+    - Bd prevalence >= 0.95 or...
+    - median Bd load >= 24000 [ITS1 copies]
+  - End year:
+    - VES & CMR < 20
+  - Event length 1 - 5 years
+  - Minimum 90% population drop over event: (Median post-event VES) / (Median pre-event VES) <= 0.1
+  
+**Resilience trajectory classification**
+
+For each population:
+
+  - When Epizootic event identified:
+    - before start year ~ "1-naive"
+    - start year to end year ~ "2-epizootic"
+    - after end year ~ "3-post-epizootic"
+  - When no Epizootic event found:
+    - median Bd prevalence across years < 0.5 ~ "1-naive"
+    - median Bd prevalence across years >= 0.5 ~ "3-post-epizootic"
+  - Post-epizootic was sub-classified as:
+    - VES and CMR < 20 ~ "3a-persisting"
+    - VES or CMR >= 20 ~ "3b-recovering"
+
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show classification code"
+
+# calculate swab counts
 pop_adult_swab_counts = pop_year_bd %>%
   group_by(population) %>%
   summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
 
-epi_class = pop_year_bd %>%
-  mutate(epi_prev = adult_bd_prevalence >= 0.7,
-         epi_load = adult_positive_bd_load_median >= 15000) %>%
-  group_by(population) %>%
-  arrange(year) %>%
-  mutate(
-         # Get next two adult_bd_prevalence values skipping NA
-         next1 = lead(adult_bd_prevalence, 1),
-         next2 = lead(adult_bd_prevalence, 2),
-         next3 = lead(adult_bd_prevalence, 3),
-         next4 = lead(adult_bd_prevalence, 4)) %>%
-  rowwise() %>%
-  mutate(transient = mean(c_across(c(next1, next2, next3, next4)), na.rm = TRUE) < 0.1) %>%
-  ungroup() %>%
+# claculate epizootic classification criteria
+epi_thresholds = pop_year_bd %>%
   arrange(population, year) %>%
-  mutate(epizootic = (epi_load | epi_prev) & !(transient %in% TRUE)) %>%
-  select(population, year, epizootic)
-
-epi_year = pop_year_bd %>%
-  left_join(epi_class, by = c("population", "year")) %>%
-  filter(epizootic) %>%
-  select(population, year) %>%
-  mutate(epi_potential = TRUE)
-
-first_epi_year = epi_year %>%
-  group_by(population) %>%
-  slice_head(n = 1) %>%
-  ungroup() %>%
-  select(population, year) %>%
-  rename(first_epi_year = year)
-
-first_bd_year = pop_year_bd %>%
-  filter(!is.na(adult_bd_prevalence)) %>%
-  group_by(population) %>%
-  slice_head(n = 1) %>%
-  ungroup() %>%
-  mutate(first_bd_ves_lt10 = adult_count_visual < 10) %>%
-  select(population, year, first_bd_ves_lt10) %>%
-  rename(first_bd_year = year)
-
-pop_year_class = pop_year_bd %>%
-  left_join(first_epi_year, by = c("population")) %>%
-  left_join(first_bd_year, by = c("population")) %>%
-  left_join(epi_year, by = c("population", "year")) %>%
-  mutate(
-    epi_potential = if_else(is.na(epi_potential), FALSE, epi_potential),
-    res_class = case_when(
-      (first_epi_year == first_bd_year) & first_bd_ves_lt10 ~ "post",
-      year < first_epi_year ~ "naive",
-      year == first_epi_year ~ "epizootic",
-      year > first_epi_year ~ "post",
-      .default = "naive")) %>%
-  mutate(last1 = lag(res_class, 1),
-         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
-  mutate(last1 = lag(res_class, 1),
-         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
-  mutate(last1 = lag(res_class, 1),
-         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class)) %>%
-  mutate(last1 = lag(res_class, 1),
-         res_class = if_else(epi_potential & last1 == "epizootic", "epizootic", res_class))
-
-# epizootic: 1st time both
-#   a) positive Bd load > 10k (log load > 9.21)
-#   b) prevalence > 0.5
-#   c) ves & cmr 3 year average > before than after
-# then buffered by where only Bd load is > 10k
-ggplot(pop_year_class, aes(x = year)) +
-  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
-  geom_tile(data = pop_year_class,
-            aes(y = -0.5, fill = res_class), height = 0.6) +
-  facet_wrap(population ~ .) +
-  geom_hline(yintercept = 0.7 * 10, linetype = "dashed", color = "green") +
-  geom_hline(yintercept = log(15000), linetype = "dashed", color = "blue") +
-  geom_hline(yintercept = log(10), linetype = "dashed", color = "orange") +
-  scale_color_manual(values = c("VES" = "orange",
-                                "CMR" = "red",
-                                "Bd Prev" = "green",
-                                "Bd Load" = "blue")) +
-  labs(color = "Timeseries")
-
-
-```
-
-# criteria 2
-```{r, fig.width=10, fig.height=10}
-
-pop_adult_swab_counts = pop_year_bd %>%
-  group_by(population) %>%
-  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
-
-# adult bd prevalence threshold: 0.8
-# adult median bd load threshold: 15000
-
-epi_class = pop_year_bd %>%
   mutate(epi_prev = adult_bd_prevalence >= 0.95,
-         epi_load = adult_positive_bd_load_median >= 24000) %>%
-  arrange(population, year) %>%
-  mutate(epizootic = (epi_load | epi_prev)) %>%
-  select(population, year, epizootic)
-
-epi_year = pop_year_bd %>%
-  left_join(epi_class, by = c("population", "year")) %>%
-  filter(epizootic) %>%
-  select(population, year) %>%
-  mutate(epi_potential = TRUE)
-
-first_epi_year = epi_year %>%
-  group_by(population) %>%
-  slice_head(n = 1) %>%
-  ungroup() %>%
-  select(population, year) %>%
-  rename(first_epi_year = year)
-
-first_bd_year = pop_year_bd %>%
-  filter(!is.na(adult_bd_prevalence)) %>%
-  group_by(population) %>%
-  slice_head(n = 1) %>%
-  ungroup() %>%
-  mutate(first_bd_ves_lt10 = adult_count_visual < 10) %>%
-  select(population, year, first_bd_ves_lt10) %>%
-  rename(first_bd_year = year)
-
-# define epi events as consecutive years over bd prevalence/load threshold
-## calculate ves drop as difference in median pre-and post-ves for each event
-## epizootic is first event where ves drop >= 30
-## if no epizootic identified: if median prevalence < 50 ~ naive, otherwise post
-
-epi_events = pop_year_bd %>%
-  left_join(epi_year, by = c("population", "year")) %>%
+         epi_load = adult_positive_bd_load_median >= 24000,
+         epi_thresh = (epi_load | epi_prev),
+         low_count_ves = adult_count_visual < 20,
+         low_count_cmr = adult_count_cmr < 20)%>%
+  rowwise() %>%
   mutate(
-    epi_potential = if_else(is.na(epi_potential) & !is.na(adult_bd_prevalence), FALSE, epi_potential),
-    not_false = is.na(epi_potential) | epi_potential == TRUE
+    low_count = all(low_count_ves, low_count_cmr, na.rm = TRUE),
+    low_count = if_else(is.na(adult_count_visual) & is.na(adult_count_cmr), NA, low_count)
   ) %>%
-  arrange(population, year) %>%
-  group_by(population) %>%
-  mutate(
-    run_id = {
-      rle_vals <- rle(epi_potential)
-      rep(seq_along(rle_vals$lengths), rle_vals$lengths)
-    }
-  ) %>%
-  filter(epi_potential) %>%
-  group_by(population, run_id) %>%
-  filter(any(epi_potential == TRUE, na.rm = TRUE)) %>%
-  summarise(
-    start_year = min(year),
-    end_year = max(year),
-    .groups = "drop"
-  ) %>%
+  ungroup()
+  
+# identify epizootic events
+epi_events = epi_thresholds %>%
+  # filter potential event starts to epi threshold years
+  filter(epi_thresh) %>%
+  select(population, year) %>%
+  rename(start_year = year) %>%
+  inner_join(epi_thresholds %>%
+               # finter potential event ends to low_count years
+               filter(low_count) %>%
+               select(population, year) %>%
+               rename(end_year = year), by = "population", relationship = "many-to-many") %>%
+  # event length 1-5 years (inclusive)
+  filter(start_year <= end_year,
+         start_year >= end_year - 5) %>%
+  group_by(population, start_year) %>%
+  # pick shortest event which meets above criteria
+  summarise(end_year = min(end_year),
+            .groups = "drop") %>%
   left_join(pop_year_bd %>%
               select(population,
                      year,
@@ -621,82 +547,99 @@ epi_events = pop_year_bd %>%
             .groups = "drop") %>%
   mutate(adult_ves_before = if_else(is.na(adult_ves_before), 0, adult_ves_before),
          adult_ves_after = if_else(is.na(adult_ves_after), 0, adult_ves_after),
-         adult_ves_drop = adult_ves_before - adult_ves_after) %>%
-  filter(adult_ves_drop >= 60,
-         adult_ves_after <= 200) %>%
+         adult_ves_drop_ratio = adult_ves_after / adult_ves_before,
+         epi_criteria = adult_ves_drop_ratio <= 0.1) %>%
+  # filter to minimum 90% population loss over event
+  filter(epi_criteria) %>%
+  # select 1st event which meets all above criteria
   arrange(population, start_year) %>%
   group_by(population) %>%
   slice_head(n = 1) %>%
   ungroup()
 
-pop_year_class = pop_year_bd %>%
-  left_join(first_epi_year, by = c("population")) %>%
-  left_join(first_bd_year, by = c("population")) %>%
+# bring together with timeseries and classify
+pop_year_class = epi_thresholds %>%
   left_join(epi_events, by = c("population")) %>%
-  rowwise() %>%
-  mutate(
-    low_count = all(c_across(c(adult_count_visual, adult_count_cmr)) < 20, na.rm = TRUE),
-    low_count = if_else(is.na(adult_count_visual) & is.na(adult_count_cmr), NA, low_count)
-  ) %>%
-  ungroup() %>%
   group_by(population) %>%
-  mutate(
-    median_prev = median(adult_bd_prevalence, na.rm = TRUE),
-    first_low_count_year_after_epi = min(year[year >= end_year & low_count], na.rm = TRUE),
-    first_low_count_year_after_epi = if_else(first_low_count_year_after_epi > end_year, first_low_count_year_after_epi - 1, first_low_count_year_after_epi),
-    first_low_count_year_after_epi = if_else(first_low_count_year_after_epi == Inf, end_year, first_low_count_year_after_epi)
-  ) %>%
+  mutate(median_prev = median(adult_bd_prevalence, na.rm = TRUE),
+         low_count_f = zoo::na.locf(low_count, na.rm = FALSE)) %>%
   ungroup() %>%
   mutate(
     res_class = case_when(
       is.na(start_year) & median_prev >= 0.5 ~ "3-post",
       is.na(start_year) & median_prev < 0.5 ~ "1-naive",
       year < start_year ~ "1-naive",
-      year >= start_year & year <= first_low_count_year_after_epi ~ "2-epizootic",
-      year > start_year ~ "3-post"),
+      year >= start_year & year <= end_year ~ "2-epizootic",
+      year > end_year ~ "3-post"),
     res_class_post = case_when(
       res_class == "1-naive" ~ "1-naive",
       res_class == "2-epizootic" ~ "2-epizootic",
-      res_class == "3-post" & (adult_count_visual >= 20 | adult_count_cmr >= 20) ~ "3b-recovering",
-      res_class == "3-post" & !(is.na(adult_count_visual) & is.na(adult_count_cmr)) ~ "3a-persisting",
+      res_class == "3-post" & !low_count_f ~ "3b-recovering",
+      res_class == "3-post" & low_count_f ~ "3a-persisting",
       .default = NA_character_
     )) %>%
   group_by(population) %>%
-  mutate(res_class_post = zoo::na.locf(res_class_post, na.rm = FALSE),
-         res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE)) %>%
+  mutate(res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE)) %>%
   ungroup()
 
+head(pop_year_class)
+
+```
+
+# Visualization of Classification
+
+Interpreting plot:
+
+  - VES, CMR, & Bd Load on log-scale
+  - Bd Prevalence scaled by factor of 10x
+  - Horizontal lines indicate thresholds for selection criteria
+    - green: threshold for Bd prevalence (0.95)
+    - blue: threshold for Bd load (24000)
+    - orange: VES & CMR threshold of 20
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show visualization code"
+#| fig-height: 10
+#| fig-width: 10
+
 ggplot(pop_year_class, aes(x = year)) +
-  geom_point(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_line(aes(y = log(adult_count_visual + 1), color = "VES")) +
-  geom_point(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_line(aes(y = log(adult_count_cmr + 1), color = "CMR")) +
-  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev")) +
-  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "Bd Load")) +
-  geom_point(data = epi_events, aes(x = start_year, y = log(1 + adult_ves_drop)), color = "purple") +
-  geom_text(data = pop_adult_swab_counts, x = 2015, y = 15, aes(label = adult_swab_n)) +
+  geom_point(aes(y = log(adult_count_visual + 1), color = "log(VES + 1)")) +
+  geom_line(aes(y = log(adult_count_visual + 1), color = "log(VES + 1)")) +
+  geom_point(aes(y = log(adult_count_cmr + 1), color = "log(CMR + 1)")) +
+  geom_line(aes(y = log(adult_count_cmr + 1), color = "log(CMR + 1)")) +
+  geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev (x10)")) +
+  geom_line(aes(y = adult_bd_prevalence * 10, color = "Bd Prev (x10)")) +
+  geom_point(aes(y = log(adult_positive_bd_load_median + 1), color = "log(Bd Load + 1)")) +
+  geom_line(aes(y = log(adult_positive_bd_load_median + 1), color = "log(Bd Load + 1)")) +
+  geom_text(data = pop_adult_swab_counts, x = 2009, y = 15, size = 3, aes(label = paste0(adult_swab_n, " swabs"))) +
   geom_tile(data = pop_year_class,
-            aes(y = -0.5, fill = res_class), height = 0.6) +
-  geom_tile(data = pop_year_class,
-            aes(y = -1, fill = res_class_post), height = 0.6) +
+            aes(y = -1, fill = res_class_post), height = 1) +
   facet_wrap(population ~ .) +
   geom_hline(yintercept = 0.95 * 10, linetype = "dashed", color = "green") +
   geom_hline(yintercept = log(24000), linetype = "dashed", color = "blue") +
   geom_hline(yintercept = log(20), linetype = "dashed", color = "orange") +
-  geom_hline(yintercept = log(60), linetype = "dashed", color = "purple") +
-  scale_color_manual(values = c("VES" = "orange",
-                                "CMR" = "red",
-                                "Bd Prev" = "green",
-                                "Bd Load" = "blue")) +
-  scale_fill_manual(values = c("1-naive" = "#0a0",
-                               "2-epizootic" = "#a00",
-                               "3-post" = "#00f",
-                               "3a-persisting" = "#00f",
-                               "3b-recovering" = "#0ff")) +  # Replace with your actual class color keys
-  labs(color = "Timeseries", fill = "Residency Class")
-
-
-
+  scale_color_manual(values = c("log(VES + 1)" = "orange",
+                                "log(CMR + 1)" = "red",
+                                "Bd Prev (x10)" = "green",
+                                "log(Bd Load + 1)" = "blue")) +
+  scale_fill_manual(values = c("1-naive" = "#a5f",
+                               "2-epizootic" = "#f5a",
+                               "3a-persisting" = "#5af",
+                               "3b-recovering" = "#5fa")) +  # Replace with your actual class color keys
+  labs(color = "Timeseries", fill = "Resillience class") +
+  ggtitle("Time series and resillience trajectory classification (from adults only)")
 ```
+
+# Discussion & Next Steps
+
+  - Review population/year classifications for agreement with site history and/or issues
+    - Expect: all Yosemite post-epizootic at start of swabbing, except for Galiston (Epizootic ~2020)
+    - Compare with SEKI outbreak map
+  - Consider refining persisting/recovering criteria to include hysteresis or lag
+    - Is it ok for a site to be transiently "recovering" between periods of persisting? How many seasons of evidence needed?
+  - Consider which classes to use for Rana muscosa analysis ("persisting" & "recovering", or simple "post-epizootic")
+    - R. muscosa -- is Mulky the site with post-epizootic swab data?
+  - Model Bd with life stage across resilience trajectory classes, for Rana sierrae & Rana muscosa
