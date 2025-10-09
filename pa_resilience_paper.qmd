@@ -1,32 +1,16 @@
 ---
-title: "Size vs. Bd modeling: Panamá preliminary results"
+title: "Panama Resilience Paper"
 author: Cob Staines
-date: 2025-09-29
+date: 2025-10-09
 format:
   html:
     toc: true
 df-print: kable
-bibliography: references.bib
-csl: ecology.csl
 ---
-# Introduction
+# Objective
 
-## Motivation
+Illustrate differences in Bd prevalence and load across Panamanian species.
 
-Patterns of greater Bd load in recently metamorphosed individuals have been documented in some cases[@adams_chytridiomycosis-induced_2020] [@humphries_immune_2022] [@humphries_chytridiomycosis_2024] [@humphries_chytridiomycosis_2025] (and the opposite pattern in others[@bradley_host_2019]), with possible implications for:
-
-  - population dynamics (Q2)
-  - assessing Bd resistance/tolerance mechanisms (Q3)
-  - resilience trajectory assessment (Q1)
-
-... with the goal of complementing ongoing RIBBiTR research efforts
-
-## Working hypotheses:
-
-  a. Younger, more-recently-metamorphosed individuals are more susceptible to infection with Bd than older individuals across species
-  b. Younger, more-recently-metamorphosed individuals are more likely to carry higher Bd loads than older individuals across species
-
-# Methods
 ## Setup
 
 ```{r}
@@ -61,20 +45,15 @@ bd_sample = db_sample %>%
   filter(sample_type == "bd")
 ```
 ## Data selection
-### Classifying by life stage
-These analysis were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" with a threshold snout-vent-length (SVL [mm]), identified independently for each species from the literature (see data collection code for specific thresholds used and their sources).
 
-### Classification by season
-The data were also classified into two seasons:
+### Classification by season (maybe, maybe not)
+The data were classified into two seasons:
 
   - **Lluvia (wet)**: May - August
   - **Seca (dry)**: October - January
   
-### Classification by population
-"Populations" were defined at the region level within Panamá.
-  
 ### Species selection criteria:
-Species were were included for a given season if at least 14 adult AND subadult each were present for that species and season. *Atelopus varius* was also included in the analysis despite not meeting this criteria, in the interest of discussing the applicability of what we learn from more "data-rich" species to conservation focused on "data-poor" species such as *A. varius*.
+Species were were included if at least 30 individuals with Bd swabs were present for that species.
 
 
 ```{r}
@@ -149,13 +128,11 @@ bd_species_valid = bd_population %>%
   filter(!is.na(taxon_capture),
          !is.na(season),
          !is.na(life_stage_simple)) %>%
-  group_by(taxon_capture, season, life_stage_simple) %>%
+  group_by(taxon_capture) %>%
   summarise(count = n(),
-            count_gte_14 = n() >= 14,
             .groups = "drop") %>%
-  group_by(taxon_capture, season) %>%
-  filter(sum(as.integer(count_gte_14)) == 2 | (taxon_capture == "atelopus_varius" & season == "lluvia")) %>%
-  ungroup() %>%
+  filter(count >= 30) %>%
+  arrange(desc(count)) %>%
   collect()
 
 # identify valid samples
@@ -166,9 +143,7 @@ bd_sample_valid = bd_population %>%
                              c(10, 11, 12, 1) ~ "seca",
                              .default = NA_character_)) %>%
   inner_join(bd_species_valid %>%
-               select("taxon_capture",
-                      "season",
-                      "life_stage_simple"), by = c("taxon_capture", "season", "life_stage_simple"), copy = TRUE) %>%
+               select("taxon_capture"), by = c("taxon_capture"), copy = TRUE) %>%
   inner_join(db_bd %>%
               filter(!is.na(detected)) %>%
               group_by(sample_id) %>%
@@ -229,17 +204,6 @@ bd_model = bd_sample_valid %>%
 head(bd_model)
 ```
 
-```{r}
-#| eval: false
-#| include: false
-avar = bd_model %>%
-  filter(taxon_capture == "atelopus_varius") %>%
-  arrange(population, site, date)
-
-# write_csv(avar, "size_bd_a_varius.csv")
-
-```
-
 ## Descriptive stats of data
 ```{r}
 #| eval: true
@@ -261,6 +225,184 @@ avar = bd_model %>%
             .groups = "drop") %>%
   arrange(country,
           taxon_capture))
+
+```
+# Process data
+```{r}
+get_species_name = function(taxon) {
+  species_name = str_to_sentence(gsub("_", " ", taxon))
+}
+
+wilson_ci = function(p_hat, n, conf.level = 0.95) {
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[2])
+}
+
+sample_stats = function(obs) {
+  obs %>%
+    group_by(taxon_capture) %>%
+    summarise(n = n(),
+              n_pos = sum(bd_load > 0),
+              bd_prevalence = sum(bd_load > 0) / n(),
+              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+              min_log_load_inf = min(log_bd_load[bd_load > 0]),
+              q_25_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.25),
+              q_50_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.50),
+              q_75_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.75),
+              max_log_load_inf = max(log_bd_load[bd_load > 0]),
+              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+              .groups = "drop")
+}
+
+
+obs_stats_all = sample_stats(bd_model) %>%
+  mutate(taxon_capture = get_species_name(taxon_capt))
+
+ccdf_zeros = obs_stats_all %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  mutate(log_bd_load = 20,
+         ccdf = 0)
+
+ccdf_all = bd_model %>%
+  mutate(taxon_capture = get_species_name(taxon_capture),
+         density = 1) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(n = n(),
+         p = cumsum(density)) %>%
+  ungroup() %>%
+  group_by(taxon_capture, bd_detected)
+
+ccdf_extended <- ccdf_all %>%
+  filter(!(bd_detected == FALSE) | row_number() == 1) %>%
+  ungroup() %>%
+  mutate(p = if_else(log_bd_load == -Inf, p - 1, p),
+         log_bd_load = if_else(log_bd_load == -Inf, log(0.3), log_bd_load),
+         ccdf = p / n) %>%
+  bind_rows(ccdf_zeros) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(
+    ksmooth_result = list(ksmooth(x = log_bd_load,
+                                  y = ccdf,
+                                  x.points = log_bd_load,
+                                  kernel = "normal",
+                                  bandwidth = 1)),
+    ccdf_x = ksmooth_result[[1]]$x,
+    ccdf_y = ksmooth_result[[1]]$y
+  ) %>%
+  ungroup() %>%
+  select(-ksmooth_result)
+  
+```
+
+
+# Visualize data
+```{r}
+#| fig-width: 12
+#| fig-height: 6
+
+plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture, color = taxon_capture)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  geom_text(aes(label = paste0("n=", n),  color = taxon_capture, y = 1),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(legend.position = "none")
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev.png"),
+       plot = plot_prev,
+       height = 6,
+       width = 12)
+
+
+plot_load = ggplot(bd_model %>%
+         mutate(taxon_capture = get_species_name(taxon_capture)) %>%
+         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture, color = taxon_capture)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Season") +
+  ylab("log(Bd load) [-]") +
+  geom_text(
+    data = obs_stats_all,
+    aes(
+      x = taxon_capture,
+      y = max(bd_model$log_bd_load) * 1.05,
+      label = paste0("n=", n_pos)
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.3), 20) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(legend.position = "none")
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load.png"),
+       plot = plot_load,
+       height = 6,
+       width = 12)
+
+# ggplot(ccdf_all, aes(x = log_bd_load,
+#                      color = taxon_capture)) +
+#   geom_density() +
+#   theme_minimal() +
+#   ggtitle("Modeled CCDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Complementary cumulative density (1 - CDF) [-]") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0))
+
+
+plot_ccdf = ggplot(ccdf_extended, aes(x = ccdf_x,
+                          y = ccdf_y,
+                          color = taxon_capture)) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled CCDF of Bd-positive load") +
+  labs(color = "Species",
+       fill = "Species") +
+  xlab("log(Bd load) [-]") +
+  ylab("Complementary cumulative density (1 - CDF) [-]") +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+  ylim(0, 1)
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth.png"),
+       plot = plot_ccdf,
+       height = 6,
+       width = 12)
+
+plot_prev
+plot_load
+plot_ccdf
 
 ```
 
@@ -396,6 +538,7 @@ model_report = function(model_m){
   pp_check(model_m) +
     scale_x_log10()
 }
+
 get_species_name = function(taxon) {
   species_name = str_to_sentence(gsub("_", " ", taxon))
 }
