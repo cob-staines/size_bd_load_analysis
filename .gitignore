@@ -9,4 +9,6 @@ papers/
 *.html
 *.zip
 *.png
+*.txt
+*.csv
 *_files/
