@@ -164,10 +164,12 @@ bd_sample_valid = bd_population %>%
          svl_mm,
          body_mass_g,
          sex,
+         observers_survey,
          survey_id,
          start_timestamp_utc,
          date,
          season,
+         transect,
          site,
          site_id,
          geographic_area,
@@ -175,8 +177,10 @@ bd_sample_valid = bd_population %>%
          tax_pop,
          region,
          country) %>%
-  collect() %>%
-  filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
+  collect()
+
+peace = bd_sample_valid %>%
+  filter(site == "rana_dorada")
          
 # final data selection and cleaning for model
 bd_model = bd_sample_valid %>%
@@ -189,6 +193,7 @@ bd_model = bd_sample_valid %>%
          log_bd_load,
          bd_detected,
          svl_mm,
+         transect,
          site,
          population,
          taxon_capture,
@@ -202,6 +207,14 @@ bd_model = bd_sample_valid %>%
          country)
 
 head(bd_model)
+
+peace = bd_sample %>%
+  filter(taxon_capture == "dendrobates_auratus") %>%
+  select(site,
+         date,
+         taxon_capture,
+         sample_name) %>%
+  collect()
 ```
 
 ## Descriptive stats of data
@@ -225,6 +238,46 @@ head(bd_model)
             .groups = "drop") %>%
   arrange(country,
           taxon_capture))
+
+# descriptive stats
+data_stats = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(site, taxon_capture, year) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  write_csv("panama_grid_site_year_species.csv")
+
+data_grid_site_year = bd_model%>%
+  mutate(year = year(date)) %>%
+  group_by(site, year) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(year, site) %>%
+  pivot_wider(names_from = "year",
+              values_from = "n_bd_swabs") %>%
+  arrange(site) %>%
+  write_csv("panama_grid_site_year.csv")
+
+data_grid_site_species = bd_model%>%
+  mutate(year = year(date)) %>%
+  group_by(site, taxon_capture) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(taxon_capture, site) %>%
+  pivot_wider(names_from = "taxon_capture",
+              values_from = "n_bd_swabs")
+
+data_grid_species_year = bd_model%>%
+  mutate(year = year(date)) %>%
+  group_by(year, taxon_capture) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(taxon_capture, year) %>%
+  pivot_wider(names_from = "year",
+              values_from = "n_bd_swabs") %>%
+  write_csv("panama_grid_species_year.csv")
+
+
 
 ```
 # Process data
