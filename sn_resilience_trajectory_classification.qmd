@@ -184,7 +184,8 @@ release_events = db_hist %>%
   left_join(db_site, by = "site_id") %>%
   left_join(db_region, by = "region_id") %>%
   filter(region == "california",
-         treatment_type %in% c("translocation_release", "reintroduction_release")) %>%
+         # treatment_type %in% c("translocation_release", "reintroduction_release", "treatment_antifungal", "treatment_antifungal_microbiome")) %>%
+                  treatment_type %in% c("translocation_release", "reintroduction_release")) %>%
   collect() %>%
   left_join(data_pop, by = "site") %>%
   mutate(year = year(treatment_date),
@@ -579,7 +580,9 @@ pop_year_class = epi_thresholds %>%
       .default = NA_character_
     )) %>%
   group_by(population) %>%
-  mutate(res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE)) %>%
+  mutate(res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE),
+         # res_class_post = if_else(is.na(adult_swab_n), NA, res_class_post)
+         ) %>%
   ungroup()
 
 head(pop_year_class)
@@ -618,17 +621,17 @@ ggplot(pop_year_class, aes(x = year)) +
   geom_tile(data = pop_year_class,
             aes(y = -1, fill = res_class_post), height = 1) +
   facet_wrap(population ~ .) +
-  geom_hline(yintercept = 0.95 * 10, linetype = "dashed", color = "green") +
-  geom_hline(yintercept = log(24000), linetype = "dashed", color = "blue") +
-  geom_hline(yintercept = log(20), linetype = "dashed", color = "orange") +
-  scale_color_manual(values = c("log(VES + 1)" = "orange",
-                                "log(CMR + 1)" = "red",
-                                "Bd Prev (x10)" = "green",
-                                "log(Bd Load + 1)" = "blue")) +
-  scale_fill_manual(values = c("1-naive" = "#a5f",
-                               "2-epizootic" = "#f5a",
-                               "3a-persisting" = "#5af",
-                               "3b-recovering" = "#5fa")) +  # Replace with your actual class color keys
+  geom_hline(yintercept = 0.95 * 10, linetype = "dashed", color = "#dd217d") +
+  geom_hline(yintercept = log(24000), linetype = "dashed", color = "#5b8efd") +
+  geom_hline(yintercept = log(20), linetype = "dashed", color = "#ffb00d") +
+  scale_color_manual(values = c("log(VES + 1)" = "#ffb00d",
+                                "log(CMR + 1)" = "#ff5f00",
+                                "Bd Prev (x10)" = "#dd217d",
+                                "log(Bd Load + 1)" = "#5b8efd")) +
+  scale_fill_manual(values = c("1-naive" = "#c3a4cf",
+                               "2-epizootic" = "#742881",
+                               "3a-persisting" = "#1b7939",
+                               "3b-recovering" = "#add4a0")) + 
   labs(color = "Timeseries", fill = "Resillience class") +
   ggtitle("Time series and resillience trajectory classification (from adults only)")
 ```
