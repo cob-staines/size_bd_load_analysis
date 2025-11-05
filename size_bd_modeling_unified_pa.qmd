@@ -436,7 +436,7 @@ collect_draws = function(m_spec){
   
   expr_list = set_names(param_grid$expr, param_grid$param_name)
   
-  m_spread = peace = m_spec %>%
+  m_spread = m_spec %>%
     spread_draws(`b_.*`, regex = TRUE)
   colnames(m_spread) = gsub(":", "__", colnames(m_spread))
   
