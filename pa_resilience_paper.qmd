@@ -20,7 +20,7 @@ Illustrate differences in Bd prevalence and load across Panamanian species.
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, emmeans)
 
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -117,17 +117,27 @@ bd_population = bd_sample %>%
            .default = NA_character_
          ))
 
+drop_sites = c("alleman",
+               "el_valle_hotel",
+               "farallon",
+               "gamboa",
+               "juan_lana",
+               "rana_dorada",
+               "sora")
 
 # identify valid species & seasons
 bd_species_valid = bd_population %>%
-  mutate(month = month(date),
+  mutate(year = year(date),
+         month = month(date),
          season = case_match(month,
                              c(5, 6, 7, 8) ~ "lluvia",
                              c(10, 11, 12, 1) ~ "seca",
                              .default = NA_character_)) %>%
   filter(!is.na(taxon_capture),
-         !is.na(season),
-         !is.na(life_stage_simple)) %>%
+         # !is.na(season),
+         !is.na(life_stage_simple),
+         !(site %in% drop_sites),
+         year != 2017) %>%
   group_by(taxon_capture) %>%
   summarise(count = n(),
             .groups = "drop") %>%
@@ -135,15 +145,21 @@ bd_species_valid = bd_population %>%
   arrange(desc(count)) %>%
   collect()
 
+
+
 # identify valid samples
 bd_sample_valid = bd_population %>%
-  mutate(month = month(date),
+  mutate(year = year(date),
+         month = month(date),
          season = case_match(month,
                              c(5, 6, 7, 8) ~ "lluvia",
                              c(10, 11, 12, 1) ~ "seca",
                              .default = NA_character_)) %>%
   inner_join(bd_species_valid %>%
                select("taxon_capture"), by = c("taxon_capture"), copy = TRUE) %>%
+  filter(!is.na(life_stage_simple),
+         !(site %in% drop_sites),
+         year != 2017) %>%
   inner_join(db_bd %>%
               filter(!is.na(detected)) %>%
               group_by(sample_id) %>%
@@ -179,18 +195,19 @@ bd_sample_valid = bd_population %>%
          country) %>%
   collect()
 
-peace = bd_sample_valid %>%
-  filter(site == "rana_dorada")
-         
 # final data selection and cleaning for model
 bd_model = bd_sample_valid %>%
   filter(!is.na(bd_its1_copies_per_swab),
          !is.na(svl_mm)) %>%
   rename(bd_load = bd_its1_copies_per_swab,
          bd_detected = detected) %>%
-  mutate(log_bd_load = log(bd_load)) %>%
+  mutate(log_bd_load = log(bd_load),
+         bd_positive_load = if_else(bd_load > 0, bd_load, NA),
+         log_bd_positive_load = log(bd_positive_load)) %>%
   select(bd_load,
          log_bd_load,
+         bd_positive_load,
+         log_bd_positive_load,
          bd_detected,
          svl_mm,
          transect,
@@ -207,14 +224,6 @@ bd_model = bd_sample_valid %>%
          country)
 
 head(bd_model)
-
-peace = bd_sample %>%
-  filter(taxon_capture == "dendrobates_auratus") %>%
-  select(site,
-         date,
-         taxon_capture,
-         sample_name) %>%
-  collect()
 ```
 
 ## Descriptive stats of data
@@ -244,8 +253,11 @@ data_stats = bd_model %>%
   mutate(year = year(date)) %>%
   group_by(site, taxon_capture, year) %>%
   summarise(n_bd_swabs = n(),
-            .groups = "drop") %>%
-  write_csv("panama_grid_site_year_species.csv")
+            .groups = "drop")
+
+data_stats_species = bd_model %>%
+  group_by(taxon_capture) %>%
+  count()
 
 data_grid_site_year = bd_model%>%
   mutate(year = year(date)) %>%
@@ -255,8 +267,7 @@ data_grid_site_year = bd_model%>%
   arrange(year, site) %>%
   pivot_wider(names_from = "year",
               values_from = "n_bd_swabs") %>%
-  arrange(site) %>%
-  write_csv("panama_grid_site_year.csv")
+  arrange(site)
 
 data_grid_site_species = bd_model%>%
   mutate(year = year(date)) %>%
@@ -274,8 +285,7 @@ data_grid_species_year = bd_model%>%
             .groups = "drop") %>%
   arrange(taxon_capture, year) %>%
   pivot_wider(names_from = "year",
-              values_from = "n_bd_swabs") %>%
-  write_csv("panama_grid_species_year.csv")
+              values_from = "n_bd_swabs")
 
 
 
@@ -446,3 +456,292 @@ plot_load
 plot_ccdf
 
 ```
+
+# statistical modeling
+## Bd prevalence
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+brm_prev = brm(
+  formula = bd_detected ~ taxon_capture,
+  family  = bernoulli(link = "logit"),
+  data    = bd_model,
+  chains  = 4, cores = 4, iter = 4000,
+  seed    = 42
+)
+
+summary(brm_prev)
+
+brm_prev_null = brm(
+  bd_detected ~ 1,
+  family = bernoulli(),
+  data = bd_model
+)
+
+bf_prev = bayes_factor(brm_prev, brm_prev_null)
+
+dput(get_variables(brm_prev))
+
+prev_draws = brm_prev %>%
+  spread_draws(
+    b_Intercept,
+    b_taxon_capturecolostethus_panamansis,
+    b_taxon_capturecraugastor_crassidigitus, 
+    b_taxon_capturecraugastor_fitzingeri,
+    b_taxon_capturedendrobates_auratus, 
+    b_taxon_captureespadarana_prosoblepon,
+    b_taxon_capturelithobates_warszewitschii, 
+    b_taxon_capturepristimantis_ridens,
+    b_taxon_capturerhaebo_haematiticus, 
+    b_taxon_capturerhinella_marina,
+    b_taxon_capturesachatamia_albomaculata, 
+    b_taxon_capturesilverstoneia_flotator,
+    b_taxon_capturesilverstoneia_nubicola, 
+    b_taxon_capturesmilisca_sila) %>%
+  mutate(b_taxon_captureatelopus_varius = 0) %>%
+  pivot_longer(c("b_taxon_captureatelopus_varius",
+                 "b_taxon_capturecolostethus_panamansis",
+                 "b_taxon_capturecraugastor_crassidigitus", 
+                 "b_taxon_capturecraugastor_fitzingeri",
+                 "b_taxon_capturedendrobates_auratus", 
+                 "b_taxon_captureespadarana_prosoblepon",
+                 "b_taxon_capturelithobates_warszewitschii", 
+                 "b_taxon_capturepristimantis_ridens",
+                 "b_taxon_capturerhaebo_haematiticus", 
+                 "b_taxon_capturerhinella_marina",
+                 "b_taxon_capturesachatamia_albomaculata", 
+                 "b_taxon_capturesilverstoneia_flotator",
+                 "b_taxon_capturesilverstoneia_nubicola", 
+                 "b_taxon_capturesmilisca_sila"),
+               names_to = "param",
+               values_to = "taxon_intercept") %>%
+  mutate(full_intercept = b_Intercept + taxon_intercept,
+         bd_prevalence = plogis(full_intercept),
+         taxon_capture = gsub("b_taxon_capture", "", param))
+
+emm_prev = emmeans(brm_prev, ~ taxon_capture, type = "response")
+emm_prev
+
+pairwise_comparison = pairs(emm_prev, adjust = "tukey")
+pairwise_comparison
+
+emm_df = as.data.frame(emm_prev)
+
+# Region of practical equivalence
+f_rope = function(draws, col, taxon_a, taxon_b, epsilon, factor=1) {
+  
+  p_a = draws %>%
+    filter(taxon_capture == taxon_a) %>%
+    pull(.data[[col]]) %>%
+    rep(times = factor) %>%
+    sample()
+  
+  p_b = draws %>%
+    filter(taxon_capture == taxon_b) %>%
+    pull(.data[[col]]) %>%
+    rep(times = factor) %>%
+    sample()
+    
+    rope = mean(abs(p_a - p_b) < epsilon)
+    
+    return(rope)
+}
+
+
+taxon_list = bd_model %>%
+             select(taxon_capture) %>%
+             distinct
+
+prev_rope_df = cross_join(taxon_list, taxon_list) %>%
+  rename(taxon_a = taxon_capture.x,
+         taxon_b = taxon_capture.y) %>%
+  mutate(rope_05 = map2_dbl(taxon_a,
+                            taxon_b,
+                            ~ f_rope(prev_draws, "bd_prevalence", .x, .y, epsilon = 0.05, factor = 5)),
+         rope_05_05 = rope_05 < 0.05
+  )
+  
+
+# visualization
+
+# draws
+ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) +
+  geom_boxplot() +
+  labs(y = "Estimated prevalence (model draws)",
+       x = "Taxon",
+       title = "Posterior prevalence per taxon (modeled)") +
+  ylim(0, 1) +
+  theme_minimal() +
+  coord_flip()
+
+# emmeans
+ggplot(emm_df, aes(x = taxon_capture, y = response, ymin = lower.HPD, ymax = upper.HPD)) +
+  geom_pointrange() +
+  labs(y = "Estimated prevalence (posterior mean)",
+       x = "Taxon",
+       title = "Posterior prevalence per taxon (modeled)") +
+  ylim(0,1) +
+  coord_flip() +
+  theme_minimal()
+
+# rope %>%
+ggplot(rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05_05)) +
+  geom_tile(color = "black") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+## Bd load
+```{r}
+#baysian model
+brm_load = brm(
+  formula = log_bd_positive_load ~ taxon_capture,
+  family = gaussian(),
+  data = bd_model,
+  chains = 4, cores = 4,
+  iter = 4000,
+  seed = 42
+)
+
+summary(brm_load)
+
+brm_load_null = brm(
+  log_bd_positive_load ~ 1,
+  family = gaussian(),
+  data = bd_model
+)
+
+bf_load = bayes_factor(brm_load, brm_load_null)
+
+dput(get_variables(brm_load))
+
+load_draws = brm_load %>%
+  spread_draws(
+    b_Intercept,
+    b_taxon_capturecolostethus_panamansis,
+    b_taxon_capturecraugastor_crassidigitus, 
+    b_taxon_capturecraugastor_fitzingeri,
+    b_taxon_capturedendrobates_auratus, 
+    b_taxon_captureespadarana_prosoblepon,
+    b_taxon_capturelithobates_warszewitschii, 
+    b_taxon_capturepristimantis_ridens,
+    b_taxon_capturerhaebo_haematiticus, 
+    b_taxon_capturerhinella_marina,
+    b_taxon_capturesachatamia_albomaculata, 
+    b_taxon_capturesilverstoneia_flotator,
+    b_taxon_capturesilverstoneia_nubicola, 
+    b_taxon_capturesmilisca_sila) %>%
+  mutate(b_taxon_captureatelopus_varius = 0) %>%
+  pivot_longer(c("b_taxon_captureatelopus_varius",
+                 "b_taxon_capturecolostethus_panamansis",
+                 "b_taxon_capturecraugastor_crassidigitus", 
+                 "b_taxon_capturecraugastor_fitzingeri",
+                 "b_taxon_capturedendrobates_auratus", 
+                 "b_taxon_captureespadarana_prosoblepon",
+                 "b_taxon_capturelithobates_warszewitschii", 
+                 "b_taxon_capturepristimantis_ridens",
+                 "b_taxon_capturerhaebo_haematiticus", 
+                 "b_taxon_capturerhinella_marina",
+                 "b_taxon_capturesachatamia_albomaculata", 
+                 "b_taxon_capturesilverstoneia_flotator",
+                 "b_taxon_capturesilverstoneia_nubicola", 
+                 "b_taxon_capturesmilisca_sila"),
+               names_to = "param",
+               values_to = "taxon_intercept") %>%
+  mutate(bd_log_load = b_Intercept + taxon_intercept,
+         taxon_capture = gsub("b_taxon_capture", "", param))
+
+# emmeans
+emm_load = emmeans(brm_load, ~ taxon_capture, type = "response")
+emm_load
+
+pairwise_comparison_load = pairs(emm_load, adjust = "tukey")
+pairwise_comparison_load
+
+emm_load_df = as.data.frame(emm_load)
+
+# Region of practical equivalence
+
+taxon_list = bd_model %>%
+             select(taxon_capture) %>%
+             distinct
+
+load_rope_df = cross_join(taxon_list, taxon_list) %>%
+  rename(taxon_a = taxon_capture.x,
+         taxon_b = taxon_capture.y) %>%
+  mutate(rope_05 = map2_dbl(taxon_a,
+                            taxon_b,
+                            ~ f_rope(load_draws, "bd_log_load", .x, .y, epsilon = 0.05, factor = 5)),
+         rope_05_05 = rope_05 < 0.05
+  )
+
+# visualization
+
+# draws
+ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
+  geom_boxplot() +
+  labs(y = "Estimated log(Bd load) (model draws)",
+       x = "Taxon",
+       title = "Posterior Bd-positive load per taxon (modeled)") +
+  theme_minimal() +
+  ylim(0, 15) +
+  coord_flip()
+
+# emmeans
+ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lower.HPD, ymax = upper.HPD)) +
+  geom_pointrange() +
+  labs(y = "Estimated log(Bd load) (posterior mean)",
+       x = "Taxon",
+       title = "Posterior Bd-positive load per taxon (modeled)") +
+  coord_flip() +
+  ylim(0, 15) +
+  theme_minimal()
+
+# rope %>%
+ggplot(load_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05_05)) +
+  geom_tile(color = "black") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+# anova for bd log loads
+load_model = aov(log_bd_positive_load ~ taxon_capture,
+                   data = bd_model)
+
+summary(load_model)
+
+load_tuk = TukeyHSD(load_model)
+load_tuk
+
+plot(load_tuk, las = 2)
+
+tuk_df = as.data.frame(load_tuk$taxon_capture)
+tuk_df$comparison = rownames(tuk_df)
+
+tuk_a = tuk_df %>%
+  rename(p_adj = `p adj`) %>%
+  separate(col = comparison, into = c("taxon_a", "taxon_b"), sep = "-") %>%
+  mutate(diff_abs = abs(diff),
+         significant = p_adj < 0.05,
+         p_adj_txt = if_else(significant, as.character(round(p_adj, digits = 4)), NA),
+         p_adj_txt = if_else(p_adj < 0.001, "<0.001", p_adj_txt),
+         sig_txt = case_when(
+           p_adj < 0.001 ~ "***",
+           p_adj < 0.01 ~ "**",
+           p_adj < 0.05 ~ "*",
+           .default = NA
+         ))
+  
+ggplot(tuk_a, aes(taxon_a, taxon_b, fill=significant)) + 
+  geom_tile(color = "#000") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  geom_text(aes(label = p_adj_txt), color = "black", size = 2)
+
+ggplot(tuk_a, aes(taxon_a, taxon_b, fill=p_adj)) + 
+  geom_tile(color = "#000") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  geom_text(aes(label = sig_txt), color = "white", size = 4)
+
+
+```
+`
