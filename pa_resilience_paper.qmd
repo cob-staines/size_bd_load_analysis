@@ -449,7 +449,7 @@ plot_load = ggplot(bd_model %>%
   theme_minimal()
 
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_oobs.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs.png"),
        plot = plot_load,
        height = 6,
        width = 8)
