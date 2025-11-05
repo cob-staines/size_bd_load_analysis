@@ -181,6 +181,8 @@ bd_sample_valid = bd_population %>%
          body_mass_g,
          sex,
          observers_survey,
+         photo,
+         photo_id,
          survey_id,
          start_timestamp_utc,
          date,
@@ -211,6 +213,9 @@ bd_model = bd_sample_valid %>%
          bd_detected,
          svl_mm,
          transect,
+         observers_survey,
+         photo,
+         photo_id,
          site,
          population,
          taxon_capture,
@@ -256,10 +261,12 @@ data_stats = bd_model %>%
             .groups = "drop")
 
 data_stats_species = bd_model %>%
-  group_by(taxon_capture) %>%
-  count()
+  group_by(taxon_capture, region) %>%
+  summarize(adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop")
 
-data_grid_site_year = bd_model%>%
+data_grid_site_year = bd_model %>%
   mutate(year = year(date)) %>%
   group_by(site, year) %>%
   summarise(n_bd_swabs = n(),
@@ -269,7 +276,7 @@ data_grid_site_year = bd_model%>%
               values_from = "n_bd_swabs") %>%
   arrange(site)
 
-data_grid_site_species = bd_model%>%
+data_grid_site_species = bd_model %>%
   mutate(year = year(date)) %>%
   group_by(site, taxon_capture) %>%
   summarise(n_bd_swabs = n(),
@@ -278,7 +285,7 @@ data_grid_site_species = bd_model%>%
   pivot_wider(names_from = "taxon_capture",
               values_from = "n_bd_swabs")
 
-data_grid_species_year = bd_model%>%
+data_grid_species_year = bd_model %>%
   mutate(year = year(date)) %>%
   group_by(year, taxon_capture) %>%
   summarise(n_bd_swabs = n(),
@@ -287,10 +294,20 @@ data_grid_species_year = bd_model%>%
   pivot_wider(names_from = "year",
               values_from = "n_bd_swabs")
 
-
+nubi_data = bd_model %>%
+  filter(taxon_capture == "silverstoneia_nubicola") %>%
+  arrange(region, site, date) %>%
+  select(region,
+         site,
+         date,
+         observers_survey,
+         photo_id,
+         everything()) %>%
+  write_csv(here("panama_nubicola.csv"))
 
 ```
-# Process data
+# Observations
+## Process observations
 ```{r}
 get_species_name = function(taxon) {
   species_name = str_to_sentence(gsub("_", " ", taxon))
@@ -380,12 +397,12 @@ ccdf_extended <- ccdf_all %>%
 ```
 
 
-# Visualize data
+## Visualize observations
 ```{r}
 #| fig-width: 12
-#| fig-height: 6
+#| fig-height: 8
 
-plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture, color = taxon_capture)) +
+plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture)) +
   geom_point(position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
@@ -394,21 +411,22 @@ plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture, colo
   ggtitle("Observed prevalence") +
   xlab("Species") +
   ylab("Bd prevalence [-]\n(with 95% CI)") +
-  geom_text(aes(label = paste0("n=", n),  color = taxon_capture, y = 1),
+  geom_text(aes(label = paste0("n=", n), y = 1),
           position = position_dodge(width = 0.5)) +
   ylim(0, 1) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  theme(legend.position = "none")
+  theme(legend.position = "none") +
+  theme_minimal()
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs.png"),
        plot = plot_prev,
        height = 6,
-       width = 12)
+       width = 8)
 
 
 plot_load = ggplot(bd_model %>%
          mutate(taxon_capture = get_species_name(taxon_capture)) %>%
-         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture, color = taxon_capture)) +
+         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
   geom_boxplot() + 
   theme_minimal() +
   ggtitle("Observed Bd-positive load") +
@@ -426,12 +444,15 @@ plot_load = ggplot(bd_model %>%
   ) +
   ylim(log(0.3), 20) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  theme(legend.position = "none")
+  theme(legend.position = "none") +
+  coord_flip() +
+  theme_minimal()
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load.png"),
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_oobs.png"),
        plot = plot_load,
        height = 6,
-       width = 12)
+       width = 8)
 
 plot_ccdf = ggplot(ccdf_extended, aes(x = ccdf_x,
                           y = ccdf_y,
@@ -444,12 +465,13 @@ plot_ccdf = ggplot(ccdf_extended, aes(x = ccdf_x,
   xlab("log(Bd load) [-]") +
   ylab("Complementary cumulative density (1 - CDF) [-]") +
   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
-  ylim(0, 1)
+  ylim(0, 1) +
+  theme_minimal()
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs.png"),
        plot = plot_ccdf,
        height = 6,
-       width = 12)
+       width = 8)
 
 plot_prev
 plot_load
@@ -457,11 +479,11 @@ plot_ccdf
 
 ```
 
-# statistical modeling
+# Modeling
 ## Bd prevalence
 ```{r}
+#| fig-height: 6
 #| fig-width: 8
-#| fig-height: 8
 
 brm_prev = brm(
   formula = bd_detected ~ taxon_capture,
@@ -523,10 +545,10 @@ prev_draws = brm_prev %>%
 emm_prev = emmeans(brm_prev, ~ taxon_capture, type = "response")
 emm_prev
 
-pairwise_comparison = pairs(emm_prev, adjust = "tukey")
-pairwise_comparison
+pairwise_comparison_prev = pairs(emm_prev, adjust = "tukey")
+pairwise_comparison_prev
 
-emm_df = as.data.frame(emm_prev)
+emm_prev_df = as.data.frame(emm_prev)
 
 # Region of practical equivalence
 f_rope = function(draws, col, taxon_a, taxon_b, epsilon, factor=1) {
@@ -549,51 +571,91 @@ f_rope = function(draws, col, taxon_a, taxon_b, epsilon, factor=1) {
 }
 
 
-taxon_list = bd_model %>%
-             select(taxon_capture) %>%
-             distinct
+taxon_list_prev = emm_prev_df %>%
+  arrange(desc(response)) %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  pull(taxon_capture) %>%
+  as.character()
 
-prev_rope_df = cross_join(taxon_list, taxon_list) %>%
-  rename(taxon_a = taxon_capture.x,
-         taxon_b = taxon_capture.y) %>%
+prev_rope_df =  as.data.frame(t(combn(taxon_list_prev, 2))) %>%
+  rename(taxon_a = V1,
+         taxon_b = V2) %>%
+  # cross_join(taxon_list, taxon_list) %>%  # all pairs
+  # rename(taxon_a = taxon_capture.x,
+  #        taxon_b = taxon_capture.y) %>%
   mutate(rope_05 = map2_dbl(taxon_a,
                             taxon_b,
                             ~ f_rope(prev_draws, "bd_prevalence", .x, .y, epsilon = 0.05, factor = 5)),
-         rope_05_05 = rope_05 < 0.05
+         rope_05_05 = rope_05 < 0.05,
+         sig_txt = case_when(
+           rope_05 < 0.001 ~ "***",
+           rope_05 < 0.01 ~ "**",
+           rope_05 < 0.05 ~ "*",
+           .default = NA
+         ),
+         taxon_a = factor(taxon_a, levels = taxon_list_prev),
+         taxon_b = factor(taxon_b, levels = taxon_list_prev)
   )
   
 
 # visualization
 
 # draws
-ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) +
+plot_prev_draws = ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) +
   geom_boxplot() +
   labs(y = "Estimated prevalence (model draws)",
        x = "Taxon",
        title = "Posterior prevalence per taxon (modeled)") +
   ylim(0, 1) +
   theme_minimal() +
-  coord_flip()
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws.png"),
+       plot = plot_prev_draws,
+       height = 6,
+       width = 8)
+
+plot_prev_draws
 
 # emmeans
-ggplot(emm_df, aes(x = taxon_capture, y = response, ymin = lower.HPD, ymax = upper.HPD)) +
+plot_prev_emm = ggplot(emm_prev_df, aes(x = taxon_capture, y = response, ymin = lower.HPD, ymax = upper.HPD)) +
   geom_pointrange() +
   labs(y = "Estimated prevalence (posterior mean)",
        x = "Taxon",
        title = "Posterior prevalence per taxon (modeled)") +
   ylim(0,1) +
-  coord_flip() +
-  theme_minimal()
-
-# rope %>%
-ggplot(rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05_05)) +
-  geom_tile(color = "black") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_emm.png"),
+       plot = plot_prev_emm,
+       height = 6,
+       width = 8)
+
+plot_prev_emm
+
+# rope
+plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05)) +
+  geom_tile(color = "black") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  geom_text(aes(label = sig_txt), color = "white", size = 4)
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_rope_05.png"),
+       plot = plot_prev_rope_05,
+       height = 6,
+       width = 8)
+
+plot_prev_rope_05
+
 ```
 
 ## Bd load
 ```{r}
+#| fig-height: 6
+#| fig-width: 8
+
 #baysian model
 brm_load = brm(
   formula = log_bd_positive_load ~ taxon_capture,
@@ -663,85 +725,129 @@ emm_load_df = as.data.frame(emm_load)
 
 # Region of practical equivalence
 
-taxon_list = bd_model %>%
-             select(taxon_capture) %>%
-             distinct
+taxon_list_load = emm_load_df %>%
+  arrange(desc(emmean)) %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  pull(taxon_capture) %>%
+  as.character()
 
-load_rope_df = cross_join(taxon_list, taxon_list) %>%
-  rename(taxon_a = taxon_capture.x,
-         taxon_b = taxon_capture.y) %>%
-  mutate(rope_05 = map2_dbl(taxon_a,
+load_rope_df = as.data.frame(t(combn(taxon_list_load, 2))) %>%
+  rename(taxon_a = V1,
+         taxon_b = V2) %>%
+  # cross_join(taxon_list, taxon_list) %>%  # all pairs
+  # rename(taxon_a = taxon_capture.x,
+  #        taxon_b = taxon_capture.y) %>%
+  mutate(rope_1 = map2_dbl(taxon_a,
                             taxon_b,
-                            ~ f_rope(load_draws, "bd_log_load", .x, .y, epsilon = 0.05, factor = 5)),
-         rope_05_05 = rope_05 < 0.05
+                            ~ f_rope(load_draws, "bd_log_load", .x, .y, epsilon = 1, factor = 5)),
+         rope_1_05 = rope_1 < 0.05,
+         sig_txt = case_when(
+           rope_1 < 0.001 ~ "***",
+           rope_1 < 0.01 ~ "**",
+           rope_1 < 0.05 ~ "*",
+           .default = NA
+         ),
+         taxon_a = factor(taxon_a, levels = taxon_list_load),
+         taxon_b = factor(taxon_b, levels = taxon_list_load)
   )
+
 
 # visualization
 
 # draws
-ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
+plot_load_draws = ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
   geom_boxplot() +
   labs(y = "Estimated log(Bd load) (model draws)",
        x = "Taxon",
        title = "Posterior Bd-positive load per taxon (modeled)") +
-  theme_minimal() +
+  theme_minimal () +
   ylim(0, 15) +
-  coord_flip()
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws.png"),
+       plot = plot_load_draws,
+       height = 6,
+       width = 8)
+
+plot_load_draws
 
 # emmeans
-ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lower.HPD, ymax = upper.HPD)) +
+plot_load_emm = ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lower.HPD, ymax = upper.HPD)) +
   geom_pointrange() +
   labs(y = "Estimated log(Bd load) (posterior mean)",
        x = "Taxon",
        title = "Posterior Bd-positive load per taxon (modeled)") +
-  coord_flip() +
-  ylim(0, 15) +
-  theme_minimal()
-
-# rope %>%
-ggplot(load_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05_05)) +
-  geom_tile(color = "black") +
   theme_minimal() +
+  ylim(0, 15) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-# anova for bd log loads
-load_model = aov(log_bd_positive_load ~ taxon_capture,
-                   data = bd_model)
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_emm.png"),
+       plot = plot_load_emm,
+       height = 6,
+       width = 8)
 
-summary(load_model)
+plot_load_emm
 
-load_tuk = TukeyHSD(load_model)
-load_tuk
-
-plot(load_tuk, las = 2)
-
-tuk_df = as.data.frame(load_tuk$taxon_capture)
-tuk_df$comparison = rownames(tuk_df)
-
-tuk_a = tuk_df %>%
-  rename(p_adj = `p adj`) %>%
-  separate(col = comparison, into = c("taxon_a", "taxon_b"), sep = "-") %>%
-  mutate(diff_abs = abs(diff),
-         significant = p_adj < 0.05,
-         p_adj_txt = if_else(significant, as.character(round(p_adj, digits = 4)), NA),
-         p_adj_txt = if_else(p_adj < 0.001, "<0.001", p_adj_txt),
-         sig_txt = case_when(
-           p_adj < 0.001 ~ "***",
-           p_adj < 0.01 ~ "**",
-           p_adj < 0.05 ~ "*",
-           .default = NA
-         ))
-  
-ggplot(tuk_a, aes(taxon_a, taxon_b, fill=significant)) + 
-  geom_tile(color = "#000") +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  geom_text(aes(label = p_adj_txt), color = "black", size = 2)
-
-ggplot(tuk_a, aes(taxon_a, taxon_b, fill=p_adj)) + 
-  geom_tile(color = "#000") +
+# rope
+plot_load_rope_1 = ggplot(load_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_1)) +
+  geom_tile(color = "black") +
+  theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   geom_text(aes(label = sig_txt), color = "white", size = 4)
 
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_rope_1.png"),
+       plot = plot_load_rope_1,
+       height = 6,
+       width = 8)
+
+plot_load_rope_1
+# 
+# # frequentist tests
+# # anova for bd log loads
+# load_model = aov(log_bd_positive_load ~ taxon_capture,
+#                    data = bd_model)
+# 
+# summary(load_model)
+# 
+# load_tuk = TukeyHSD(load_model)
+# load_tuk
+# 
+# plot(load_tuk, las = 2)
+# 
+# tuk_df = as.data.frame(load_tuk$taxon_capture)
+# tuk_df$comparison = rownames(tuk_df)
+# 
+# tuk_a = tuk_df %>%
+#   rename(p_adj = `p adj`) %>%
+#   separate(col = comparison, into = c("taxon_a", "taxon_b"), sep = "-") %>%
+#   mutate(diff_abs = abs(diff),
+#          significant = p_adj < 0.05,
+#          p_adj_txt = if_else(significant, as.character(round(p_adj, digits = 4)), NA),
+#          p_adj_txt = if_else(p_adj < 0.001, "<0.001", p_adj_txt),
+#          sig_txt = case_when(
+#            p_adj < 0.001 ~ "***",
+#            p_adj < 0.01 ~ "**",
+#            p_adj < 0.05 ~ "*",
+#            .default = NA
+#          ))
+#   
+# ggplot(tuk_a, aes(taxon_a, taxon_b, fill=significant)) + 
+#   geom_tile(color = "#000") +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   geom_text(aes(label = p_adj_txt), color = "black", size = 2)
+# 
+# ggplot(tuk_a, aes(taxon_a, taxon_b, fill=p_adj)) + 
+#   geom_tile(color = "#000") +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   geom_text(aes(label = sig_txt), color = "white", size = 4)
+# 
 
 ```
-`
+
+
+
+```{r}
+
+
+```
