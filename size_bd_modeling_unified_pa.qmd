@@ -327,6 +327,18 @@ bd_pop_stats = bd_model %>%
             subadult_n = sum(life_stage_simple == "subadult"),
             .groups = "drop")
 
+# export site list and coords
+site_lookup = bd_model %>%
+  select(site) %>%
+  distinct() %>%
+  left_join(db_site %>%
+              collect(), by = "site") %>%
+  select(site_id,
+         site,
+         site_latitude,
+         site_longitude) %>%
+  write_csv(here("data", "site_coords_panama.csv"))
+
 ```
 
 ## Modeling
