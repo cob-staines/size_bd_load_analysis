@@ -302,8 +302,7 @@ nubi_data = bd_model %>%
          date,
          observers_survey,
          photo_id,
-         everything()) %>%
-  write_csv(here("panama_nubicola.csv"))
+         everything())
 
 ```
 # Observations
@@ -357,6 +356,10 @@ sample_stats = function(obs) {
 obs_stats_all = sample_stats(bd_model) %>%
   mutate(taxon_capture = get_species_name(taxon_capture))
 
+obs_stats_adult = sample_stats(bd_model %>%
+                                 filter(life_stage_simple == "adult")) %>%
+  mutate(taxon_capture = get_species_name(taxon_capture))
+
 ccdf_zeros = obs_stats_all %>%
   select(taxon_capture) %>%
   distinct() %>%
@@ -373,7 +376,39 @@ ccdf_all = bd_model %>%
   ungroup() %>%
   group_by(taxon_capture, bd_detected)
 
-ccdf_extended <- ccdf_all %>%
+ccdf_extended_all = ccdf_all %>%
+  filter(!(bd_detected == FALSE) | row_number() == 1) %>%
+  ungroup() %>%
+  mutate(p = if_else(log_bd_load == -Inf, p - 1, p),
+         log_bd_load = if_else(log_bd_load == -Inf, log(0.3), log_bd_load),
+         ccdf = p / n) %>%
+  bind_rows(ccdf_zeros) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(
+    ksmooth_result = list(ksmooth(x = log_bd_load,
+                                  y = ccdf,
+                                  x.points = log_bd_load,
+                                  kernel = "normal",
+                                  bandwidth = 1)),
+    ccdf_x = ksmooth_result[[1]]$x,
+    ccdf_y = ksmooth_result[[1]]$y
+  ) %>%
+  ungroup() %>%
+  select(-ksmooth_result)
+
+ccdf_adult = bd_model %>%
+  filter(life_stage_simple == "adult") %>%
+  mutate(taxon_capture = get_species_name(taxon_capture),
+         density = 1) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(n = n(),
+         p = cumsum(density)) %>%
+  ungroup() %>%
+  group_by(taxon_capture, bd_detected)
+
+ccdf_extended_adult = ccdf_adult %>%
   filter(!(bd_detected == FALSE) | row_number() == 1) %>%
   ungroup() %>%
   mutate(p = if_else(log_bd_load == -Inf, p - 1, p),
@@ -397,10 +432,10 @@ ccdf_extended <- ccdf_all %>%
 ```
 
 
-## Visualize observations
+## Visualize observations (all)
 ```{r}
-#| fig-width: 12
-#| fig-height: 8
+#| fig-width: 8
+#| fig-height: 6
 
 plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture)) +
   geom_point(position = position_dodge(width = 0.5)) +
@@ -414,15 +449,16 @@ plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture)) +
   geom_text(aes(label = paste0("n=", n), y = 1),
           position = position_dodge(width = 0.5)) +
   ylim(0, 1) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   theme(legend.position = "none") +
-  theme_minimal()
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs.png"),
        plot = plot_prev,
        height = 6,
        width = 8)
 
+plot_prev
 
 plot_load = ggplot(bd_model %>%
          mutate(taxon_capture = get_species_name(taxon_capture)) %>%
@@ -443,10 +479,9 @@ plot_load = ggplot(bd_model %>%
     vjust = 0
   ) +
   ylim(log(0.3), 20) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   theme(legend.position = "none") +
-  coord_flip() +
-  theme_minimal()
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 
 ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs.png"),
@@ -454,7 +489,9 @@ ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs.png"),
        height = 6,
        width = 8)
 
-plot_ccdf = ggplot(ccdf_extended, aes(x = ccdf_x,
+plot_load
+
+plot_ccdf = ggplot(ccdf_extended_all, aes(x = ccdf_x,
                           y = ccdf_y,
                           color = taxon_capture)) +
   geom_line() +
@@ -473,8 +510,89 @@ ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs.png")
        height = 6,
        width = 8)
 
+plot_ccdf
+
+```
+
+## Visualize observations (aadult only)
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+plot_prev = ggplot(obs_stats_adult, aes(y = bd_prevalence, x = taxon_capture)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  geom_text(aes(label = paste0("n=", n), y = 1),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1) +
+  theme(legend.position = "none") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs_adult.png"),
+       plot = plot_prev,
+       height = 6,
+       width = 8)
+
 plot_prev
+
+plot_load = ggplot(bd_model %>%
+         mutate(taxon_capture = get_species_name(taxon_capture)) %>%
+         filter(life_stage_simple == "adult",
+                bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load) [-]") +
+  geom_text(
+    data = obs_stats_all,
+    aes(
+      x = taxon_capture,
+      y = max(bd_model$log_bd_load) * 1.05,
+      label = paste0("n=", n_pos)
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.3), 20) +
+  theme(legend.position = "none") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult.png"),
+       plot = plot_load,
+       height = 6,
+       width = 8)
+
 plot_load
+
+plot_ccdf = ggplot(ccdf_extended_all, aes(x = ccdf_x,
+                          y = ccdf_y,
+                          color = taxon_capture)) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled CCDF of Bd-positive load") +
+  labs(color = "Species",
+       fill = "Species") +
+  xlab("log(Bd load) [-]") +
+  ylab("Complementary cumulative density (1 - CDF) [-]") +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+  ylim(0, 1) +
+  theme_minimal()
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs_adult.png"),
+       plot = plot_ccdf,
+       height = 6,
+       width = 8)
+
 plot_ccdf
 
 ```
