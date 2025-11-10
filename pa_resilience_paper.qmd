@@ -158,6 +158,7 @@ bd_sample_valid = bd_population %>%
   inner_join(bd_species_valid %>%
                select("taxon_capture"), by = c("taxon_capture"), copy = TRUE) %>%
   filter(!is.na(life_stage_simple),
+         life_stage_simple == "adult",
          !(site %in% drop_sites),
          year != 2017) %>%
   inner_join(db_bd %>%
@@ -432,94 +433,12 @@ ccdf_extended_adult = ccdf_adult %>%
 ```
 
 
-## Visualize observations (all)
+## Visualize observations
 ```{r}
 #| fig-width: 8
 #| fig-height: 6
 
 plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
-                width = 0.2,
-                position = position_dodge(width = 0.5)) +
-  theme_minimal() +
-  ggtitle("Observed prevalence") +
-  xlab("Species") +
-  ylab("Bd prevalence [-]\n(with 95% CI)") +
-  geom_text(aes(label = paste0("n=", n), y = 1),
-          position = position_dodge(width = 0.5)) +
-  ylim(0, 1) +
-  theme(legend.position = "none") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs.png"),
-       plot = plot_prev,
-       height = 6,
-       width = 8)
-
-plot_prev
-
-plot_load = ggplot(bd_model %>%
-         mutate(taxon_capture = get_species_name(taxon_capture)) %>%
-         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
-  geom_boxplot() + 
-  theme_minimal() +
-  ggtitle("Observed Bd-positive load") +
-  xlab("Species") +
-  ylab("log(Bd load) [-]") +
-  geom_text(
-    data = obs_stats_all,
-    aes(
-      x = taxon_capture,
-      y = max(bd_model$log_bd_load) * 1.05,
-      label = paste0("n=", n_pos)
-    ),
-    position = position_dodge(width = 0.75),
-    vjust = 0
-  ) +
-  ylim(log(0.3), 20) +
-  theme(legend.position = "none") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs.png"),
-       plot = plot_load,
-       height = 6,
-       width = 8)
-
-plot_load
-
-plot_ccdf = ggplot(ccdf_extended_all, aes(x = ccdf_x,
-                          y = ccdf_y,
-                          color = taxon_capture)) +
-  geom_line() +
-  theme_minimal() +
-  ggtitle("Modeled CCDF of Bd-positive load") +
-  labs(color = "Species",
-       fill = "Species") +
-  xlab("log(Bd load) [-]") +
-  ylab("Complementary cumulative density (1 - CDF) [-]") +
-  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
-  ylim(0, 1) +
-  theme_minimal()
-
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs.png"),
-       plot = plot_ccdf,
-       height = 6,
-       width = 8)
-
-plot_ccdf
-
-```
-
-## Visualize observations (aadult only)
-```{r}
-#| fig-width: 8
-#| fig-height: 6
-
-plot_prev = ggplot(obs_stats_adult, aes(y = bd_prevalence, x = taxon_capture)) +
   geom_point(position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
@@ -544,8 +463,7 @@ plot_prev
 
 plot_load = ggplot(bd_model %>%
          mutate(taxon_capture = get_species_name(taxon_capture)) %>%
-         filter(life_stage_simple == "adult",
-                bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
+         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
   geom_boxplot() + 
   theme_minimal() +
   ggtitle("Observed Bd-positive load") +
@@ -729,7 +647,7 @@ plot_prev_draws = ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) 
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws_adult.png"),
        plot = plot_prev_draws,
        height = 6,
        width = 8)
@@ -746,7 +664,7 @@ plot_prev_emm = ggplot(emm_prev_df, aes(x = taxon_capture, y = response, ymin = 
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_emm.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_emm_adult.png"),
        plot = plot_prev_emm,
        height = 6,
        width = 8)
@@ -760,7 +678,7 @@ plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = taxon_a, y = taxon_b, fill = ro
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   geom_text(aes(label = sig_txt), color = "white", size = 4)
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_rope_05.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
        plot = plot_prev_rope_05,
        height = 6,
        width = 8)
@@ -883,7 +801,7 @@ plot_load_draws = ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
   ylim(0, 15) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws_adult.png"),
        plot = plot_load_draws,
        height = 6,
        width = 8)
@@ -900,7 +818,7 @@ plot_load_emm = ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lo
   ylim(0, 15) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_emm.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_emm_adult.png"),
        plot = plot_load_emm,
        height = 6,
        width = 8)
@@ -914,7 +832,7 @@ plot_load_rope_1 = ggplot(load_rope_df, aes(x = taxon_a, y = taxon_b, fill = rop
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   geom_text(aes(label = sig_txt), color = "white", size = 4)
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_rope_1.png"),
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_rope_1_adult.png"),
        plot = plot_load_rope_1,
        height = 6,
        width = 8)
@@ -964,8 +882,80 @@ plot_load_rope_1
 ```
 
 
-
+# Analysis by region
 ```{r}
+region_species = c("lithobates_warszewitschii",
+                   "colostethus_panamansis",
+                   "sachatamia_albomaculata")
 
+bd_region = bd_model %>%
+  filter(taxon_capture %in% region_species) %>%
+  group_by(taxon_capture, region) %>%
+    summarise(n = n(),
+              n_pos = sum(bd_load > 0),
+              bd_prevalence = sum(bd_load > 0) / n(),
+              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+              min_log_load_inf = min(log_bd_load[bd_load > 0]),
+              q_25_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.25),
+              q_50_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.50),
+              q_75_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.75),
+              max_log_load_inf = max(log_bd_load[bd_load > 0]),
+              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+              .groups = "drop") %>%
+  mutate(species = gsub(" ", "\n", get_species_name(taxon_capture)))
+
+plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species, color = region)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  geom_text(aes(label = paste0("n=", n), y = 1),
+          position = position_dodge(width = 1)) +
+  ylim(0, 1) +
+  theme(legend.position = "none") +
+  theme_minimal()
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
+       plot = plot_prev_region,
+       height = 6,
+       width = 8)
+
+plot_prev_region
+
+# load
+plot_load_region = ggplot(bd_model %>%
+         mutate(species = gsub(" ", "\n", get_species_name(taxon_capture))) %>%
+         filter(bd_load > 0,
+                taxon_capture %in% region_species), aes(log_bd_load, x = species, color = region)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load) [-]") +
+  geom_text(
+    data = bd_region,
+    aes(
+      x = species,
+      y = max(bd_model$log_bd_load) * 1.05,
+      label = paste0("n=", n_pos)
+    ),
+    position = position_dodge(width = 0.90),
+    vjust = 0
+  ) +
+  ylim(log(0.3), 20) +
+  theme(legend.position = "none") +
+  theme_minimal()
+
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult_region.png"),
+       plot = plot_load_region,
+       height = 6,
+       width = 8)
+
+plot_load_region
 
 ```
