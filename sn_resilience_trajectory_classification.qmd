@@ -205,16 +205,25 @@ first_treatment_events =  treatment_events %>%
   summarise(first_treatment_year = min(year),
             .groups = "drop")
 
+post_treatment_mask_sites = c()
+
+# post_treatment_mask_sites = c("10206",
+#                               "10225",
+#                               "10277",
+#                               "11495",
+#                               "50133",
+#                               "70327",
+#                               )
 
 # mask for populations/years after a release event
-post_release_mask = expand_grid(unique(first_treatment_events$population),
+post_treatment_mask = expand_grid(unique(first_treatment_events$population),
                        seq(min(first_treatment_events$first_treatment_year), 2025)) %>%
   rename(population = 1,
          year = 2) %>%
   left_join(first_treatment_events, by = "population") %>%
   filter(year >= first_treatment_year) %>%
   select(-first_treatment_year) %>%
-  filter(population %in% c())
+  filter(population %in% post_treatment_mask_sites)
 
 # selection criteria for populations
 ## - 3 years of sampling
@@ -224,7 +233,7 @@ post_release_mask = expand_grid(unique(first_treatment_events$population),
 
 bd_population_valid = bd_population %>%
   collect() %>%
-  anti_join(post_release_mask, by = c("population", "year")) %>%
+  anti_join(post_treatment_mask, by = c("population", "year")) %>%
   group_by(population) %>%
   summarise(n_years = n_distinct(year),
             n_adult = sum(life_stage_simple == "adult"),
@@ -238,7 +247,7 @@ bd_population_valid = bd_population %>%
 
 # pop_year_valid = bd_population %>%
 #   distinct(population, year) %>%
-#   anti_join(post_release_mask, by = c("population", "year"))
+#   anti_join(post_treatment_mask, by = c("population", "year"))
 #   filter(population %in% bd_population_valid$population) %>%
 #   collect() %>%
 #   left_join(first_release_events, by = "population") %>%
@@ -253,7 +262,7 @@ treatment_events_valid = treatment_events %>%
 
 bd_capture_valid = bd_population %>%
   filter(population %in% bd_population_valid$population) %>%
-  anti_join(post_release_mask, by = c("population", "year"), copy = TRUE)
+  anti_join(post_treatment_mask, by = c("population", "year"), copy = TRUE)
 
 # all years of data for valid pops
 year_valid = bd_capture_valid %>%
@@ -306,7 +315,7 @@ visit_oi = db_visit %>%
          comments_visit) %>%
   collect() %>%
   left_join(data_pop, by = "site") %>%
-  anti_join(post_release_mask, by = c("population", "year")) %>%
+  anti_join(post_treatment_mask, by = c("population", "year")) %>%
   arrange(population,
           date) %>%
   group_by(population, year) %>%
@@ -424,6 +433,15 @@ abundance_stats = abundance_visual %>%
   mutate(adult_count = adult_count_visual,
          adult_count = if_else(population == "50783" & !is.na(adult_count_cmr), adult_count_cmr, adult_count))
 
+detection_ratio = abundance_stats %>%
+  filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
+  group_by(population) %>%
+  summarise(n = n(),
+         ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
+         .groups = "drop")
+
+median(detection_ratio$ves_cmr_ratio)
+
 # join with pop_year_tx
 pop_year_ab = pop_year_tx %>%
   left_join(abundance_stats, by = c("population", "year"))
@@ -466,6 +484,9 @@ bd_stats = bd_capture_valid %>%
             adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
             adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
             adult_bd_load_median = median(bd_mean_its1_copies_per_swab),
+            adult_bd_load_mean = mean(bd_mean_its1_copies_per_swab),
+            adult_positive_bd_load_geom_mean = exp(mean(log(bd_mean_its1_copies_per_swab[bd_detected]))),
+            adult_bd_load_max = max(bd_mean_its1_copies_per_swab),
             .groups = "drop")
 
 # join with pop_year_ab
@@ -593,10 +614,13 @@ pop_year_class = epi_thresholds %>%
   # interpolation
   mutate(res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE),
          # res_class_post = if_else(is.na(adult_swab_n), NA, res_class_post)
-         adult_count_terp = zoo::na.approx(adult_count, na.rm = FALSE),
+         adult_count_terp = 10^zoo::na.approx(log10(adult_count), na.rm = FALSE),
          adult_bd_prevalence_terp = zoo::na.approx(adult_bd_prevalence, na.rm = FALSE),
-         adult_positive_bd_load_median_terp = zoo::na.approx(adult_positive_bd_load_median, na.rm = FALSE),
-         adult_bd_load_median_terp = zoo::na.approx(adult_bd_load_median, na.rm = FALSE)) %>%
+         adult_positive_bd_load_median_terp = 10^zoo::na.approx(log10(adult_positive_bd_load_median), na.rm = FALSE),
+         adult_bd_load_median_terp = 10^zoo::na.approx(log10(adult_bd_load_median), na.rm = FALSE),
+         adult_bd_load_mean_terp = 10^zoo::na.approx(log10(adult_bd_load_mean), na.rm = FALSE),
+         adult_positive_bd_load_geom_mean_terp = 10^zoo::na.approx(log10(adult_positive_bd_load_geom_mean), na.rm = FALSE),
+         adult_bd_load_max_terp = 10^zoo::na.approx(log10(adult_bd_load_max), na.rm = FALSE)) %>%
   ungroup()
 
 head(pop_year_class)
@@ -629,10 +653,14 @@ ggplot(pop_year_class, aes(x = year)) +
   geom_line(aes(y = log10(adult_count_terp + 1), color = "log10(Count + 1)")) +
   geom_point(aes(y = adult_bd_prevalence * 10, color = "Bd Prev (x10)"), size = psize) +
   geom_line(aes(y = adult_bd_prevalence_terp * 10, color = "Bd Prev (x10)")) +
-  geom_point(aes(y = log10(adult_positive_bd_load_median + 1), color = "log10(Bd Load + 1)"), size = psize) +
-  geom_line(aes(y = log10(adult_positive_bd_load_median_terp + 1), color = "log10(Bd Load + 1)")) +
-  geom_point(aes(y = log10(adult_bd_load_median + 1), color = "log10(Bd Load all + 1)"), size = psize) +
-  geom_line(aes(y = log10(adult_bd_load_median_terp + 1), color = "log10(Bd Load all + 1)")) +
+  # geom_point(aes(y = log10(adult_positive_bd_load_median + 1), color = "log10(Bd Load + 1)"), size = psize) +
+  # geom_line(aes(y = log10(adult_positive_bd_load_median_terp + 1), color = "log10(Bd Load + 1)")) +
+  # geom_point(aes(y = log10(adult_bd_load_mean + 1), color = "log10(Bd Load_mean + 1)"), size = psize) +
+  # geom_line(aes(y = log10(adult_bd_load_mean_terp + 1), color = "log10(Bd Load_mean + 1)")) +
+  geom_point(aes(y = log10(adult_bd_load_max + 1), color = "log10(Bd Load max)"), size = psize) +
+  geom_line(aes(y = log10(adult_bd_load_max_terp + 1), color = "log10(Bd Load max)")) +
+  geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "log10(Bd Load all + 1)"), size = psize) +
+  geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "log10(Bd Load all + 1)")) +
   geom_text(data = pop_adult_swab_counts, x = 2009, y = 15, size = 3, aes(label = paste0(adult_swab_n, " swabs"))) +
   geom_tile(data = pop_year_class,
             aes(y = -1, fill = res_class_post), height = 1) +
@@ -646,8 +674,10 @@ ggplot(pop_year_class, aes(x = year)) +
   facet_wrap(population ~ .) +
   scale_color_manual(values = c("log10(Count + 1)" = "#ffb00d",
                                 "Bd Prev (x10)" = "#dd217d",
-                                "log10(Bd Load + 1)" = "#5b8efd",
-                                "log10(Bd Load all + 1)" = "#000")) +
+                                # "log10(Bd Load + 1)" = "#5b8efd",
+                                # "log10(Bd Load_mean + 1)" = "#8e5bfd",
+                                "log10(Bd Load max)" = "#000",
+                                "log10(Bd Load all + 1)" = "#f00")) +
   scale_fill_manual(values = c("1-naive" = "#c3a4cf",
                                "2-epizootic" = "#742881",
                                "3a-persisting" = "#1b7939",
