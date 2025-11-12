@@ -141,7 +141,8 @@ bd_species_valid = bd_population %>%
   group_by(taxon_capture) %>%
   summarise(count = n(),
             .groups = "drop") %>%
-  filter(count >= 30) %>%
+  filter(count >= 30,
+         taxon_capture != "silverstoneia_nubicola") %>%
   arrange(desc(count)) %>%
   collect()
 
@@ -354,53 +355,18 @@ sample_stats = function(obs) {
 }
 
 
-obs_stats_all = sample_stats(bd_model) %>%
-  mutate(taxon_capture = get_species_name(taxon_capture))
+obs_stats_adult = sample_stats(bd_model) %>%
+  mutate(species = get_species_name(taxon_capture))
 
-obs_stats_adult = sample_stats(bd_model %>%
-                                 filter(life_stage_simple == "adult")) %>%
-  mutate(taxon_capture = get_species_name(taxon_capture))
-
-ccdf_zeros = obs_stats_all %>%
+ccdf_zeros = obs_stats_adult %>%
   select(taxon_capture) %>%
   distinct() %>%
   mutate(log_bd_load = 20,
-         ccdf = 0)
-
-ccdf_all = bd_model %>%
-  mutate(taxon_capture = get_species_name(taxon_capture),
-         density = 1) %>%
-  arrange(taxon_capture, desc(log_bd_load)) %>%
-  group_by(taxon_capture) %>%
-  mutate(n = n(),
-         p = cumsum(density)) %>%
-  ungroup() %>%
-  group_by(taxon_capture, bd_detected)
-
-ccdf_extended_all = ccdf_all %>%
-  filter(!(bd_detected == FALSE) | row_number() == 1) %>%
-  ungroup() %>%
-  mutate(p = if_else(log_bd_load == -Inf, p - 1, p),
-         log_bd_load = if_else(log_bd_load == -Inf, log(0.3), log_bd_load),
-         ccdf = p / n) %>%
-  bind_rows(ccdf_zeros) %>%
-  arrange(taxon_capture, desc(log_bd_load)) %>%
-  group_by(taxon_capture) %>%
-  mutate(
-    ksmooth_result = list(ksmooth(x = log_bd_load,
-                                  y = ccdf,
-                                  x.points = log_bd_load,
-                                  kernel = "normal",
-                                  bandwidth = 1)),
-    ccdf_x = ksmooth_result[[1]]$x,
-    ccdf_y = ksmooth_result[[1]]$y
-  ) %>%
-  ungroup() %>%
-  select(-ksmooth_result)
+         ccdf = 0,
+         species = get_species_name(taxon_capture))
 
 ccdf_adult = bd_model %>%
-  filter(life_stage_simple == "adult") %>%
-  mutate(taxon_capture = get_species_name(taxon_capture),
+  mutate(species = get_species_name(taxon_capture),
          density = 1) %>%
   arrange(taxon_capture, desc(log_bd_load)) %>%
   group_by(taxon_capture) %>%
@@ -429,7 +395,7 @@ ccdf_extended_adult = ccdf_adult %>%
   ) %>%
   ungroup() %>%
   select(-ksmooth_result)
-  
+
 ```
 
 
@@ -438,13 +404,13 @@ ccdf_extended_adult = ccdf_adult %>%
 #| fig-width: 8
 #| fig-height: 6
 
-plot_prev = ggplot(obs_stats_all, aes(y = bd_prevalence, x = taxon_capture)) +
+plot_prev = ggplot(obs_stats_adult, aes(y = bd_prevalence, x = species)) +
   geom_point(position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
                 position = position_dodge(width = 0.5)) +
   theme_minimal() +
-  ggtitle("Observed prevalence") +
+  ggtitle("Observed Bd prevalence") +
   xlab("Species") +
   ylab("Bd prevalence [-]\n(with 95% CI)") +
   geom_text(aes(label = paste0("n=", n), y = 1),
@@ -462,17 +428,17 @@ ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs_adult.png"),
 plot_prev
 
 plot_load = ggplot(bd_model %>%
-         mutate(taxon_capture = get_species_name(taxon_capture)) %>%
-         filter(bd_load > 0), aes(log_bd_load, x = taxon_capture)) +
+         mutate(species = get_species_name(taxon_capture)) %>%
+         filter(bd_load > 0), aes(log_bd_load, x = species)) +
   geom_boxplot() + 
   theme_minimal() +
   ggtitle("Observed Bd-positive load") +
   xlab("Species") +
   ylab("log(Bd load) [-]") +
   geom_text(
-    data = obs_stats_all,
+    data = obs_stats_adult,
     aes(
-      x = taxon_capture,
+      x = species,
       y = max(bd_model$log_bd_load) * 1.05,
       label = paste0("n=", n_pos)
     ),
@@ -492,12 +458,12 @@ ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult.png"),
 
 plot_load
 
-plot_ccdf = ggplot(ccdf_extended_all, aes(x = ccdf_x,
+plot_ccdf = ggplot(ccdf_extended_adult, aes(x = ccdf_x,
                           y = ccdf_y,
-                          color = taxon_capture)) +
+                          color = species)) +
   geom_line() +
   theme_minimal() +
-  ggtitle("Modeled CCDF of Bd-positive load") +
+  ggtitle("CCDF ofobserved  Bd-positive load") +
   labs(color = "Species",
        fill = "Species") +
   xlab("log(Bd load) [-]") +
@@ -555,7 +521,7 @@ prev_draws = brm_prev %>%
     b_taxon_capturerhinella_marina,
     b_taxon_capturesachatamia_albomaculata, 
     b_taxon_capturesilverstoneia_flotator,
-    b_taxon_capturesilverstoneia_nubicola, 
+    # b_taxon_capturesilverstoneia_nubicola, 
     b_taxon_capturesmilisca_sila) %>%
   mutate(b_taxon_captureatelopus_varius = 0) %>%
   pivot_longer(c("b_taxon_captureatelopus_varius",
@@ -570,13 +536,21 @@ prev_draws = brm_prev %>%
                  "b_taxon_capturerhinella_marina",
                  "b_taxon_capturesachatamia_albomaculata", 
                  "b_taxon_capturesilverstoneia_flotator",
-                 "b_taxon_capturesilverstoneia_nubicola", 
+                 # "b_taxon_capturesilverstoneia_nubicola", 
                  "b_taxon_capturesmilisca_sila"),
                names_to = "param",
                values_to = "taxon_intercept") %>%
   mutate(full_intercept = b_Intercept + taxon_intercept,
          bd_prevalence = plogis(full_intercept),
          taxon_capture = gsub("b_taxon_capture", "", param))
+
+prev_draws_summary = prev_draws %>%
+  group_by(taxon_capture) %>%
+  summarize(prevalence_mean = mean(bd_prevalence),
+            prevalence_ci05 = quantile(bd_prevalence, 0.05),
+            prevalence_ci95 = quantile(bd_prevalence, 0.95),
+            .groups = "drop") %>%
+  mutate(species = get_species_name(taxon_capture))
 
 emm_prev = emmeans(brm_prev, ~ taxon_capture, type = "response")
 emm_prev
@@ -630,6 +604,8 @@ prev_rope_df =  as.data.frame(t(combn(taxon_list_prev, 2))) %>%
            rope_05 < 0.05 ~ "*",
            .default = NA
          ),
+         species_a = factor(get_species_name(taxon_a), levels = unlist(lapply(taxon_list_prev, get_species_name))),
+         species_b = factor(get_species_name(taxon_b), levels = unlist(lapply(taxon_list_prev, get_species_name))),
          taxon_a = factor(taxon_a, levels = taxon_list_prev),
          taxon_b = factor(taxon_b, levels = taxon_list_prev)
   )
@@ -638,45 +614,68 @@ prev_rope_df =  as.data.frame(t(combn(taxon_list_prev, 2))) %>%
 # visualization
 
 # draws
-plot_prev_draws = ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) +
-  geom_boxplot() +
-  labs(y = "Estimated prevalence (model draws)",
-       x = "Taxon",
-       title = "Posterior prevalence per taxon (modeled)") +
-  ylim(0, 1) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+# plot_prev_draws = ggplot(prev_draws, aes(x = taxon_capture, y = bd_prevalence)) +
+#   geom_boxplot() +
+#   labs(y = "Estimated prevalence (model draws)",
+#        x = "Taxon",
+#        title = "Posterior prevalence per taxon (modeled)") +
+#   ylim(0, 1) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+# 
+# ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws_adult.png"),
+#        plot = plot_prev_draws,
+#        height = 6,
+#        width = 8)
+# 
+# plot_prev_draws
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws_adult.png"),
-       plot = plot_prev_draws,
-       height = 6,
-       width = 8)
-
-plot_prev_draws
-
-# emmeans
-plot_prev_emm = ggplot(emm_prev_df, aes(x = taxon_capture, y = response, ymin = lower.HPD, ymax = upper.HPD)) +
+# draws summary
+plot_prev_draws_sum = ggplot(prev_draws_summary, aes(x = species, y = prevalence_mean, ymin = prevalence_ci05, ymax = prevalence_ci95)) +
   geom_pointrange() +
-  labs(y = "Estimated prevalence (posterior mean)",
-       x = "Taxon",
-       title = "Posterior prevalence per taxon (modeled)") +
+  labs(y = "Bd prevalence\n(posterior mean ± 95% CrI)",
+       x = "Species",
+       title = "Bd prevalence") +
   ylim(0,1) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_emm_adult.png"),
-       plot = plot_prev_emm,
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
+       plot = plot_prev_draws_sum,
        height = 6,
        width = 8)
 
-plot_prev_emm
+plot_prev_draws_sum
+
+# emmeans
+# plot_prev_emm = ggplot(emm_prev_df, aes(x = taxon_capture, y = response, ymin = lower.HPD, ymax = upper.HPD)) +
+#   geom_pointrange() +
+#   labs(y = "Estimated prevalence (posterior mean)",
+#        x = "Taxon",
+#        title = "Posterior prevalence per taxon (modeled)") +
+#   ylim(0,1) +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+#
+# ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_emm_adult.png"),
+#        plot = plot_prev_emm,
+#        height = 6,
+#        width = 8)
+# 
+# plot_prev_emm
 
 # rope
-plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_05)) +
+plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = species_a, y = species_b, fill = rope_05)) +
   geom_tile(color = "black") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  geom_text(aes(label = sig_txt), color = "white", size = 4)
+  geom_text(aes(label = sig_txt), color = "white", size = 4) +
+  labs(title = "Pairwise comparison of Bd prevalence",
+       fill = "Proportion in\nROPE (± 0.05)",
+       x = "Species",
+       y = "Species",
+       caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
+  theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
 
 ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
        plot = plot_prev_rope_05,
@@ -728,7 +727,7 @@ load_draws = brm_load %>%
     b_taxon_capturerhinella_marina,
     b_taxon_capturesachatamia_albomaculata, 
     b_taxon_capturesilverstoneia_flotator,
-    b_taxon_capturesilverstoneia_nubicola, 
+    # b_taxon_capturesilverstoneia_nubicola, 
     b_taxon_capturesmilisca_sila) %>%
   mutate(b_taxon_captureatelopus_varius = 0) %>%
   pivot_longer(c("b_taxon_captureatelopus_varius",
@@ -743,12 +742,20 @@ load_draws = brm_load %>%
                  "b_taxon_capturerhinella_marina",
                  "b_taxon_capturesachatamia_albomaculata", 
                  "b_taxon_capturesilverstoneia_flotator",
-                 "b_taxon_capturesilverstoneia_nubicola", 
+                 # "b_taxon_capturesilverstoneia_nubicola", 
                  "b_taxon_capturesmilisca_sila"),
                names_to = "param",
                values_to = "taxon_intercept") %>%
   mutate(bd_log_load = b_Intercept + taxon_intercept,
          taxon_capture = gsub("b_taxon_capture", "", param))
+
+load_draws_summary = load_draws %>%
+  group_by(taxon_capture) %>%
+  summarize(log_load_mean = mean(bd_log_load),
+            log_load_ci05 = quantile(bd_log_load, 0.05),
+            log_load_ci95 = quantile(bd_log_load, 0.95),
+            .groups = "drop") %>%
+  mutate(species = get_species_name(taxon_capture))
 
 # emmeans
 emm_load = emmeans(brm_load, ~ taxon_capture, type = "response")
@@ -784,6 +791,8 @@ load_rope_df = as.data.frame(t(combn(taxon_list_load, 2))) %>%
            rope_1 < 0.05 ~ "*",
            .default = NA
          ),
+         species_a = factor(get_species_name(taxon_a), levels = unlist(lapply(taxon_list_load, get_species_name))),
+         species_b = factor(get_species_name(taxon_b), levels = unlist(lapply(taxon_list_load, get_species_name))),
          taxon_a = factor(taxon_a, levels = taxon_list_load),
          taxon_b = factor(taxon_b, levels = taxon_list_load)
   )
@@ -792,45 +801,67 @@ load_rope_df = as.data.frame(t(combn(taxon_list_load, 2))) %>%
 # visualization
 
 # draws
-plot_load_draws = ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
-  geom_boxplot() +
-  labs(y = "Estimated log(Bd load) (model draws)",
-       x = "Taxon",
-       title = "Posterior Bd-positive load per taxon (modeled)") +
-  theme_minimal () +
-  ylim(0, 15) +
+# plot_load_draws = ggplot(load_draws, aes(x = taxon_capture, y = bd_log_load)) +
+#   geom_boxplot() +
+#   labs(y = "Estimated log(Bd load) (model draws)",
+#        x = "Taxon",
+#        title = "Posterior Bd-positive load per taxon (modeled)") +
+#   theme_minimal () +
+#   ylim(0, 15) +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+# 
+# ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws_adult.png"),
+#        plot = plot_load_draws,
+#        height = 6,
+#        width = 8)
+# 
+# plot_load_draws
+
+# draws summary
+plot_load_draws_sum = ggplot(load_draws_summary, aes(x = species, y = log_load_mean, ymin = log_load_ci05, ymax = log_load_ci95)) +
+  geom_pointrange() +
+  labs(y = "log(Bd-positive load)\n(posterior mean ± 95% CrI)",
+       x = "Species",
+       title = "Bd-positive load") +
+  theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws_adult.png"),
-       plot = plot_load_draws,
+ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws_summary_adult.png"),
+       plot = plot_load_draws_sum,
        height = 6,
        width = 8)
 
-plot_load_draws
+plot_load_draws_sum
 
 # emmeans
-plot_load_emm = ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lower.HPD, ymax = upper.HPD)) +
-  geom_pointrange() +
-  labs(y = "Estimated log(Bd load) (posterior mean)",
-       x = "Taxon",
-       title = "Posterior Bd-positive load per taxon (modeled)") +
-  theme_minimal() +
-  ylim(0, 15) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_emm_adult.png"),
-       plot = plot_load_emm,
-       height = 6,
-       width = 8)
-
-plot_load_emm
+# plot_load_emm = ggplot(emm_load_df, aes(x = taxon_capture, y = emmean, ymin = lower.HPD, ymax = upper.HPD)) +
+#   geom_pointrange() +
+#   labs(y = "Estimated log(Bd load) (posterior mean)",
+#        x = "Taxon",
+#        title = "Posterior Bd-positive load per taxon (modeled)") +
+#   theme_minimal() +
+#   ylim(0, 15) +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+# 
+# ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_emm_adult.png"),
+#        plot = plot_load_emm,
+#        height = 6,
+#        width = 8)
+# 
+# plot_load_emm
 
 # rope
-plot_load_rope_1 = ggplot(load_rope_df, aes(x = taxon_a, y = taxon_b, fill = rope_1)) +
+plot_load_rope_1 = ggplot(load_rope_df, aes(x = species_a, y = species_b, fill = rope_1)) +
   geom_tile(color = "black") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  geom_text(aes(label = sig_txt), color = "white", size = 4)
+  geom_text(aes(label = sig_txt), color = "white", size = 4) +
+    labs(title = "Pairwise comparison of Bd prevalence",
+       fill = "Proportion in\nROPE (± 1)",
+       x = "Species",
+       y = "Species",
+       caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
+  theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
 
 ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_rope_1_adult.png"),
        plot = plot_load_rope_1,
@@ -957,5 +988,9 @@ ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult_region
        width = 8)
 
 plot_load_region
+
+```
+
+```{r}
 
 ```
