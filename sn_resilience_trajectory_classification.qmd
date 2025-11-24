@@ -21,7 +21,7 @@ csl: ecology.csl
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2, scales)
 
 ## Connect to DB
-dbcon <- hopToDB("ribbitr")
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
 
 # load populations
 data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
@@ -255,7 +255,9 @@ bd_population_valid = bd_population %>%
 #   select(population, year)
   
 bd_site_valid = data_pop %>%
-  filter(population %in% bd_population_valid$population)
+  filter(population %in% bd_population_valid$population) %>%
+  arrange(population, site) %>%
+  select(population, site)
 
 treatment_events_valid = treatment_events %>%
   filter(population %in% bd_population_valid$population)
@@ -281,9 +283,22 @@ pop_year_tx = pop_year %>%
   left_join(first_treatment_events, by = c("population")) %>%
   arrange(population, year)
 
-(bd_population_valid)
-
 ```
+::: {.callout-note collapse="true"}
+### Site-Population lookup
+
+```{r}
+knitr::kable(bd_site_valid)
+```
+:::
+
+::: {.callout-note collapse="true"}
+### Summary of selected data
+
+```{r}
+knitr::kable(bd_population_valid)
+```
+:::
 
 ## Calculate adult abundance indicators
 
@@ -446,8 +461,21 @@ median(detection_ratio$ves_cmr_ratio)
 pop_year_ab = pop_year_tx %>%
   left_join(abundance_stats, by = c("population", "year"))
 
-head(abundance_stats)
+
 ```
+
+::: {.callout-note collapse="true"}
+### Abundance statistics
+
+```{r}
+knitr::kable(abundance_stats %>%
+               select(population,
+                      year,
+                      adult_count_visual,
+                      adult_count_cmr,
+                      adult_count))
+```
+:::
 
 
 ## Calculate adult Bd metrics
@@ -498,6 +526,20 @@ head(bd_stats)
 
 ```
 
+::: {.callout-note collapse="true"}
+### Bd statistics
+
+```{r}
+knitr::kable(bd_stats %>%
+               select(population,
+                      year,
+                      adult_swab_n,
+                      adult_bd_prevalence,
+                      adult_positive_bd_load_geom_mean))
+```
+:::
+
+
 ## Resilience Trajectory Classification
 Resilience trajectories were classified at the population-year level using adult-only VES, CMR, Bd-Prevalence and Bd-load time series.
 
@@ -508,8 +550,8 @@ Select 1st in time for each population:
   - Start year:
     - Geometric mean Bd-positive load >= 21000 [ITS1 copies]
   - End year:
-    - Count < 20
-  - Event length 1 - 5 years
+    - Count < 10
+  - Event length 1 - 5 years (Briggs et al. 2010)
   - Minimum 90% population drop over event: (Median post-event VES) / (Median pre-event VES) <= 0.1
   
 **Resilience trajectory classification**
@@ -524,8 +566,8 @@ For each population:
     - median Bd prevalence across years < 0.5 ~ "1-naive"
     - median Bd prevalence across years >= 0.5 ~ "3-post-epizootic"
   - Post-epizootic was sub-classified as:
-    - Count < 20 ~ "3a-persisting"
-    - Count >= 20 ~ "3b-recovering"
+    - Count < 10 ~ "3a-persisting"
+    - Count >= 10 ~ "3b-recovering"
 
 
 ```{r}
@@ -543,7 +585,7 @@ pop_adult_swab_counts = pop_year_bd %>%
 epi_thresholds = pop_year_bd %>%
   arrange(population, year) %>%
   mutate(epi_thresh = adult_positive_bd_load_geom_mean >= 21000,
-         low_count = adult_count < 20,
+         low_count = adult_count < 10,
          # low_count_ves = adult_count_visual < 20,
          # low_count_cmr = adult_count_cmr < 20
          )
@@ -620,20 +662,24 @@ pop_year_class = epi_thresholds %>%
          adult_bd_load_max_terp = 10^zoo::na.approx(log10(adult_bd_load_max), na.rm = FALSE)) %>%
   ungroup()
 
-head(pop_year_class)
-
 ```
+::: {.callout-note collapse="true"}
+### Classification data
+
+```{r}
+knitr::kable(pop_year_class %>%
+               select(population,
+                      year,
+                      adult_count,
+                      adult_swab_n,
+                      adult_bd_prevalence,
+                      adult_positive_bd_load_geom_mean,
+                      res_class_post))
+```
+:::
+
 
 # Visualization of Classification
-
-Interpreting plot:
-
-  - VES, CMR, & Bd Load on log-scale
-  - Bd Prevalence scaled by factor of 10x
-  - Horizontal lines indicate thresholds for selection criteria
-    - green: threshold for Bd prevalence (0.95)
-    - blue: threshold for Bd load (24000)
-    - orange: VES & CMR threshold of 20
 
 ```{r}
 #| eval: true
@@ -646,59 +692,89 @@ Interpreting plot:
 psize = 1.5
 prev_coef = 8.64439
 
+manual_legend_df = data.frame(
+  x = NA, y = NA,
+  event = c("✱  Release event", "†  Antifungal treatment")
+)
+
 ggplot(pop_year_class, aes(x = year)) +
-  geom_vline(data = treatment_events_valid %>%
-               filter(grepl("release", treatment_type)), aes(xintercept = year), color = "black", linetype = "dashed") +
-  geom_vline(data = treatment_events_valid %>%
-               filter(grepl("antifungal", treatment_type)), aes(xintercept = year), color = "black", linetype = "solid") +
+  
+  # time series (points and interpolations)
   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
   geom_line(aes(y = adult_bd_prevalence_terp * prev_coef, color = "Bd prevalence")) +
-  # geom_point(aes(y = log10(adult_positive_bd_load_median + 1), color = "log10(Bd Load + 1)"), size = psize) +
-  # geom_line(aes(y = log10(adult_positive_bd_load_median_terp + 1), color = "log10(Bd Load + 1)")) +
-  # geom_point(aes(y = log10(adult_bd_load_mean + 1), color = "log10(Bd Load_mean + 1)"), size = psize) +
-  # geom_line(aes(y = log10(adult_bd_load_mean_terp + 1), color = "log10(Bd Load_mean + 1)")) +
-  geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(Bd+ load)"), size = psize) +
-  geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(Bd+ load)")) +
-  geom_point(aes(y = log10(adult_count + 1), color = "Adult count"), size = psize, , shape = "triangle") +
+  geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
+  geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(+Bd load)")) +
+  geom_point(aes(y = log10(adult_count + 1), color = "Adult count"), size = psize, shape = "triangle") +
   geom_line(aes(y = log10(adult_count_terp + 1), color = "Adult count")) +
-  geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3, aes(label = paste0(adult_swab_n, " swabs"))) +
+
+  # swab counts
+  geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3,
+            aes(label = paste0(adult_swab_n, " swabs"))) +
+  
+  # classification
   geom_tile(data = pop_year_class, aes(y = -1, fill = res_class_post), height = 1) +
+  
+  # thresholds
   geom_hline(yintercept = 0.5 * prev_coef, linetype = "dashed", color = "#f1b6da") +
-  # geom_hline(yintercept = log10(24000), linetype = "dashed", color = "#5b8efd") +
-  geom_hline(yintercept = log10(20 + 1), linetype = "dashed", color = "#0571b0") +
+  geom_hline(yintercept = log10(10 + 1), linetype = "dashed", color = "#0571b0") +
   geom_hline(yintercept = log10(21000 + 1), linetype = "dashed", color = "#d01c8b") +
-  # geom_hline(yintercept = log10(600000), linetype = "dashed", color = "#000") +
+
+  # event markers
+  geom_text(data = treatment_events_valid %>% filter(grepl("release", treatment_type)),
+            aes(x = year), y = -2.1, size = 5, label = "*") +
+  geom_text(data = treatment_events_valid %>% filter(grepl("antifungal", treatment_type)),
+            aes(x = year), y = -1.75, size = 2.5, label = "†") +
+  geom_point(
+    data = manual_legend_df,
+    aes(x = x, y = y, alpha = event),
+    colour = NA
+  ) +
+  scale_alpha_discrete(
+    name = "Events",
+    guide = guide_legend(override.aes = list(
+      colour = NA,
+      shape = NA,
+      size = 0
+    ))
+  ) +
+
   facet_wrap(population ~ .) +
-  scale_color_manual(values = c("Adult count" = "#0571b0",
-                                "Bd prevalence" = "#f1b6da",
-                                # "log10(Bd Load + 1)" = "#5b8efd",
-                                # "log10(Bd Load_mean + 1)" = "#8e5bfd",
-                                # "log10(Bd Load max)" = "#000",
-                                "geom-mean(Bd+ load)" = "#d01c8b")) +
-  scale_fill_manual(values = c("1-naive" = "#b8e186",
-                               "2-epizootic" = "#d01c8b",
-                               "3a-persisting" = "#92c5de",
-                               "3b-recovering" = "#0571b0")) +
+
+  scale_color_manual(
+    name = "Timeseries",
+    values = c(
+    "Adult count" = "#0571b0",
+    "Bd prevalence" = "#f1b6da",
+    "geom-mean(+Bd load)" = "#d01c8b"
+  )) +
+
+  scale_fill_manual(
+    name = "Resillience classification",
+    values = c(
+    "1-naive" = "#b8e186",
+    "2-epizootic" = "#d01c8b",
+    "3a-persisting" = "#92c5de",
+    "3b-recovering" = "#0571b0"
+  )) +
+
   scale_y_continuous(
-    name = "Adult abundance // geometric mean Bd load",
+    name = "Adult abundance & Geometric mean Bd load",
     breaks = c(0, 3, 6, 9),
     labels = function(x) {
-      labs = scales::math_format(10^.x-1)(x)
+      labs = scales::math_format(10^.x+1)(x)
       labs[x == 0] = "0"
       labs
     },
     sec.axis = sec_axis(~./prev_coef, name="Bd Prevalence")
   ) +
-  labs(color = "Timeseries", fill = "Resillience class") +
-  ggtitle("Time series and resillience trajectory classification (from adults only)") +
+  ggtitle("Time series and resilience trajectory classification (from adults only)") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
 ```
-
 # Discussion & Next Steps
 
-  - Review population/year classifications for agreement with site history and/or issues
+    - Review population/year classifications for agreement with site history and/or issues
     - Expect: all Yosemite post-epizootic at start of swabbing, except for Galiston (Epizootic ~2020)
     - Compare with SEKI outbreak map
   - Consider refining persisting/recovering criteria to include hysteresis or lag
