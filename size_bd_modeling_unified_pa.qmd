@@ -319,6 +319,12 @@ head(bd_model)
   arrange(country,
           taxon_capture))
 
+year_stats = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(year) %>%
+  summarize(samples_n = n(),
+            .groups = "drop")
+
 bd_pop_stats = bd_model %>%
   group_by(population) %>%
   summarize(taxa_n = n_distinct(taxon_capture),
@@ -328,6 +334,7 @@ bd_pop_stats = bd_model %>%
             .groups = "drop")
 
 # export site list and coords
+buffer = 0.1
 site_lookup = bd_model %>%
   select(site) %>%
   distinct() %>%
@@ -337,7 +344,11 @@ site_lookup = bd_model %>%
          site,
          site_latitude,
          site_longitude) %>%
-  write_csv(here("data", "site_coords_panama.csv"))
+  mutate(N = site_latitude + buffer,
+         S = site_latitude - buffer,
+         W = site_longitude - buffer,
+         E = site_longitude + buffer) %>%
+  write_csv(here("python", "coordinates", "site_coords_panama.csv"))
 
 ```
 
