@@ -1,0 +1,6 @@
+---
+site_coords_path: 'data/site_coords_panama.csv'
+output_path: 'data/gee_chirps_modis_data.csv'
+start_date: '2012-01-01'
+end_date: '2025-01-01'
+gee_project: "amphibian-bd"
