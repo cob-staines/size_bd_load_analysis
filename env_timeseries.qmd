@@ -1,0 +1,98 @@
+---
+title: "env_timeseries"
+format: html
+---
+
+```{r}
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2)
+
+ts_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data.csv"))
+
+```
+
+# window function
+```{r}
+sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
+  ts_sym <- sym(ts_col_name)
+  res_sym <- sym(result_col_name)
+  
+  df %>%
+    group_modify(~{
+      n <- nrow(.x)
+      ts_vals <- pull(.x, !!ts_sym)
+      agg_vals <- map_dbl(seq_len(n), function(i) {
+        if (i >= window_size) {
+          window_vals <- ts_vals[(i - window_size + 1):i]
+          f(window_vals)
+        } else {
+          NA_real_
+        }
+      })
+      .x[[result_col_name]] <- agg_vals
+      .x
+    })
+}
+```
+
+```{r}
+n_val = function(x) sum(!is.na(x))
+na_mean = function(x) mean(x, na.rm = TRUE)
+na_max = function(x) max(x, na.rm = TRUE)
+
+win_fun_20 = ts_in %>%
+  arrange(site, date) %>%
+  group_by(site) %>%
+  sliding_window("precipitation_mm", 20, n_val, "precip_mm_20_day_n") %>%
+  sliding_window("precipitation_mm", 20, sum, "precip_mm_20_day_sum") %>%
+  sliding_window("temperature_c", 20, n_val, "temp_c_20_day_n") %>%
+  sliding_window("temperature_c", 20, na_mean, "temp_c_20_day_mean") %>%
+  sliding_window("temperature_c", 20, na_max, "temp_c_20_day_max") %>%
+  ungroup()
+
+```
+
+correlation analysis
+```{r}
+bd_env = bd_model %>%
+  select(site,
+         date,
+         taxon_capture,
+         bd_detected_co,
+         log_bd_load_co_density) %>%
+  mutate(bd_detected_bi = as.numeric(bd_detected_co)) %>%
+  left_join(ts_in, by = c("site", "date")) %>%
+  arrange(site, date)
+
+max_lag <- 60 # for example, test lags from 0 to 14
+cross_cor <- function(df, col_a, col_b, max_lag) {
+  col_a_sym <- rlang::ensym(col_a)
+  col_b_sym <- rlang::ensym(col_b)
+  
+  map_dfr(0:max_lag, function(lag) {
+    result_df <- df %>%
+      mutate(col_a_lag = dplyr::lag(!!col_a_sym, n = lag)) %>%
+      filter(!is.na(col_a_lag), !is.na(!!col_b_sym))
+    
+    # Use pull() to extract columns, as symbols or string
+    corr <- cor(result_df$col_a_lag, result_df %>% pull(!!col_b_sym), use = "pairwise.complete.obs")
+    tibble(lag = lag, correlation = corr)
+  })
+}
+
+precip_xc = cross_cor(bd_env %>%
+                          filter(bd_detected_co), "precipitation_mm", col_b = "log_bd_load_co_density", 90)
+
+ggplot(precip_xc, aes(x = lag, y = correlation)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Correlation between A and B at varying lags")
+
+temp_xc = cross_cor(bd_env %>%
+                          filter(bd_detected_co), "temperature_c", col_b = "log_bd_load_co_density", 90)
+
+ggplot(temp_xc, aes(x = lag, y = correlation)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Correlation between A and B at varying lags")
+
+```
