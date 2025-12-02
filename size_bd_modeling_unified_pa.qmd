@@ -298,6 +298,80 @@ bd_model = bd_sample_valid %>%
 head(bd_model)
 ```
 
+# environmental data
+```{r}
+sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
+  ts_sym <- sym(ts_col_name)
+  res_sym <- sym(result_col_name)
+  
+  df %>%
+    group_modify(~{
+      n <- nrow(.x)
+      ts_vals <- pull(.x, !!ts_sym)
+      agg_vals <- map_dbl(seq_len(n), function(i) {
+        if (i >= window_size) {
+          window_vals <- ts_vals[(i - window_size + 1):i]
+          f(window_vals)
+        } else {
+          NA_real_
+        }
+      })
+      .x[[result_col_name]] <- agg_vals
+      .x
+    })
+}
+
+n_val = function(x) sum(!is.na(x))
+
+na_mean = function(x) {
+  if (all(is.na(x)))
+    return(NA)
+  else {
+    return(mean(x, na.rm = TRUE))
+  }
+}
+
+na_max = function(x) {
+  if (all(is.na(x)))
+    return(NA)
+  else {
+    return(max(x, na.rm = TRUE))
+  }
+}
+
+ts_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_025.csv"))
+
+env_agg = ts_in %>%
+  arrange(site, date) %>%
+  group_by(site) %>%
+  sliding_window("precipitation_mm", 365, sum, "precip_mm_year_sum") %>%
+  sliding_window("temperature_c", 365, na_mean, "temp_c_year_mean") %>%
+  sliding_window("precipitation_mm", 15, n_val, "precip_mm_15_day_n") %>%
+  sliding_window("precipitation_mm", 15, sum, "precip_mm_15_day_sum") %>%
+    sliding_window("precipitation_mm", 30, n_val, "precip_mm_30_day_n") %>%
+  sliding_window("precipitation_mm", 30, sum, "precip_mm_30_day_sum") %>%
+  sliding_window("temperature_c", 15, n_val, "temp_c_15_day_n") %>%
+  sliding_window("temperature_c", 15, na_mean, "temp_c_15_day_mean") %>%
+  sliding_window("temperature_c", 15, na_max, "temp_c_15_day_max") %>%
+    sliding_window("temperature_c", 30, n_val, "temp_c_30_day_n") %>%
+  sliding_window("temperature_c", 30, na_mean, "temp_c_30_day_mean") %>%
+  sliding_window("temperature_c", 30, na_max, "temp_c_30_day_max") %>%
+  ungroup()
+
+# ggplot(env_agg, aes(x = date)) +
+#   geom_line(aes(y = precip_mm_15_day_sum), linetype = "solid") +
+#   facet_wrap(. ~ site)
+# 
+# ggplot(env_agg, aes(x = date, y = temp_c_year_mean, color = site)) +
+#   geom_line()
+
+
+bd_model_env = bd_model %>%
+  left_join(env_agg, by = c("site", "date"))
+
+
+```
+
 ## Descriptive stats of data
 ```{r}
 #| eval: true
@@ -334,7 +408,7 @@ bd_pop_stats = bd_model %>%
             .groups = "drop")
 
 # export site list and coords
-buffer = 0.1
+buffer = 0.025
 site_lookup = bd_model %>%
   select(site) %>%
   distinct() %>%
@@ -348,7 +422,7 @@ site_lookup = bd_model %>%
          S = site_latitude - buffer,
          W = site_longitude - buffer,
          E = site_longitude + buffer) %>%
-  write_csv(here("python", "coordinates", "site_coords_panama.csv"))
+  write_csv(here("python", "gee_env_pull", "data", "site_coords_panama_025.csv"))
 
 ```
 
@@ -362,22 +436,72 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 
 # unified model
 
+brms_data <- bd_model_env %>%
+  mutate(
+    precip_mm_30_z  = as.numeric(scale(precip_mm_30_day_sum,  center = TRUE, scale = TRUE)),
+    temp_c_30_z     = as.numeric(scale(temp_c_30_day_mean,    center = TRUE, scale = TRUE)),
+    precip_mm_15_z  = as.numeric(scale(precip_mm_15_day_sum,  center = TRUE, scale = TRUE)),
+    temp_c_15_z     = as.numeric(scale(temp_c_15_day_mean,    center = TRUE, scale = TRUE))
+  ) %>%
+  # squared terms (on the z-scored variables)
+  mutate(
+    precip_mm_30_z2 = precip_mm_30_z^2,
+    temp_c_30_z2    = temp_c_30_z^2,
+    precip_mm_15_z2 = precip_mm_15_z^2,
+    temp_c_15_z2    = temp_c_15_z^2
+  )
+
+
 m3_ltp <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
     hu ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
     sigma ~ 1 + life_stage_simple * taxon_capture
   ),
-  data = bd_model,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.98, max_treedepth = 12),
+  seed = 124,
+  save_pars = save_pars(all = TRUE)
+)
+saveRDS(m3_ltp, file = "model_results_zln_life_tax_pop_unified.rds")
+m3_ltp = readRDS(file = "model_results_zln_life_tax_pop_unified.rds")
+
+
+m4_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture +
+      precip_mm_30_z + temp_c_30_z,
+    hu ~ 1 + life_stage_simple * taxon_capture +
+      precip_mm_15_z + temp_c_15_z,
+    sigma ~ 1 + life_stage_simple * taxon_capture
+  ),
+  data = brms_data,
   family = hurdle_lognormal(),
   chains = 4,
   iter = 4000,
   warmup = 1000,
   cores = 4,
   control = list(adapt_delta = 0.95, max_treedepth = 12),
-  seed = 123
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
 )
-saveRDS(m3_ltp, file = "model_results_zln_life_tax_pop_unified.rds")
+
+saveRDS(m4_hln, file = "model_results_zln_life_tax_env_unified.rds")
+m4_hln = readRDS(file = "model_results_zln_life_tax_env_unified.rds")
+
+summary(m4_hln)
+model_report(m4_hln)
+
+loo_m3 <- loo(m3_ltp, moment_match = TRUE, reloo = TRUE)
+loo_m4 <- loo(m4_hln, moment_match = TRUE)
+loo_comp <- loo_compare(list(site = loo_m3, env = loo_m4))
+
+bayes_factor(m3_ltp, m4_hln)
 ```
 
 ## Processing and visualization
