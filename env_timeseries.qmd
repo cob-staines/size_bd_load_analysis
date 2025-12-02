@@ -6,7 +6,7 @@ format: html
 ```{r}
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2)
 
-ts_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data.csv"))
+ts_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_025.csv"))
 
 ```
 
@@ -39,6 +39,16 @@ n_val = function(x) sum(!is.na(x))
 na_mean = function(x) mean(x, na.rm = TRUE)
 na_max = function(x) max(x, na.rm = TRUE)
 
+win_fun_10 = ts_in %>%
+  arrange(site, date) %>%
+  group_by(site) %>%
+  sliding_window("precipitation_mm", 10, n_val, "precip_mm_20_day_n") %>%
+  sliding_window("precipitation_mm", 10, sum, "precip_mm_20_day_sum") %>%
+  sliding_window("temperature_c", 10, n_val, "temp_c_20_day_n") %>%
+  sliding_window("temperature_c", 10, na_mean, "temp_c_20_day_mean") %>%
+  sliding_window("temperature_c", 10, na_max, "temp_c_20_day_max") %>%
+  ungroup()
+
 win_fun_20 = ts_in %>%
   arrange(site, date) %>%
   group_by(site) %>%
@@ -49,7 +59,165 @@ win_fun_20 = ts_in %>%
   sliding_window("temperature_c", 20, na_max, "temp_c_20_day_max") %>%
   ungroup()
 
+win_fun_30 = ts_in %>%
+  arrange(site, date) %>%
+  group_by(site) %>%
+  sliding_window("precipitation_mm", 30, n_val, "precip_mm_20_day_n") %>%
+  sliding_window("precipitation_mm", 30, sum, "precip_mm_20_day_sum") %>%
+  sliding_window("temperature_c", 30, n_val, "temp_c_20_day_n") %>%
+  sliding_window("temperature_c", 30, na_mean, "temp_c_20_day_mean") %>%
+  sliding_window("temperature_c", 30, na_max, "temp_c_20_day_max") %>%
+  ungroup()
+
+win_fun_40 = ts_in %>%
+  arrange(site, date) %>%
+  group_by(site) %>%
+  sliding_window("precipitation_mm", 40, n_val, "precip_mm_20_day_n") %>%
+  sliding_window("precipitation_mm", 40, sum, "precip_mm_20_day_sum") %>%
+  sliding_window("temperature_c", 40, n_val, "temp_c_20_day_n") %>%
+  sliding_window("temperature_c", 40, na_mean, "temp_c_20_day_mean") %>%
+  sliding_window("temperature_c", 40, na_max, "temp_c_20_day_max") %>%
+  ungroup()
+
+bd_env = bd_model %>%
+  select(site,
+         date,
+         taxon_capture,
+         bd_detected_co,
+         log_bd_load_co_density) %>%
+  mutate(bd_detected_bi = as.numeric(bd_detected_co)) %>%
+  left_join(win_fun_40, by = c("site", "date")) %>%
+  arrange(site, date)
+
+prev_precip = cor.test(bd_env$bd_detected_bi, bd_env$precip_mm_20_day_sum, method = "spearman")
+prev_temp_mean = cor.test(bd_env$bd_detected_bi, bd_env$temp_c_20_day_mean, method = "spearman")
+prev_temp_max = cor.test(bd_env$bd_detected_bi, bd_env$temp_c_20_day_max, method = "spearman")
+
+load_precip = cor.test(bd_env %>%
+                         filter(bd_detected_co) %>%
+                         pull(log_bd_load_co_density),
+                       bd_env %>%
+                         filter(bd_detected_co) %>%
+                         pull(precip_mm_20_day_sum), method = "pearson")
+load_temp_mean = cor.test(bd_env %>%
+                            filter(bd_detected_co) %>%
+                            pull(log_bd_load_co_density),
+                       bd_env %>%
+                         filter(bd_detected_co) %>%
+                         pull(temp_c_20_day_mean), method = "pearson")
+load_temp_max = cor.test(bd_env %>%
+                           filter(bd_detected_co) %>%
+                           pull(log_bd_load_co_density),
+                       bd_env %>%
+                         filter(bd_detected_co) %>%
+                         pull(temp_c_20_day_max), method = "pearson")
+
+prev_precip
+prev_temp_mean
+prev_temp_max
+load_precip
+load_temp_mean
+load_temp_max
+
 ```
+
+correlation across window size
+```{r}
+win_corr = function(df_a, df_b, window_l, window_f, col_a, col_b, cor_method) {
+  col_a_sym <- rlang::ensym(col_a)
+  col_b_sym <- rlang::ensym(col_b)
+  
+  df_win = df_a %>%
+    group_by(site) %>%
+    sliding_window(col_a_sym, window_l, window_f, "window")
+  
+  df_x = df_b %>%
+    left_join(df_win, by = c("site", "date")) %>%
+    select("window",
+           col_b_sym)
+  
+  test_n = cor.test(df_x %>%
+                      pull("window"),
+                    df_x %>%
+                      pull(col_b_sym), method = cor_method)
+  return(test_n$estimate[[1]])
+}
+
+na_mean = function(x) {
+  if (all(is.na(x)))
+    return(NA)
+  else {
+    return(mean(x, na.rm = TRUE))
+  }
+}
+
+na_max = function(x) {
+  if (all(is.na(x)))
+    return(NA)
+  else {
+    return(max(x, na.rm = TRUE))
+  }
+}
+
+
+bd_env = bd_model %>%
+  select(site,
+         date,
+         taxon_capture,
+         bd_detected_co,
+         log_bd_load_co_density) %>%
+  mutate(bd_detected_bi = as.numeric(bd_detected_co))
+
+window_max = 180
+
+prev_precip <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env, .x, sum, "precipitation_mm", "bd_detected_bi", "spearman")),
+         var = "precipitation_sum")
+prev_precip$output = unlist(prev_precip$output)
+
+prev_temp_mean <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env, .x, na_mean, "temperature_c", "bd_detected_bi", "spearman")),
+         var = "temperature_mean")
+prev_temp_mean$output = unlist(prev_temp_mean$output)
+
+prev_temp_max <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env, .x, na_max, "temperature_c", "bd_detected_bi", "spearman")),
+         var = "temperature_max")
+prev_temp_max$output = unlist(prev_temp_max$output)
+
+load_precip <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env %>% filter(bd_detected_co), .x, sum, "precipitation_mm", "log_bd_load_co_density", "pearson")),
+         var = "precipitation_sum")
+load_precip$output = unlist(load_precip$output)
+
+load_temp_mean <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env %>% filter(bd_detected_co), .x, na_mean, "temperature_c", "log_bd_load_co_density", "pearson")),
+         var = "temperature_mean")
+load_temp_mean$output = unlist(load_temp_mean$output)
+
+load_temp_max <- tibble(window_l = 1:window_max) %>%
+  mutate(output = map(window_l, ~win_corr(ts_in, bd_env %>% filter(bd_detected_co), .x, na_max, "temperature_c", "log_bd_load_co_density", "pearson")),
+         var = "temperature_max")
+load_temp_max$output = unlist(load_temp_max$output)
+
+prev_df = bind_rows(prev_precip,
+                    prev_temp_mean,
+                    prev_temp_max)
+
+ggplot(prev_df, aes(x = window_l, y = output, color = var)) +
+  geom_hline(yintercept = 0) +
+  geom_line()
+
+load_df = bind_rows(load_precip,
+                    load_temp_mean,
+                    load_temp_max)
+
+ggplot(load_df, aes(x = window_l, y = output, color = var)) +
+  geom_hline(yintercept = 0) +
+  geom_line()
+
+```
+
 
 correlation analysis
 ```{r}
@@ -63,36 +231,756 @@ bd_env = bd_model %>%
   left_join(ts_in, by = c("site", "date")) %>%
   arrange(site, date)
 
-max_lag <- 60 # for example, test lags from 0 to 14
-cross_cor <- function(df, col_a, col_b, max_lag) {
+cross_cor_prev <- function(df, lag_lookup, col_a, col_b, max_lag) {
+  col_a_sym <- rlang::ensym(col_a)
+  col_a_lag = paste0(col_a, ".lag")
+  col_b_sym <- rlang::ensym(col_b)
+  
+  map_dfr(0:max_lag, function(lag) {
+    result_df <- df %>%
+      mutate(date_lag = date - lag) %>%
+      left_join(lag_lookup, by = c("site", "date_lag" = "date"), suffix = c("", ".lag"))
+    
+    # Use pull() to extract columns, as symbols or string
+    corr <- cor(result_df %>% pull(!!col_a_lag), result_df %>% pull(!!col_b_sym), use = "pairwise.complete.obs", method = "spearman")
+    tibble(lag = lag, correlation = corr)
+  })
+}
+
+cross_cor_load <- function(df, lag_lookup, col_a, col_b, max_lag) {
+  col_a_sym <- rlang::ensym(col_a)
+  col_a_lag = paste0(col_a, ".lag")
+  col_b_sym <- rlang::ensym(col_b)
+  
+  map_dfr(0:max_lag, function(lag) {
+    result_df <- df %>%
+      mutate(date_lag = date - lag) %>%
+      left_join(lag_lookup, by = c("site", "date_lag" = "date"), suffix = c("", ".lag"))
+    
+    # Use pull() to extract columns, as symbols or string
+    corr <- cor(result_df %>% pull(!!col_a_lag), result_df %>% pull(!!col_b_sym), use = "pairwise.complete.obs")
+    tibble(lag = lag, correlation = corr)
+  })
+}
+
+precip_prev_xc = cross_cor_prev(bd_env, ts_in, "precipitation_mm", col_b = "bd_detected_bi", 90) %>%
+  mutate(vars = "Precip x Bd-detection")
+
+precip_load_xc = cross_cor_load(bd_env %>%
+                          filter(bd_detected_co), ts_in, "precipitation_mm", col_b = "log_bd_load_co_density", 90) %>%
+  mutate(vars = "Precip x Bd-load")
+
+precip_xc = bind_rows(precip_prev_xc,
+                      precip_load_xc)
+
+ggplot(precip_xc, aes(x = lag, y = correlation, color = vars)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Correlation between A and B at varying lags")
+
+temp_prev_xc = cross_cor_prev(bd_env, ts_in, "temperature_c", col_b = "bd_detected_bi", 90) %>%
+  mutate(vars = "Temp x Bd-detection")
+
+temp_load_xc = cross_cor_load(bd_env %>%
+                          filter(bd_detected_co), ts_in, "temperature_c", col_b = "log_bd_load_co_density", 90) %>%
+  mutate(vars = "Temp x Bd-load")
+
+temp_xc = bind_rows(temp_prev_xc,
+                    temp_load_xc)
+
+ggplot(temp_xc, aes(x = lag, y = correlation, color = vars)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Correlation between A and B at varying lags")
+
+
+```
+
+# values (not correlation)
+```{r}
+df = bd_env
+lag_lookup = ts_in
+col_a_breaks = seq(10, 30, by = 1)
+col_a = "temperature_c"
+max_lag = 30
+col_b = "log_bd_load_co_density"
+
+lag_matrix <- function(df, lag_lookup, col_a, col_b, max_lag, col_a_breaks) {
+  col_a_sym <- rlang::ensym(col_a)
+  col_a_lag = rlang::sym(paste0(col_a, ".lag"))
+  col_b_sym <- rlang::ensym(col_b)
+  
+  lag_df = tibble(lag_days = seq(0:max_lag))
+  result_df = df %>%
+    cross_join(lag_df) %>%
+    mutate(date_lag = date - lag_days) %>%
+    left_join(lag_lookup, by = c("site", "date_lag" = "date"), suffix = c("", ".lag")) %>%
+    mutate(var_bin = cut(!!col_a_lag, breaks = col_a_breaks, include.lowest = TRUE, right = FALSE)) %>%
+    group_by(lag_days, var_bin) %>%
+    summarise(n = n(),
+              mean_val = mean(!!col_b_sym, na.rm = TRUE),
+              .groups = 'drop')
+}
+
+plot_lag_matrix = function(df, env_var_name, bd_var_name) {
+  max_dev = max(abs(c(min(df$mean_val), max(df$mean_val)) - mean(df$mean_val)))
+  
+  ggplot(df, aes(x = lag_days, y = var_bin, fill = mean_val)) +
+    geom_tile() +
+    theme_minimal() +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      midpoint = mean(df$mean_val),
+      limits = c(mean(df$mean_val) - max_dev, mean(df$mean_val) + max_dev),
+      name = "Value"
+    ) +
+    labs(x = "Lag Days", y = env_var_name, fill = bd_var_name)
+}
+
+lag_matrix_temp_prev = lag_matrix(bd_env, ts_in, "temperature_c", "bd_detected_bi", 90, seq(10, 40, by = 3)) %>%
+  mutate(mean_dev = mean_val - mean(bd_env %>%
+                                      pull(bd_detected_bi), na.rm = TRUE))
+
+lag_matrix_temp_load = lag_matrix(bd_env %>%
+                                    filter(bd_detected_co), ts_in, "temperature_c", "log_bd_load_co_density", 90, seq(10, 40, by = 3)) %>%
+  mutate(mean_dev = mean_val - mean(bd_env %>%
+                                      filter(bd_detected_co) %>%
+                                      pull(log_bd_load_co_density), na.rm = TRUE))
+
+lag_matrix_precip_prev = lag_matrix(bd_env, ts_in, "precipitation_mm", "bd_detected_bi", 90, seq(0, 40, by = 3)) %>%
+  mutate(mean_dev = mean_val - mean(bd_env %>%
+                                      pull(bd_detected_bi), na.rm = TRUE))
+
+lag_matrix_precip_load = lag_matrix(bd_env %>%
+                                    filter(bd_detected_co), ts_in, "precipitation_mm", "log_bd_load_co_density", 90, seq(0, 40, by = 3)) %>%
+  mutate(mean_dev = mean_val - mean(bd_env %>%
+                                      filter(bd_detected_co) %>%
+                                      pull(log_bd_load_co_density), na.rm = TRUE))
+
+plot_lag_matrix(lag_matrix_temp_prev, "Temperature C", "Bd prevalence")
+plot_lag_matrix(lag_matrix_temp_load, "Temperature C", "log Bd Load")
+plot_lag_matrix(lag_matrix_precip_prev, "Precipitation mm", "Bd prevalence")
+plot_lag_matrix(lag_matrix_precip_load, "Precipitation mm", "log Bd Load") 
+
+lag = 50
+ggplot(bd_env %>%
+         mutate(date_lag = date - lag) %>%
+         left_join(lag_lookup, by = c("site", "date_lag" = "date"), suffix = c("", ".lag")), aes(y = log_bd_load_co_density)) +
+  geom_point(aes(x = precipitation_mm), color = "red") +
+  geom_point(aes(x = precipitation_mm.lag), color = "blue")
+
+```
+
+
+# across species
+```{r}
+
+df = bd_env
+lag_lookup = ts_in
+col_a = "precipitation_mm"
+col_b = "bd_detected_bi"
+max_lag = 90
+cross_cor_prev <- function(df, lag_lookup, col_a, col_b, max_lag) {
   col_a_sym <- rlang::ensym(col_a)
   col_b_sym <- rlang::ensym(col_b)
   
   map_dfr(0:max_lag, function(lag) {
     result_df <- df %>%
-      mutate(col_a_lag = dplyr::lag(!!col_a_sym, n = lag)) %>%
-      filter(!is.na(col_a_lag), !is.na(!!col_b_sym))
+      mutate(col_a_lag = dplyr::lag(!!col_a_sym, n = lag))
     
     # Use pull() to extract columns, as symbols or string
-    corr <- cor(result_df$col_a_lag, result_df %>% pull(!!col_b_sym), use = "pairwise.complete.obs")
+    corr <- cor(result_df$col_a_lag, result_df %>% pull(!!col_b_sym), use = "pairwise.complete.obs", method = "spearman")
     tibble(lag = lag, correlation = corr)
   })
 }
 
-precip_xc = cross_cor(bd_env %>%
-                          filter(bd_detected_co), "precipitation_mm", col_b = "log_bd_load_co_density", 90)
 
-ggplot(precip_xc, aes(x = lag, y = correlation)) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Correlation between A and B at varying lags")
+```
 
-temp_xc = cross_cor(bd_env %>%
-                          filter(bd_detected_co), "temperature_c", col_b = "log_bd_load_co_density", 90)
+# prewhitening
+```{r}
+negloglik_arma11_pooled <- function(params, zlist, estimate_mu = FALSE) {
+  if (estimate_mu) {
+    phi <- params[1]
+    theta <- params[2]
+    mu <- params[3]
+    log_sigma2 <- params[4]
+  } else {
+    phi <- params[1]
+    theta <- params[2]
+    mu <- 0
+    log_sigma2 <- params[3]
+  }
+  sigma2 <- exp(log_sigma2)
+  # simple stability penalty to keep things in stationary/invertible region
+  if (abs(phi) >= 0.9999 || abs(theta) >= 0.9999) return(1e10)
+  sumsq <- 0
+  n_effective <- 0
+  for (z in zlist) {
+    # skip too short series
+    if (length(z) < 2 || all(is.na(z))) next
+    # remove leading NAs
+    z <- as.numeric(z)
+    ok <- !is.na(z)
+    if (sum(ok) < 2) next
+    z <- z[ok]
+    # conditional likelihood: start residual recursion at t=2, set a1 = 0,
+    # compute residuals a_t for t=2..m and accumulate sumsq.
+    m <- length(z)
+    a_prev <- 0
+    # we start at t = 2 .. m
+    for (t in 2:m) {
+      a_t <- z[t] - mu - phi * (z[t-1] - mu) - theta * a_prev
+      sumsq <- sumsq + (a_t^2)
+      a_prev <- a_t
+    }
+    n_effective <- n_effective + (m - 1L)
+  }
+  if (n_effective <= 0) return(1e10)
+  nll <- 0.5 * n_effective * (log(2 * pi) + log(sigma2)) + 0.5 * sumsq / sigma2
+  return(nll)
+}
 
-ggplot(temp_xc, aes(x = lag, y = correlation)) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Correlation between A and B at varying lags")
+fit_pooled_arima111 <- function(replist,
+                                estimate_mu = FALSE,
+                                start = NULL,
+                                lower = c(phi = -0.99, theta = -0.99),
+                                upper = c(phi = 0.99, theta = 0.99),
+                                control = list()) {
+  # Build list of differenced series z = diff(y), dropping leading NA if necessary
+  zlist <- lapply(replist, function(y) {
+    y <- as.numeric(y)
+    if (all(is.na(y))) return(numeric(0))
+    # difference once preserving NA positions; use base::diff dropping NAs automatically
+    # but to be safe, compute difference on non-NA sequences and reassemble NAs
+    ok_idx <- which(!is.na(y))
+    if (length(ok_idx) <= 1) return(numeric(0))
+    # simple approach: compute diff on contiguous blocks
+    z <- diff(y)
+    # note: diff will coerce NA to NA for adjacent NA; we'll keep it simple and drop NA later
+    return(z)
+  })
+  # Remove empty elements
+  zlist <- Filter(function(z) length(na.omit(z)) >= 2, zlist)
+  if (length(zlist) == 0) stop("No usable differenced series (need at least length 2 after differencing).")
+  # starting values
+  if (is.null(start)) {
+    start_phi <- 0.5
+    start_theta <- 0.2
+    start_mu <- 0
+    start_sigma <- sd(unlist(lapply(zlist, function(z) na.omit(z))), na.rm = TRUE)
+  } else {
+    start_phi <- start["phi"]
+    start_theta <- start["theta"]
+    start_mu <- ifelse(is.null(start["mu"]), 0, start["mu"])
+    start_sigma <- ifelse(is.null(start["sigma"]), 1, start["sigma"])
+  }
+  if (estimate_mu) {
+    p0 <- c(phi = start_phi, theta = start_theta, mu = start_mu, log_sigma2 = log(start_sigma^2))
+    lower_b <- c(lower["phi"], lower["theta"], -Inf, -Inf)
+    upper_b <- c(upper["phi"], upper["theta"], Inf, Inf)
+  } else {
+    p0 <- c(phi = start_phi, theta = start_theta, log_sigma2 = log(start_sigma^2))
+    lower_b <- c(lower["phi"], lower["theta"], -Inf)
+    upper_b <- c(upper["phi"], upper["theta"], Inf)
+  }
+  # run optimizer
+  opt <- optim(par = p0,
+               fn = negloglik_arma11_pooled,
+               zlist = zlist,
+               estimate_mu = estimate_mu,
+               method = "L-BFGS-B",
+               lower = lower_b,
+               upper = upper_b,
+               control = control)
+  # extract estimates
+  if (estimate_mu) {
+    est_phi <- opt$par[1]
+    est_theta <- opt$par[2]
+    est_mu <- opt$par[3]
+    est_sigma2 <- exp(opt$par[4])
+  } else {
+    est_phi <- opt$par[1]
+    est_theta <- opt$par[2]
+    est_mu <- 0
+    est_sigma2 <- exp(opt$par[3])
+  }
+  # approximate SEs from Hessian (numDeriv)
+  # use negative log-lik wrapper for numDeriv's hessian
+  hess_ok <- try({
+    hess <- numDeriv::hessian(func = negloglik_arma11_pooled, x = opt$par, zlist = zlist, estimate_mu = estimate_mu)
+    vcov_mat <- try(solve(hess), silent = TRUE)
+    if (inherits(vcov_mat, "try-error")) vcov_mat <- NULL
+    vcov_mat
+  }, silent = TRUE)
+  se <- NULL
+  if (!is.null(hess_ok) && is.matrix(hess_ok)) {
+    se <- sqrt(diag(hess_ok))
+    names(se) <- names(opt$par)
+  }
+  # compute conditional log-likelihood (negative of opt$value)
+  logLik <- -opt$value
+  out <- list(call = match.call(),
+              estimates = list(phi = est_phi, theta = est_theta, mu = est_mu, sigma = sqrt(est_sigma2)),
+              se = se,
+              logLik = logLik,
+              optim = opt,
+              zlist = zlist)
+  class(out) <- "pooledARIMA111"
+  return(out)
+}
 
+fit_each_arima111 <- function(replist, use_forecast = FALSE) {
+  out <- lapply(names(replist), function(nm) {
+    y <- replist[[nm]]
+    if (all(is.na(y)) || length(na.omit(y)) < 5) {
+      return(data.frame(site = nm, phi = NA_real_, theta = NA_real_, sigma = NA_real_,
+                        se_phi = NA_real_, se_theta = NA_real_, se_sigma = NA_real_,
+                        stringsAsFactors = FALSE))
+    }
+    if (use_forecast && requireNamespace("forecast", quietly = TRUE)) {
+      fit <- tryCatch(forecast::Arima(y, order = c(1,1,1), include.mean = FALSE), error = function(e) NULL)
+      if (is.null(fit)) {
+        fit <- tryCatch(stats::arima(y, order = c(1,1,1), include.mean = FALSE), error = function(e) NULL)
+      }
+    } else {
+      fit <- tryCatch(stats::arima(y, order = c(1,1,1), include.mean = FALSE), error = function(e) NULL)
+    }
+    if (is.null(fit)) {
+      return(data.frame(site = nm, phi = NA_real_, theta = NA_real_, sigma = NA_real_,
+                        se_phi = NA_real_, se_theta = NA_real_, se_sigma = NA_real_,
+                        stringsAsFactors = FALSE))
+    }
+    coefs <- coef(fit)
+    phi <- ifelse("ar1" %in% names(coefs), coefs["ar1"], NA_real_)
+    theta <- ifelse("ma1" %in% names(coefs), coefs["ma1"], NA_real_)
+    sigma <- sqrt(fit$sigma2)
+    # approximate se: use sqrt(diag(var.coef)) if available
+    se_phi <- se_theta <- se_sigma <- NA_real_
+    if (!is.null(fit$var.coef)) {
+      vc <- fit$var.coef
+      se_phi <- ifelse("ar1" %in% rownames(vc), sqrt(vc["ar1", "ar1"]), NA_real_)
+      se_theta <- ifelse("ma1" %in% rownames(vc), sqrt(vc["ma1", "ma1"]), NA_real_)
+    }
+    data.frame(site = nm, phi = as.numeric(phi), theta = as.numeric(theta), sigma = sigma,
+               se_phi = as.numeric(se_phi), se_theta = as.numeric(se_theta), se_sigma = as.numeric(se_sigma),
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, out)
+}
+
+sites = sort(unique(ts_in$site))
+precip_ts = vector("list", length(sites))
+
+for (ii in sites) {
+  precip_ts[[ii]] = ts_in %>%
+    filter(site == ii) %>%
+    arrange(date) %>%
+    pull(precipitation_mm)
+}
+
+# pooled
+pooled_fit <- fit_pooled_arima111(precip_ts, estimate_mu = FALSE)
+print(pooled_fit$estimates)
+
+# individual
+perfit <- fit_each_arima111(precip_ts)
+print(summary(perfit$phi))
+print(summary(perfit$theta))
+print(summary(perfit$sigma))
+
+# prewhitening
+
+x = ts_in %>%
+      filter(site == "altos_de_piedra") %>%
+      arrange(date) %>%
+      pull(precipitation_mm)
+acf(x, lag.max = 90)
+diff1x = diff(x, 1)
+acf(diff1x, lag.max = 90, na.action = na.omit)
+pacf(diff1x, lag.max = 90, na.action = na.omit)
+ar1model = sarima(x,1,1,1)
+ar1model
+pwx=resid(ar1model$fit)
+newpwy = filter(y, filter = c(1,-0.2249857,-0.9425813), sides =1)
+ccf (pwx,newpwy,na.action=na.omit)
+
+# sparse options
+dates = ts_in %>%
+  select(date) %>%
+  distinct() %>%
+  arrange(date)
+
+sites = ts_in %>%
+  select(site) %>%
+  distinct() %>%
+  arrange(site)
+
+site_date = cross_join(sites,
+                       dates)
+
+df_agg <- bd_model %>%
+  filter(bd_detected_co) %>%
+  group_by(date, site) %>%
+  summarise(mean_log_load = mean(log_bd_load_co_density, na.rm = TRUE),
+            n = n(),
+            .groups='drop')
+
+full_agg = site_date %>%
+  left_join(df_agg, by = c("site", "date")) %>%
+  left_join(ts_in, by = c("site", "date"))
+
+adp = full_agg %>%
+  filter(site == "altos_de_piedra") %>%
+  select(-site)
+
+
+peace <- vector("list", nrow(sites))
+for (i in seq_len(nrow(sites))) {
+  site_name <- sites$site[i]  # Adjust column name if needed (e.g., sites$site)
+  peace[[i]] <- acf(full_agg %>%
+                       filter(site == site_name) %>%
+                       arrange(date) %>%
+                       pull(precipitation_mm), 
+                     lag.max = 90)
+}
+
+acf_df <- map_dfr(seq_along(peace), function(i) {
+  tibble(
+    site = i,
+    lag = 0:(length(peace[[i]]$acf[, 1, 1]) - 1),
+    acf = peace[[i]]$acf[, 1, 1]
+  )
+})
+
+mean_acf_df <- acf_df %>%
+  group_by(lag) %>%
+  summarise(mean_acf = mean(acf, na.rm = TRUE), .groups = "drop")
+
+ggplot(mean_acf_df, aes(lag, mean_acf)) +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_bar(stat = "identity") +
+  labs(title = "Mean ACF Across Replicate Sites")
+
+
+```
+
+# baysian attempt
+```{r}
+library(dlnm)
+library(splines)
+
+surveys = bd_model %>%
+  mutate(individual_id = row_number(),
+         load = bd_load_co_density,
+         species = taxon_capture,
+         infection_present = as.numeric(bd_detected_co)) %>%
+  select(population,
+         site,
+         date,
+         individual_id,
+         species,
+         infection_present,
+         load)
+
+env_df = ts_in %>%
+  rename(precip_daily = precipitation_mm,
+         temp_daily = temperature_c)
+
+# env_df: columns site, date (Date), precip_daily, temp_daily  (daily series full)
+# surveys: columns site, date (Date), individual_id, species, infection_present (0/1), load (NA if absent)
+
+N <- nrow(env_df %>%
+            select(date) %>%
+            distinct())
+L <- 180  # max lag window in days (choose based on biology)
+# make crossbasis for each env variable for each site/date when needed.
+# We'll create a helper that for each survey row computes the crossbasis columns 
+# by looking back L days in env_df and computing the basis projection.
+
+# Create a function to compute crossbasis matrix for one env vector:
+var_df = 4
+lag_df = 5
+
+make_crossbasis <- function(env_vector, lags = L,
+                            var_cb_args = list(fun="ns", df=var_df),
+                            lag_cb_args = list(fun="ns", df=lag_df)) {
+  # env_vector must be a numeric vector of daily env values of length >= lags+1 
+  # with most recent at the end (i.e., last day is survey date)
+  cb <- crossbasis(env_vector, lag=lags,
+                   argvar = var_cb_args,
+                   arglag = lag_cb_args)
+  # crossbasis returns a matrix with columns naming scheme; convert to matrix
+  as.matrix(cb)
+}
+
+# Example: build crossbasis for all survey rows
+# This loop is simple and clear; can be optimized.
+survey_rows <- surveys %>% mutate(rowid = row_number())
+
+list_cb_precip <- vector("list", nrow(survey_rows))
+list_cb_temp   <- vector("list", nrow(survey_rows))
+
+for(i in seq_len(nrow(survey_rows))) {
+  s <- survey_rows[i, ]
+  site_env <- env_df %>% filter(site == s$site) %>% arrange(date)
+  # find index of survey date
+  idx <- which(site_env$date == s$date)
+  if(length(idx)==0) stop("survey date not in env series")
+  start_idx <- max(1, idx - L)
+  env_slice <- site_env$precip_daily[start_idx:idx]
+  # pad at front if needed
+  if(length(env_slice) < (L+1)) env_slice <- c(rep(NA, (L+1)-length(env_slice)), env_slice)
+  # create crossbasis (note: crossbasis expects full length with latest at end)
+  cbp <- make_crossbasis(env_slice, lags=L,
+                         var_cb_args = list(fun="ns", df=4),
+                         lag_cb_args = list(fun="ns", df=5))
+  list_cb_precip[[i]] <- cbp[nrow(cbp), , drop = FALSE] # or see dlnm use
+  # repeat for temp
+  env_slice_t <- site_env$temp_daily[start_idx:idx]
+  if(length(env_slice_t) < (L+1)) env_slice_t <- c(rep(NA, (L+1)-length(env_slice_t)), env_slice_t)
+  cbt <- make_crossbasis(env_slice_t, lags=L,
+                         var_cb_args = list(fun="ns", df=4),
+                         lag_cb_args = list(fun="ns", df=5))
+  list_cb_temp[[i]] <- cbt[nrow(cbt), , drop = FALSE]
+}
+
+# Now bind basis columns into survey data frame:
+cb_precip_df <- do.call(rbind, list_cb_precip)
+cb_temp_df   <- do.call(rbind, list_cb_temp)
+colnames(cb_precip_df) <- paste0("pp_cb", seq_len(ncol(cb_precip_df)))
+colnames(cb_temp_df)   <- paste0("tt_cb", seq_len(ncol(cb_temp_df)))
+
+# brms_data <- bind_cols(survey_rows, as.data.frame(cb_precip_df), as.data.frame(cb_temp_df))
+brms_data <- bind_cols(survey_rows, as.data.frame(cb_precip_df))
+
+```
+
+```{r}
+library(brms)
+
+# ---- 3) Prepare response column for hurdle lognormal ----
+# brms expects raw response with zeros present. Use column 'load' with 0 for non-detects.
+# If some loads are NA for other reasons, treat those rows appropriately (e.g., remove or set 0).
+# Verify:
+table(is.na(brms_data$load))
+
+# ---- 4) Build brms formula (hurdle_lognormal) ----
+# names of basis columns:
+pp_names <- grep("^pp_cb", names(brms_data), value = TRUE)
+# tt_names <- grep("^tt_cb", names(brms_data), value = TRUE)
+
+# # combine into RHS; include site and species random intercepts
+# rhs <- paste(c(pp_names, tt_names, "(1|population / site)", "(1|species)"), collapse = " + ")
+# 
+# # two-part model using bf(): left is continuous (lognormal) conditional model, hu is zero-hurdle (logit)
+# f_hurdle <- bf(
+#   load ~ 0 + Intercept + (1|population / site) + (1|species) + .,
+#   hu   ~ 0 + Intercept + (1|population / site) + (1|species) + .,
+#   family = hurdle_lognormal()
+# )
+
+# The approach above using '.' in bf is tricky; instead construct two formulas more directly:
+# mu_rhs  <- paste(c(pp_names, tt_names, "(1|site)", "(1|species)"), collapse = " + ")
+# hu_rhs  <- paste(c(pp_names, tt_names, "(1|site)", "(1|species)"), collapse = " + ")
+mu_rhs  <- paste(c(pp_names, "(1|population/site)", "(1|species)"), collapse = " + ")
+hu_rhs  <- paste(c(pp_names, "(1|population/site)", "(1|species)"), collapse = " + ")
+
+f_h <- bf(
+  as.formula(paste0("load ~ ", mu_rhs)),
+  as.formula(paste0("hu ~ ", hu_rhs))
+)
+
+# ---- 5) Priors (regularizing) ----
+priors <- c(
+  # slope priors for both parts (applies to both unless specifying dpar)
+  prior(normal(0, 0.5), class = "b"),
+  # intercepts (separate for mu and hu; brms will create Intercept and hu_Intercept)
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "b", dpar = "hu"), # optional redundant; keep generic b prior above
+  # random effects sd
+  prior(student_t(3, 0, 5), class = "sd")
+)
+
+# If desired, tighten the b prior for the hu (!) you can use:
+# prior(normal(0, 0.5), class = "b", dpar = "hu")
+
+# ---- 6) Fit the model ----
+# Note: fitting can be slow. Adjust cores/chains as available.
+fit_hurdle <- brm(
+  formula = f_h,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = priors,
+  control = list(adapt_delta = 0.95, max_treedepth = 15),
+  cores = 4, chains = 4, iter = 3000
+)
+
+# ---- 7) Postprocessing: reconstruct lag-response curves ----
+# ------------------- REPLACEMENT POSTPROCESSING BLOCK -------------------
+# (Keeps variable names the same; does not require re-fitting the model)
+
+library(posterior)  # as_draws_df used earlier
+library(ggplot2)
+
+# Extract posterior draws (safe: will work with your existing fit_hurdle)
+post <- as_draws_df(fit_hurdle)
+
+# get the coefficient names we expect from the model / data
+# these are the pp_cb* names you created and used in the formula
+pp_names <- grep("^pp_cb", names(brms_data), value = TRUE)
+n_pp_names <- length(pp_names)
+message("Number of 'pp_cb' columns in brms_data (pp_names): ", n_pp_names)
+
+# Extract coefficient names from posterior draws
+b_mu_precip <- names(post)[grepl("^b_pp_cb", names(post))]
+b_hu_precip <- names(post)[grepl("^b_hu_pp_cb", names(post))]
+message("Number of posterior mu precip coeffs found: ", length(b_mu_precip))
+message("Number of posterior hu  precip coeffs found: ", length(b_hu_precip))
+
+# Build dummy lag-basis (L and var_df, lag_df assumed from earlier in your script)
+dummy_env_lags <- seq(0, 1, length.out = L + 1)
+cb_dummy_precip <- as.matrix(
+  crossbasis(dummy_env_lags, lag = L,
+             argvar = list(fun = "ns", df = var_df),
+             arglag = list(fun = "ns", df = lag_df))
+)
+
+
+stopifnot(length(pp_names) == ncol(cb_dummy_precip))  # quick sanity check
+
+# rename dummy cols to match the model/data pp_cb* column names
+colnames(cb_dummy_precip) <- pp_names
+
+# reverse rows so row 1 = lag 0
+cb_mat_precip_bylag <- as.matrix(cb_dummy_precip[nrow(cb_dummy_precip):1, , drop = FALSE])
+
+
+###
+
+# ---------- Robust rebuild of dummy crossbasis (precip only) ----------
+# Keeps your L, var_df, lag_df, pp_names, fit_hurdle, post, b_mu_precip, b_hu_precip
+
+# Make a dummy env vector LONGER than L+1 so crossbasis has many full-window rows.
+# A safe choice is length = 2*L + 1 (you can choose larger if you like).
+dummy_length <- 2 * L + 1
+dummy_env_long <- seq(0, 1, length.out = dummy_length)  # must vary a bit
+
+# Build the crossbasis on the long dummy
+cb_dummy_long <- as.matrix(
+  crossbasis(dummy_env_long, lag = L,
+             argvar = list(fun = "ns", df = var_df),
+             arglag = list(fun = "ns", df = lag_df))
+)
+
+message("cb_dummy_long dims: ", paste(dim(cb_dummy_long), collapse = " x "))
+# There should be many rows; only the last (L+1) rows have a full lag window.
+
+# Extract the LAST L+1 rows: these correspond to positions where the lag window is complete.
+rows_full_window <- (nrow(cb_dummy_long) - L) : nrow(cb_dummy_long)  # length = L+1
+cb_dummy_precip_full <- cb_dummy_long[rows_full_window, , drop = FALSE]
+
+# Sanity: these rows should have no NAs (crossbasis computed over a full window)
+if(anyNA(cb_dummy_precip_full)) {
+  # show diagnostics if something is still wrong
+  stop("Rebuilt crossbasis still has NA in the full-window rows. Inspect cb_dummy_long and rows_full_window.")
+}
+
+# Now cb_dummy_precip_full has (L+1) rows. We need columns to match your pp_names.
+if(ncol(cb_dummy_precip_full) != length(pp_names)) {
+  stop("Column count mismatch: crossbasis produced ", ncol(cb_dummy_precip_full),
+       " columns but you have ", length(pp_names), " pp_cb columns. Check var_df / lag_df used to construct pp_cb.")
+}
+
+# Rename columns to match the pp_cb names you used in the model
+colnames(cb_dummy_precip_full) <- pp_names
+
+# Reverse rows so row 1 -> lag 0, row 2 -> lag 1, ..., row L+1 -> lag L
+cb_mat_precip_bylag <- cb_dummy_precip_full[nrow(cb_dummy_precip_full):1, , drop = FALSE]
+
+# Final sanity checks
+stopifnot(nrow(cb_mat_precip_bylag) == (L + 1))
+stopifnot(ncol(cb_mat_precip_bylag) == length(pp_names))
+
+message("cb_mat_precip_bylag ready: dims = ", paste(dim(cb_mat_precip_bylag), collapse = " x "),
+        "  (row 1 = lag 0, row L+1 = lag L)")
+
+# --- Now reconstruct effects using posterior draws (as before) ---
+post_mu_mat_pp <- as.matrix(post[, b_mu_precip, drop = FALSE])
+post_hu_mat_pp <- as.matrix(post[, b_hu_precip, drop = FALSE])
+
+# Ensure posterior coefficient count matches number of basis columns
+if(ncol(post_mu_mat_pp) != ncol(cb_mat_precip_bylag)) {
+  stop("Posterior mu coef count (", ncol(post_mu_mat_pp),
+       ") != number of basis columns (", ncol(cb_mat_precip_bylag), ").")
+}
+if(ncol(post_hu_mat_pp) != ncol(cb_mat_precip_bylag)) {
+  stop("Posterior hu coef count (", ncol(post_hu_mat_pp),
+       ") != number of basis columns (", ncol(cb_mat_precip_bylag), ").")
+}
+
+# compute effects (draws x lags)
+compute_effects <- function(post_mat, cb_bylag) {
+  ndraws <- nrow(post_mat)
+  nlags  <- nrow(cb_bylag)
+  eff_array <- array(NA_real_, dim = c(ndraws, nlags))
+  for(d in seq_len(ndraws)) {
+    eff_array[d, ] <- as.numeric(cb_bylag %*% post_mat[d, , drop = TRUE])
+  }
+  eff_array
+}
+
+eff_mu <- compute_effects(post_mu_mat_pp, cb_mat_precip_bylag)
+eff_hu <- compute_effects(post_hu_mat_pp, cb_mat_precip_bylag)
+
+message("NA counts per lag (mu) (first 20): ", paste(head(colSums(is.na(eff_mu)), 20), collapse = ", "))
+message("Unique NA counts (mu): ", paste(unique(colSums(is.na(eff_mu))), collapse = ", "))
+
+# Summarize and plot (same code as before)
+summarize_effects <- function(eff_array) {
+  med <- apply(eff_array, 2, median, na.rm = TRUE)
+  lo  <- apply(eff_array, 2, quantile, probs = 0.025, na.rm = TRUE)
+  hi  <- apply(eff_array, 2, quantile, probs = 0.975, na.rm = TRUE)
+  data.frame(lag = 0:(ncol(eff_array) - 1), median = med, lower = lo, upper = hi)
+}
+
+mu_curve <- summarize_effects(eff_mu)
+hu_curve <- summarize_effects(eff_hu)
+
+library(ggplot2)
+p1 <- ggplot(mu_curve, aes(lag, median)) + geom_line() + geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2) +
+  labs(title="Hurdle-Lognormal: mu part (precip effect by lag)", x="lag (days)", y="linear predictor")
+p2 <- ggplot(hu_curve, aes(lag, median)) + geom_line() + geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2) +
+  labs(title="Hurdle-Lognormal: hu part (precip effect by lag)", x="lag (days)", y="logit(prob positive)")
+
+print(p1); print(p2)
+```
+
+# checks
+```{r}
+# 1a. Basic shapes
+message("dims cb_dummy_precip: ", paste(dim(cb_dummy_precip), collapse = " x "))
+message("length(pp_names): ", length(pp_names))
+message("nbasis from post mu: ", length(b_mu_precip), "; nbasis hu: ", length(b_hu_precip))
+
+# 1b. Any NAs in the dummy-by-lag matrix?
+any_na_cb <- anyNA(cb_mat_precip_bylag)
+message("Any NA in cb_mat_precip_bylag? ", any_na_cb)
+
+# 1c. Count NAs by row and which rows have any NA
+na_by_row <- rowSums(is.na(cb_mat_precip_bylag))
+table(na_by_row == 0)   # how many rows are fully OK vs have at least one NA
+which_rows_with_na <- which(na_by_row > 0)
+message("Rows with any NA (first 20): ", paste(head(which_rows_with_na, 20), collapse = ", "))
+
+if(any_na_cb) {
+  rows_to_check <- head(which_rows_with_na, 10)
+  for(r in rows_to_check) {
+    na_cols <- which(is.na(cb_mat_precip_bylag[r, ]))
+    message("row ", r-1, " (lag=", r-1, ") NA cols: ", paste(na_cols, collapse = ", "))
+    message("example values (non-NA) in that row: ", paste(head(cb_mat_precip_bylag[r, !is.na(cb_mat_precip_bylag[r, ])], 5), collapse = ", "))
+  }
+}
 ```
