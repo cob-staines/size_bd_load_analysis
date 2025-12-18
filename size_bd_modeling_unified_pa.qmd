@@ -358,6 +358,11 @@ env_agg = ts_in %>%
   sliding_window("temperature_c", 30, na_max, "temp_c_30_day_max") %>%
   ungroup()
 
+site_climate = ts_in %>%
+  group_by(site) %>%
+  summarize(site_temp_c_mean = mean(temperature_c, na.rm = TRUE),
+            site_precip_mm_annual_mean = sum(precipitation_mm, na.rm = TRUE) / 14) # divide by year count
+
 # ggplot(env_agg, aes(x = date)) +
 #   geom_line(aes(y = precip_mm_15_day_sum), linetype = "solid") +
 #   facet_wrap(. ~ site)
@@ -367,7 +372,8 @@ env_agg = ts_in %>%
 
 
 bd_model_env = bd_model %>%
-  left_join(env_agg, by = c("site", "date"))
+  left_join(env_agg, by = c("site", "date")) %>%
+  left_join(site_climate, by = "site")
 
 
 ```
@@ -471,13 +477,33 @@ m3_ltp <- brm(
 saveRDS(m3_ltp, file = "model_results_zln_life_tax_pop_unified.rds")
 m3_ltp = readRDS(file = "model_results_zln_life_tax_pop_unified.rds")
 
+m3_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m3_hln, file = "model_results_zln_life_tax_env_unified_simple.rds")
+m3_hln = readRDS(file = "model_results_zln_life_tax_env_unified_simple.rds")
+
+summary(m3_hln)
+model_report(m3_hln)
 
 m4_hln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture +
-      precip_mm_30_z + temp_c_30_z,
-    hu ~ 1 + life_stage_simple * taxon_capture +
-      precip_mm_15_z + temp_c_15_z,
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
     sigma ~ 1 + life_stage_simple * taxon_capture
   ),
   data = brms_data,
@@ -497,11 +523,67 @@ m4_hln = readRDS(file = "model_results_zln_life_tax_env_unified.rds")
 summary(m4_hln)
 model_report(m4_hln)
 
-loo_m3 <- loo(m3_ltp, moment_match = TRUE, reloo = TRUE)
-loo_m4 <- loo(m4_hln, moment_match = TRUE)
-loo_comp <- loo_compare(list(site = loo_m3, env = loo_m4))
+m5_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
 
-bayes_factor(m3_ltp, m4_hln)
+saveRDS(m5_hln, file = "model_results_zln_life_tax_env2_unified.rds")
+m5_hln = readRDS(file = "model_results_zln_life_tax_env2_unified.rds")
+
+m6_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m6_hln, file = "model_results_zln_life_tax_env_clim_unified.rds")
+m6_hln = readRDS(file = "model_results_zln_life_tax_env_clim_unified.rds")
+
+summary(m6_hln)
+model_report(m6_hln)
+
+
+summary(m5_hln)
+model_report(m5_hln)
+
+loo_m4 <- loo(m4_hln, moment_match = TRUE)
+loo_m5 <- loo(m5_hln, moment_match = TRUE)
+
+loo_comp <- loo_compare(list(linear = loo_m4, quadratic = loo_m5))
+
+# life-stage specific standard deviation?
+bayes_factor(m3_hln, m4_hln)
+
+# linear or quadratic (slight preference for linear over quatratic)
+bayes_factor(m3_hln, m5_hln)
+
+# include climate vars? (slight preference for without climate basis over wiht)
+bayes_factor(m3_hln, m6_hln)
+
 ```
 
 ## Processing and visualization
