@@ -12,3 +12,4 @@ papers/
 *.txt
 *.csv
 *_files/
+!python/gee_env_pull/site_coords_example.csv
