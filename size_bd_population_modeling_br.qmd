@@ -80,24 +80,70 @@ Species were grouped across regions, years, and seasons, and were included if
 #| code-fold: true
 #| code-summary: "Show data collection code"
 
+# bd_explore = bd_sample %>%
+#   filter(country == "brazil",
+#          !is.na(svl_mm)) %>%
+#   select(taxon_capture,
+#          life_stage,
+#          sex,
+#          svl_mm,
+#          body_mass_g,
+#          comments_capture,
+#          date,
+#          site,
+#          region) %>%
+#   collect() %>%
+#   arrange(taxon_capture,
+#           desc(svl_mm),
+#           desc(body_mass_g))
 
 # identify populations
 bd_population = bd_sample %>%
   # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
   filter(country == "brazil",
-         life_stage %in% c("adult", "subadult", "juvenile"),
-         !is.na(life_stage)) %>%
+         life_stage %in% c("adult", "subadult", "juvenile")) %>%
   mutate(population = region,
          tax_pop = paste0(taxon_capture, "_", population),
          year = year(date),
-         life_stage_simple = case_match(life_stage,
-                                        "adult" ~ "adult",
-                                        c("subadult", "juvenile") ~ "subadult")
-  )
-
+         life_stage_simple = case_when(
+           # Heyer, W. R., and R. B. Cocroft. 1986
+           ((taxon_capture == "hylodes_phyllodes") & (svl_mm >= 27.5)) ~ "adult",
+           ((taxon_capture == "hylodes_phyllodes") & (svl_mm < 27.5)) ~ "subadult",
+           # Kwet, A., and M. Solé. 2005
+           ((taxon_capture == "ischnocnema_henselii") & (svl_mm >= 21.0)) ~ "adult",
+           ((taxon_capture == "ischnocnema_henselii") & (svl_mm < 21.0)) ~ "subadult",
+           .default = NA),
+         life_stage_simple = if_else(is.na(life_stage_simple),
+                                     case_match(life_stage,
+                                                "adult" ~ "adult",
+                                                c("subadult", "juvenile") ~ "subadult",
+                                                .default = NA),
+                                     life_stage_simple)
+  ) %>%
+  filter(!is.na(life_stage_simple))
+# bd_population = bd_sample %>%
+#   # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+#   filter(country == "brazil",
+#          life_stage %in% c("adult", "subadult", "juvenile"),
+#          !is.na(life_stage)) %>%
+#   mutate(population = region,
+#          tax_pop = paste0(taxon_capture, "_", population),
+#          year = year(date),
+#          life_stage_simple = case_match(life_stage,
+#                                         "adult" ~ "adult",
+#                                         c("subadult", "juvenile") ~ "subadult",
+#                                         .default = NA)
+#   )
 
 # selection criteria
 ## - at least 14 each adult and subadult per species
+
+bd_species_valid = bd_population %>%
+  group_by(taxon_capture, life_stage) %>%
+  summarise(ls_count = n(),
+            .groups = "drop") %>%
+  collect() %>%
+  arrange(taxon_capture, life_stage)
 
 bd_species_valid = bd_population %>%
   group_by(taxon_capture, life_stage_simple) %>%
@@ -120,18 +166,19 @@ bd_species_valid = bd_population %>%
 # join with bd data, select
 bd_sample_valid = bd_population %>%
   filter(taxon_capture %in% bd_species_valid$taxon_capture) %>%
-  left_join(db_bd %>%
+   inner_join(db_bd %>%
               filter(!is.na(detected)) %>%
               group_by(sample_id) %>%
-              summarise(bd_swab_count = n(),
-                        bd_detected = any(detected),
-                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
-                        .groups = "drop"),
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     detected,
+                     bd_its1_copies_per_swab),
             by = "sample_id") %>%
+  filter(!is.na(bd_its1_copies_per_swab)) %>%
   select(sample_id,
-         bd_swab_count,
-         bd_detected,
-         bd_mean_its1_copies_per_swab,
+         detected,
+         bd_its1_copies_per_swab,
          capture_id,
          taxon_capture,
          life_stage,
@@ -156,25 +203,41 @@ bd_sample_valid = bd_population %>%
                                     c(1, 2, 3, 8, 9, 10, 11, 12) ~ "seca",
                                     .default = NA_character_))
 
+region_species_valid = bd_sample_valid %>%
+  group_by(region, taxon_capture) %>%
+  summarize(adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(adult_n > 0 & subadult_n > 0) %>%
+  select(taxon_capture,
+         region)
+
 bd_model = bd_sample_valid %>%
-  filter(!is.na(bd_mean_its1_copies_per_swab),
-         season == "seca") %>%
-  mutate(bd_load = bd_mean_its1_copies_per_swab,
-         # log_bd_load = log(bd_load + 1),
-         log_bd_load = log(bd_load),
-         bd_load_int = as.integer(bd_load)) %>%
-  select(bd_load,
-         log_bd_load,
-         bd_load_int,
-         bd_detected,
+  inner_join(region_species_valid, by = c("taxon_capture", "region")) %>%
+  rename(bd_load = bd_its1_copies_per_swab,
+         bd_detected = detected) %>%
+  mutate(bd_detected_co = bd_load >= 10,
+         bd_load_co = if_else(bd_load < 10,
+                                  0,
+                                  bd_load),
+         bd_load_co_density = bd_load_co / svl_mm,
+         log_bd_load_co_density = log(bd_load_co_density),
+         log_bd_load_co = log(bd_load_co)) %>%
+  select(bd_load_co,
+         log_bd_load_co,
+         bd_load_co_density,
+         log_bd_load_co_density,
+         bd_detected_co,
          svl_mm,
          site,
+         population,
          taxon_capture,
          tax_pop,
          life_stage,
          life_stage_simple,
          date,
          season,
+         population,
          region,
          country)
 
@@ -189,8 +252,7 @@ head(bd_model)
 #| code-summary: "Show selected data stats code"
 
 (bd_model_stats = bd_model %>%
-  filter(!is.na(season)) %>%
-  group_by(taxon_capture, country, season) %>%
+  group_by(taxon_capture, country) %>%
   summarise(regions = paste(sort(unique(region)), collapse = ", "),
             site_n = n_distinct(site),
             year_first = year(min(date)),
@@ -215,7 +277,7 @@ I modeled Bd load using a Baysian zero-inflated log-normal model [@schrock2025fu
 run_m3_zln = function(taxon, bd_model){
   m3_zln <- brm(
     formula = bf(
-      bd_load ~ 1 + life_stage_simple,
+      bd_load ~ 1 + life_stage_simple + (1| population / site),
       hu ~ 1 + life_stage_simple,
       sigma ~ 1 + life_stage_simple
     ),
@@ -248,6 +310,27 @@ taxon_m = "rhinella_ornata"
 output_m = "model_results_zln_life_rhor.rds"
 m3_zln = run_m3_zln(taxon_m, bd_model)
 saveRDS(m3_zln, file = output_m)
+
+m3_ltp <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
+    sigma ~ 1 + life_stage_simple * taxon_capture
+  ),
+  data = bd_model,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.98, max_treedepth = 12),
+  seed = 128,
+  save_pars = save_pars(all = TRUE)
+)
+saveRDS(m3_ltp, file = "br_model_results_zln_life_tax_pop_unified.rds")
+m3_ltp = readRDS(file = "br_model_results_zln_life_tax_pop_unified.rds")
+
+summary(m3_ltp)
 
 ```
 
