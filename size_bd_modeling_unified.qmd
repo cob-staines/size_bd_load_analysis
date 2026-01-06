@@ -648,14 +648,14 @@ m3_ltp <- brm(
   formula = bf(
     bd_load_co ~ 1 + life_stage_simple * taxon_capture + (1 | population),
     hu ~ 1 + life_stage_simple * taxon_capture + (1 | population),
-    sigma ~ 1 + life_stage_simple * taxon_capture
+    sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
   chains = 4,
   iter = 4000,
   warmup = 1000,
-  cores = 8,
+  cores = 4,
   control = list(adapt_delta = 0.98, max_treedepth = 12),
   seed = 124,
   save_pars = save_pars(all = TRUE)
