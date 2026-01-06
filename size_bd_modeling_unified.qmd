@@ -655,12 +655,13 @@ m3_ltp <- brm(
   ),
   data = brms_data,
   family = hurdle_lognormal(),
+  prior = c(prior(normal(0,2), class="b")),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
   chains = 4,
   iter = 4000,
   warmup = 1000,
-  cores = 4,
-  control = list(adapt_delta = 0.98, max_treedepth = 12),
   seed = 124,
+  cores = 4,
   save_pars = save_pars(all = TRUE)
 )
 saveRDS(m3_ltp, file = "unified_models/unfied_model_results_zln_life_tax_pop.rds")
