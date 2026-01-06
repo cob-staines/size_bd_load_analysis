@@ -435,6 +435,37 @@ site_lookup = bd_model %>%
 ## Modeling
 I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [@schrock2025fungi] with fixed effects of life stage and season, and considering population as a random effect. The "hurdle" infection probability (hu) and the variability in Bd load (sigma) are allowed to vary with life stage and season (where multiple seasons are available) as well. Each species was modeled independently.
 
+
+```{r}
+# is size a significant factor?
+null_model <- brm(
+  bd_load_co ~ 1,
+  data = bd_model,
+  family = hurdle_lognormal(),  # Adjust family as needed (e.g., negbinomial() for counts)
+  chains = 4, warmup = 1000, iter = 2000, cores = 4,
+  seed = 123  # For reproducibility
+)
+
+# Full model with size predictor
+size_model <- brm(
+  bd_load_co ~ svl_mm + (1 | taxon_capture),
+  data = bd_model,
+  family = hurdle_lognormal(),  # Match null model family
+  chains = 4, warmup = 1000, iter = 2000, cores = 4,
+  seed = 123,
+  prior = prior(normal(0, 1), class = "b")  # Weakly informative prior for size effect
+)
+
+# Add LOO to both models
+null_model <- add_criterion(null_model, "loo")
+size_model <- add_criterion(size_model, "loo")
+
+# Compare (higher elpd is better)
+loo_compare(null_model, size_model)[web:21]
+
+bayes_factor(null_model, size_model)
+```
+
 ```{r}
 #| eval: false
 #| code-fold: true
@@ -456,7 +487,6 @@ brms_data <- bd_model_env %>%
     precip_mm_15_z2 = precip_mm_15_z^2,
     temp_c_15_z2    = temp_c_15_z^2
   )
-
 
 m3_ltp <- brm(
   formula = bf(
