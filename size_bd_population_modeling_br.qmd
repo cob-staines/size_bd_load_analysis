@@ -264,6 +264,15 @@ head(bd_model)
   arrange(country,
           taxon_capture))
 
+model_report = function(model_m){
+  summary(model_m)
+  plot((model_m), ask = FALSE)
+  plot(conditional_effects(model_m), ask = FALSE)
+  pp_check(model_m) +
+    scale_x_log10()
+}
+
+
 ```
 
 ## Modeling
@@ -313,7 +322,7 @@ saveRDS(m3_zln, file = output_m)
 
 m3_ltp <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
+    bd_load_co ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
     hu ~ 1 + life_stage_simple * taxon_capture + (1 | population / site),
     sigma ~ 1 + life_stage_simple * taxon_capture
   ),
@@ -331,6 +340,7 @@ saveRDS(m3_ltp, file = "br_model_results_zln_life_tax_pop_unified.rds")
 m3_ltp = readRDS(file = "br_model_results_zln_life_tax_pop_unified.rds")
 
 summary(m3_ltp)
+model_report(m3_ltp)
 
 ```
 
@@ -1026,7 +1036,27 @@ ggplot(density_mat_all, aes(x = density,
 ```
 
 ```{r}
-# dummy box
+ggplot(bd_model %>%
+         mutate(species = get_species_name(taxon_capture, newline = TRUE)) %>%
+         filter(bd_load_co > 0), aes(log_bd_load_co, x = species, color = life_stage_simple)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load density) [-]") +
+  labs(color = "Life stage") +
+  geom_text(
+    data = obs_stats_all,
+    aes(
+      x = species,
+      y = max(bd_model$log_bd_load_co_density) * label_y * 1.05,
+      label = paste0("n=", n_pos),
+      group = life_stage_simple
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.5), 18)
 ```
 
 # Discussion
