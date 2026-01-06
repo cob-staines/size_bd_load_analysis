@@ -446,7 +446,7 @@ all_sites_dates = all_sites %>%
 ```
 # environmental data
 ```{r}
-env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
+# env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
 
 sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
   ts_sym <- sym(ts_col_name)
