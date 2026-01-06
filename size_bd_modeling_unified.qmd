@@ -512,14 +512,17 @@ na_sum = function(x) {
 # write_csv(env_agg, here("data", "unified_env_agg.csv"))
 env_agg = read_csv(here("data", "unified_env_agg.csv"))
 
-site_climate = env_in %>%
-  group_by(site) %>%
-  summarize(site_temp_c_mean = mean(temperature_c, na.rm = TRUE),
-            p_temp = sum(!is.na(temperature_c)) / n(),
-            site_precip_mm_mean = mean(precipitation_mm, na.rm = TRUE),
-            p_precip = sum(!is.na(precipitation_mm)) / n(),
-            .groups = "drop") %>%
-  mutate(site_precip_mm_annual_mean = site_precip_mm_mean * 365.25)
+# site_climate = env_in %>%
+#   group_by(site) %>%
+#   summarize(site_temp_c_mean = mean(temperature_c, na.rm = TRUE),
+#             p_temp = sum(!is.na(temperature_c)) / n(),
+#             site_precip_mm_mean = mean(precipitation_mm, na.rm = TRUE),
+#             p_precip = sum(!is.na(precipitation_mm)) / n(),
+#             .groups = "drop") %>%
+#   mutate(site_precip_mm_annual_mean = site_precip_mm_mean * 365.25)
+# 
+# write_csv(site_climate, here("data", "site_climate.csv"))
+site_climate = read_csv(here("data", "site_climate.csv"))
 
 # ggplot(env_agg, aes(x = date)) +
 #   geom_line(aes(y = precip_mm_15_day_sum), linetype = "solid") +
