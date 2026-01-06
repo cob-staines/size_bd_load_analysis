@@ -1,0 +1,1444 @@
+---
+title: "Size vs. Bd modeling: Panamá preliminary results"
+author: Cob Staines
+date: 2025-09-29
+format:
+  html:
+    toc: true
+df-print: kable
+bibliography: references.bib
+csl: ecology.csl
+---
+# Introduction
+
+## Motivation
+
+Patterns of greater Bd load in recently metamorphosed individuals have been documented in some cases[@adams_chytridiomycosis-induced_2020] [@humphries_immune_2022] [@humphries_chytridiomycosis_2024] [@humphries_chytridiomycosis_2025] (and the opposite pattern in others[@bradley_host_2019]), with possible implications for:
+
+  - population dynamics (Q2)
+  - assessing Bd resistance/tolerance mechanisms (Q3)
+  - resilience trajectory assessment (Q1)
+
+... with the goal of complementing ongoing RIBBiTR research efforts
+
+## Working hypotheses:
+
+  a. Younger, more-recently-metamorphosed individuals are more susceptible to infection with Bd than older individuals across species
+  b. Younger, more-recently-metamorphosed individuals are more likely to carry higher Bd loads than older individuals across species
+
+# Methods
+## Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, runner)
+
+## Connect to DB
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+# preliminary data
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd") %>%
+  inner_join(db_bd %>%
+              filter(!is.na(detected)) %>%
+               # limit to one qPCR result per sample
+              group_by(sample_id) %>%
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     detected,
+                     bd_its1_copies_per_swab), by = "sample_id")
+
+# csv data
+## SN populations
+sn_populations = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population_sn = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
+         site = as.character(site)) %>%
+  select(site,
+         population_sn)
+
+```
+## Data selection
+### Classifying by life stage
+These analyses were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" with a threshold snout-vent-length (SVL [mm]), identified independently for each species from the literature (see data collection code for specific thresholds used and their sources). In Brasil, samples without SVL but with life-stage classifications were included.
+  
+### Classification by population
+"Populations" were defined at the region level within Panamá & Brasil. In the Sierra Nevada, sites were grouped where evidence supported connectivity and gene flow. Elsewhere in North America, populations were defined at the site level. Populations were included only if they were associated with Bd samples of both adults and subadults.
+  
+### Species selection criteria:
+Species were were included for if at least 14 adult AND subadult each were present in total for that species.
+
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show data collection code"
+
+population_valid_pa = c("altos_de_campana",
+                        "caribbean",
+                        "el_cope",
+                        "el_valle",
+                        "santa_fe")
+
+# define populations
+bd_population = bd_sample %>%
+  left_join(sn_populations, by = "site", copy = TRUE) %>%
+  mutate(population = case_when(
+    country %in% c("brazil", "panama") ~ region,
+    region == "california" ~ population_sn,
+    .default = site
+  )) %>%
+  filter(country != "panama" | (country == "panama" & population %in% population_valid_pa))
+
+bd_stats = bd_population %>%
+  filter(!is.na(taxon_capture),
+         life_stage %in% c("adult",
+                           "subadult",
+                           "juvenile",
+                           NA)) %>%
+  group_by(country,
+           taxon_capture,
+           life_stage) %>%
+  summarize(n = n(),
+            regions = str_flatten(distinct(region), collapse = ", "),
+            .groups = "drop") %>%
+  collect() %>%
+  arrange(country,
+          taxon_capture,
+          life_stage)
+
+# define life stage simple
+bd_life_stage = bd_population %>%
+  filter(life_stage %in% c("adult",
+                           "subadult",
+                           "juvenile",
+                           NA)) %>%
+  mutate(life_stage_simple = case_when(
+    # us
+    # https://animaldiversity.org/accounts/Acris_blanchardi/
+    ((taxon_capture == "acris_blanchardi") & (svl_mm >= 16)) ~ "adult",
+    ((taxon_capture == "acris_blanchardi") & (svl_mm < 16)) ~ "subadult",
+    # Wright and Wright 1949
+    ((taxon_capture == "anaxyrus_americanus") & (svl_mm >= 54)) ~ "adult",
+    ((taxon_capture == "anaxyrus_americanus") & (svl_mm < 54)) ~ "subadult",
+    # Lannoo 2005 (Amphibian Declines: The Conservation Status of United States Species)
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 48)) ~ "adult",
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 48)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "anaxyrus_debilis") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "anaxyrus_debilis") & (svl_mm < 37)) ~ "subadult",
+    # Conant and Collins 1991
+    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm < 51)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm < 32)) ~ "subadult",
+    # Conant & Collins 1998
+    ((taxon_capture == "hyla_cinerea") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_cinerea") & (svl_mm < 32)) ~ "subadult",
+    # Johnson 1987
+    ((taxon_capture == "hyla_versicolor") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_versicolor") & (svl_mm < 32)) ~ "subadult",
+    # Minton, 2001 / Lanoo 2005
+    ((taxon_capture == "lithobates_blairi") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "lithobates_blairi") & (svl_mm < 51)) ~ "subadult",
+    # Platz and Mecham 1963
+    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm >= 57)) ~ "adult",
+    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm < 57)) ~ "subadult",
+    # Minton 2001
+    ((taxon_capture == "lithobates_palustris") & (svl_mm >= 43)) ~ "adult",
+    ((taxon_capture == "lithobates_palustris") & (svl_mm < 43)) ~ "subadult",
+    # Conant and Collins, 1991
+    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm < 51)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 20)) ~ "adult",
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm < 20)) ~ "subadult",
+    # Hulse, C. and McCoy C. J. and Ellen Censky ,1998.
+    ((taxon_capture == "pseudacris_feriarum") & (svl_mm >= 19)) ~ "adult",
+    ((taxon_capture == "pseudacris_feriarum") & (svl_mm < 19)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "pseudacris_regilla") & (svl_mm >= 25)) ~ "adult",
+    ((taxon_capture == "pseudacris_regilla") & (svl_mm < 25)) ~ "subadult",
+    # Howard 1981
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 95)) ~ "adult",
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm < 95)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "rana_clamitans") & (svl_mm >= 60)) ~ "adult",
+    ((taxon_capture == "rana_clamitans") & (svl_mm < 60)) ~ "subadult",
+    # Knapp
+    ((taxon_capture == "rana_muscosa") & (svl_mm >= 40)) ~ "adult",
+    ((taxon_capture == "rana_muscosa") & (svl_mm < 40)) ~ "subadult",
+    # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
+    ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
+    # Knapp
+    ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
+    ((taxon_capture == "rana_sierrae") & (svl_mm < 40)) ~ "subadult",
+    # Martof 1963
+    ((taxon_capture == "rana_sylvatica") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "rana_sylvatica") & (svl_mm < 37)) ~ "subadult",
+    # Conant and Collins, 1991
+    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm >= 44)) ~ "adult",
+    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm < 44)) ~ "subadult",
+    # Stebbins, 1985
+    ((taxon_capture == "spea_multiplicata") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "spea_multiplicata") & (svl_mm < 37)) ~ "subadult",
+    
+    # brasil
+    # Heyer, W. R., and R. B. Cocroft. 1986
+    ((taxon_capture == "hylodes_phyllodes") & (svl_mm >= 27.5)) ~ "adult",
+    ((taxon_capture == "hylodes_phyllodes") & (svl_mm < 27.5)) ~ "subadult",
+    # Kwet, A., and M. Solé. 2005
+    ((taxon_capture == "ischnocnema_henselii") & (svl_mm >= 21.0)) ~ "adult",
+    ((taxon_capture == "ischnocnema_henselii") & (svl_mm < 21.0)) ~ "subadult",
+    country == "brazil" & life_stage == "adult" ~ "adult",
+    country == "brazil" & life_stage %in% c("subadult", "juvenile") ~ "subadult",
+    
+    # panama
+    # Savage 1972 & Crump 1988
+    ((taxon_capture == "atelopus_varius") & (svl_mm >= 25)) ~ "adult",
+    ((taxon_capture == "atelopus_varius") & (svl_mm < 25)) ~ "subadult",
+    # Lynch and Myers 1983
+    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm >= 20.2)) ~ "adult",
+    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm < 20.2)) ~ "subadult",
+    # Lynch and Myers 1983
+    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm >= 23.5)) ~ "adult",
+    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm < 23.5)) ~ "subadult",
+    # Amphibiaweb
+    ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 18.8)) ~ "adult",
+    ((taxon_capture == "colostethus_panamansis") & (svl_mm < 18.8)) ~ "subadult",
+    # Leenders 2001
+    ((taxon_capture == "dendrobates_auratus") & (svl_mm >= 25)) ~ "adult",
+    ((taxon_capture == "dendrobates_auratus") & (svl_mm < 25)) ~ "subadult",
+    # Amphibiaweb
+    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm >= 21)) ~ "adult",
+    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm < 21)) ~ "subadult",
+    # Basante 2025
+    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 35)) ~ "adult",
+    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm < 35)) ~ "subadult",
+    # Wang 2008
+    ((taxon_capture == "pristimantis_ridens") & (svl_mm >= 16)) ~ "adult",
+    ((taxon_capture == "pristimantis_ridens") & (svl_mm < 16)) ~ "subadult",
+    # Savage 2002
+    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm >= 42)) ~ "adult",
+    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm < 42)) ~ "subadult",
+    # Easteal 1963
+    ((taxon_capture == "rhinella_marina") & (svl_mm >= 85)) ~ "adult",
+    ((taxon_capture == "rhinella_marina") & (svl_mm < 85)) ~ "subadult",
+    # Savage 2002
+    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm >= 20.5)) ~ "adult",
+    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm < 20.5)) ~ "subadult",
+    # Ibunez & Smith 1995
+    ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 15.1)) ~ "adult",
+    ((taxon_capture == "silverstoneia_flotator") & (svl_mm < 15.1)) ~ "subadult",
+    # Grant & Myers 2013
+    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm >= 15.4)) ~ "adult",
+    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm < 15.4)) ~ "subadult",
+    # Duellman, W. E. 2001
+    ((taxon_capture == "smilisca_sila") & (svl_mm >= 31.6)) ~ "adult",
+    ((taxon_capture == "smilisca_sila") & (svl_mm < 31.6)) ~ "subadult",
+    .default = NA_character_
+  )) %>%
+  filter(!is.na(life_stage_simple))
+
+# identify valid species & populations
+## drop pops without both adults and juveniles
+## drop species without 14 or more adults and juveniles each
+pop_valid = bd_life_stage %>%
+  group_by(taxon_capture, population) %>%
+  mutate(pop_adult_present = any(life_stage_simple == "adult"),
+         pop_subadult_present = any(life_stage_simple == "subadult")) %>%
+  ungroup() %>%
+  filter(pop_adult_present & pop_subadult_present)
+
+species_valid = pop_valid %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarise(count = n(),
+            count_gt_14 = n() >= 14,
+            .groups = "drop") %>%
+  group_by(taxon_capture) %>%
+  filter(sum(as.integer(count_gt_14)) == 2) %>%
+  ungroup() %>%
+  select(taxon_capture) %>%
+  distinct()
+
+pop_species_valid = pop_valid %>%
+  inner_join(species_valid, by = "taxon_capture") %>%
+  select(taxon_capture,
+         population) %>%
+  distinct()
+
+# identify valid samples
+bd_sample_valid = bd_life_stage %>%
+  mutate(year = year(date),
+         month = month(date)) %>%
+  inner_join(pop_species_valid, by = c("taxon_capture", "population")) %>%
+  # limit to 1 bd sample per capture
+  group_by(capture_id) %>%
+  slice_sample(n = 1) %>%
+  ungroup() %>%
+  select(sample_id,
+         detected,
+         bd_its1_copies_per_swab,
+         sample_name,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         date,
+         month,
+         year,
+         site,
+         site_id,
+         population,
+         region,
+         country) %>%
+  collect()
+
+# final data selection and cleaning for model
+bd_model = bd_sample_valid %>%
+  rename(bd_load = bd_its1_copies_per_swab,
+         bd_detected = detected) %>%
+  mutate(bd_detected_co = bd_load >= 10,
+         bd_load_co = if_else(bd_load < 10,
+                                  0,
+                                  bd_load),
+         bd_load_co_density = bd_load_co / svl_mm,
+         log_bd_load_co_density = log(bd_load_co_density),
+         log_bd_load_co = log(bd_load_co)) %>%
+  select(bd_detected_co,
+         bd_load_co,
+         log_bd_load_co,
+         bd_load_co_density,
+         log_bd_load_co_density,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         date,
+         month,
+         year,
+         site,
+         site_id,
+         population,
+         region,
+         country)
+
+head(bd_model)
+```
+
+## Descriptive stats of data
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show selected data stats code"
+
+(bd_model_stats = bd_model %>%
+  group_by(taxon_capture, country) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            population_n = n_distinct(population),
+            site_n = n_distinct(site),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  arrange(country,
+          taxon_capture))
+
+temporal_report = bd_model %>%
+  group_by(year) %>%
+  summarise(n_obs = n(),
+            n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "adult"),
+            n_taxa = n_distinct(taxon_capture),
+            n_site = n_distinct(site),
+            n_pop = n_distinct(population),
+            n_country = n_distinct(country),
+            .groups = "drop")
+
+
+chunk_date_range <- function(start_date, end_date, max_years = 5) {
+  start <- as.Date(start_date)
+  end <- as.Date(end_date)
+  chunks <- data.frame(start_date = as.Date(character()), end_date = as.Date(character()))
+  
+  current_start <- start
+  while (current_start < end) {
+    chunk_end <- pmin(end, floor_date(current_start, "year") %m+% years(max_years) - days(1))
+    chunks <- bind_rows(chunks, data.frame(start_date = current_start, end_date = chunk_end))
+    current_start <- chunk_end + days(1)
+  }
+  
+  return(chunks)
+}
+
+
+# export site list and coords
+spatial_buffer = 0.025  # decimal degrees
+temporal_buffer = 60  # days
+min_date = min(bd_model$date) - days(temporal_buffer)
+max_date = max(bd_model$date)
+year_chunk = 11
+
+# all sites for full date range, chunked by year_chunk
+all_sites = bd_model %>%
+  select(site_id, population, region, country) %>%
+  distinct()
+
+date_chunks = chunk_date_range(min_date, max_date, max_years = year_chunk)
+
+all_sites_dates = all_sites %>%
+  cross_join(date_chunks) %>%
+    left_join(db_site %>%
+              collect(), by = "site_id") %>%
+  select(site_id,
+         site,
+         site_latitude,
+         site_longitude,
+         site_elevation_m,
+         population,
+         region,
+         country,
+         start_date,
+         end_date) %>%
+  mutate(duration = as.numeric(end_date - start_date)/365.25,
+         N = site_latitude + spatial_buffer,
+         S = site_latitude - spatial_buffer,
+         W = site_longitude - spatial_buffer,
+         E = site_longitude + spatial_buffer) %>%
+  arrange(country,
+          site)
+
+# write_csv(all_sites_dates, here("python", "gee_env_pull", "data", "site_coords_dates_all_025.csv"))
+
+```
+# environmental data
+```{r}
+env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
+
+sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
+  ts_sym <- sym(ts_col_name)
+  res_sym <- sym(result_col_name)
+  
+  df %>%
+    group_modify(~{
+      n <- nrow(.x)
+      ts_vals <- pull(.x, !!ts_sym)
+      agg_vals <- map_dbl(seq_len(n), function(i) {
+        if (i >= window_size) {
+          window_vals <- ts_vals[(i - window_size + 1):i]
+          f(window_vals)
+        } else {
+          NA_real_
+        }
+      })
+      .x[[result_col_name]] <- agg_vals
+      .x
+    })
+}
+
+rolling_aggregate <- function(x, date, n_days, fun) {
+  runner(
+    x   = x,
+    idx = date,
+    k   = paste0(n_days, " days"),
+    f   = fun
+  )
+}
+
+
+n_val = function(x) sum(!is.na(x))
+
+na_mean = function(x) {
+  mean(x, na.rm = TRUE)
+}
+
+na_max = function(x) {
+  max(x, na.rm = TRUE)
+}
+
+na_sum = function(x) {
+  sum(x, na.rm = TRUE)
+}
+
+# env_agg = env_in %>%
+#   arrange(site, date) %>%
+#   filter(!(is.na(precipitation_mm) & is.na(temperature_c))) %>%
+#   group_by(site) %>%
+#   mutate(precip_mm_15_day_n = rolling_aggregate(precipitation_mm, date, 15, n_val),
+#          precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
+#          precip_mm_30_day_n = rolling_aggregate(precipitation_mm, date, 30, n_val),
+#          precip_mm_30_day_sum = rolling_aggregate(precipitation_mm, date, 30, na_sum),
+#          temp_c_15_day_n = rolling_aggregate(temperature_c, date, 15, n_val),
+#          temp_c_15_day_mean = rolling_aggregate(temperature_c, date, 15, na_mean),
+#          temp_c_15_day_max = rolling_aggregate(temperature_c, date, 15, na_max),
+#          temp_c_30_day_n = rolling_aggregate(temperature_c, date, 30, n_val),
+#          temp_c_30_day_mean = rolling_aggregate(temperature_c, date, 30, na_mean),
+#          temp_c_30_day_max = rolling_aggregate(temperature_c, date, 30, na_max)) %>%
+#   ungroup()
+# 
+# write_csv(env_agg, here("data", "unified_env_agg.csv"))
+env_agg = read_csv(here("data", "unified_env_agg.csv"))
+
+site_climate = env_in %>%
+  group_by(site) %>%
+  summarize(site_temp_c_mean = mean(temperature_c, na.rm = TRUE),
+            p_temp = sum(!is.na(temperature_c)) / n(),
+            site_precip_mm_mean = mean(precipitation_mm, na.rm = TRUE),
+            p_precip = sum(!is.na(precipitation_mm)) / n(),
+            .groups = "drop") %>%
+  mutate(site_precip_mm_annual_mean = site_precip_mm_mean * 365.25)
+
+# ggplot(env_agg, aes(x = date)) +
+#   geom_line(aes(y = precip_mm_15_day_sum), linetype = "solid") +
+#   facet_wrap(. ~ site)
+# 
+# ggplot(env_agg, aes(x = date, y = temp_c_year_mean, color = site)) +
+#   geom_line()
+
+
+bd_model_env = bd_model %>%
+  left_join(env_agg, by = c("site", "date")) %>%
+  left_join(site_climate, by = "site") %>%
+  filter(!is.na(precip_mm_15_day_sum),
+         !is.na(precip_mm_30_day_sum),
+         !is.na(temp_c_15_day_mean),
+         !is.na(temp_c_30_day_mean))
+
+```
+
+# new descriptive stats after filtering out environmental NAs
+```{r}
+(bd_model_stats = bd_model %>%
+  group_by(taxon_capture, country) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            population_n = n_distinct(population),
+            site_n = n_distinct(site),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  arrange(country,
+          taxon_capture))
+
+(bd_model_env_stats = bd_model_env %>%
+  group_by(taxon_capture, country) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            population_n = n_distinct(population),
+            site_n = n_distinct(site),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  arrange(country,
+          taxon_capture))
+
+```
+
+## Modeling
+I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [@schrock2025fungi] with fixed effects of life stage and season, and considering population as a random effect. The "hurdle" infection probability (hu) and the variability in Bd load (sigma) are allowed to vary with life stage and season (where multiple seasons are available) as well. Each species was modeled independently.
+
+
+```{r}
+# is size a significant factor?
+null_model <- brm(
+  bd_load_co ~ 1,
+  data = bd_model_env %>%
+    filter(!is.na(svl_mm)) %>%
+    select(bd_load_co,
+           svl_mm,
+           taxon_capture),
+  family = hurdle_lognormal(),  # Adjust family as needed (e.g., negbinomial() for counts)
+  chains = 4, warmup = 1000, iter = 2000, cores = 4,
+  seed = 123  # For reproducibility
+)
+
+saveRDS(null_model, file = "unified_models/unfied_model_results_null.rds")
+null_model = readRDS(file = "unified_models/unified_model_results_null.rds")
+
+# Full model with size predictor
+size_model <- brm(
+  bd_load_co ~ svl_mm + (1 | taxon_capture),
+  data = bd_model_env %>%
+    filter(!is.na(svl_mm)) %>%
+    select(bd_load_co,
+           svl_mm,
+           taxon_capture),
+  family = hurdle_lognormal(),  # Match null model family
+  chains = 4, warmup = 1000, iter = 2000, cores = 4,
+  seed = 123,
+  prior = prior(normal(0, 1), class = "b")  # Weakly informative prior for size effect
+)
+
+saveRDS(size_model, file = "unified_models/unfied_model_results_svl.rds")
+size_model = readRDS(file = "unified_models/unified_model_results_svl.rds")
+
+# Add LOO to both models
+null_model <- add_criterion(null_model, "loo")
+size_model <- add_criterion(size_model, "loo")
+
+# Compare (higher elpd is better)
+loo_compare(null_model, size_model)
+
+#            elpd_diff se_diff
+# size_model    0.0       0.0 
+# null_model -732.3      38.4 
+# bayes_factor(null_model, size_model)
+```
+
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model code"
+
+# unified model
+
+brms_data <- bd_model_env %>%
+  mutate(
+    precip_mm_30_z  = as.numeric(scale(precip_mm_30_day_sum,  center = TRUE, scale = TRUE)),
+    temp_c_30_z     = as.numeric(scale(temp_c_30_day_mean,    center = TRUE, scale = TRUE)),
+    precip_mm_15_z  = as.numeric(scale(precip_mm_15_day_sum,  center = TRUE, scale = TRUE)),
+    temp_c_15_z     = as.numeric(scale(temp_c_15_day_mean,    center = TRUE, scale = TRUE))
+  ) %>%
+  # squared terms (on the z-scored variables)
+  mutate(
+    precip_mm_30_z2 = precip_mm_30_z^2,
+    temp_c_30_z2    = temp_c_30_z^2,
+    precip_mm_15_z2 = precip_mm_15_z^2,
+    temp_c_15_z2    = temp_c_15_z^2
+  )
+
+m3_ltp <- brm(
+  formula = bf(
+    bd_load_co ~ 1 + life_stage_simple * taxon_capture + (1 | population),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population),
+    sigma ~ 1 + life_stage_simple * taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 8,
+  control = list(adapt_delta = 0.98, max_treedepth = 12),
+  seed = 124,
+  save_pars = save_pars(all = TRUE)
+)
+saveRDS(m3_ltp, file = "unified_models/unfied_model_results_zln_life_tax_pop.rds")
+m3_ltp = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pop.rds")
+
+m3_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m3_hln, file = "model_results_zln_life_tax_env_unified_simple.rds")
+m3_hln = readRDS(file = "model_results_zln_life_tax_env_unified_simple.rds")
+
+summary(m3_hln)
+model_report(m3_hln)
+
+m4_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    sigma ~ 1 + life_stage_simple * taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m4_hln, file = "model_results_zln_life_tax_env_unified.rds")
+m4_hln = readRDS(file = "model_results_zln_life_tax_env_unified.rds")
+
+summary(m4_hln)
+model_report(m4_hln)
+
+m5_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m5_hln, file = "model_results_zln_life_tax_env2_unified.rds")
+m5_hln = readRDS(file = "model_results_zln_life_tax_env2_unified.rds")
+
+m6_hln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_30_z + temp_c_30_z + (1 | population / site),
+    hu ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123,
+  save_pars = save_pars(all = TRUE)
+)
+
+saveRDS(m6_hln, file = "model_results_zln_life_tax_env_clim_unified.rds")
+m6_hln = readRDS(file = "model_results_zln_life_tax_env_clim_unified.rds")
+
+summary(m6_hln)
+model_report(m6_hln)
+
+
+summary(m5_hln)
+model_report(m5_hln)
+
+loo_m4 <- loo(m4_hln, moment_match = TRUE)
+loo_m5 <- loo(m5_hln, moment_match = TRUE)
+
+loo_comp <- loo_compare(list(linear = loo_m4, quadratic = loo_m5))
+
+# life-stage specific standard deviation?
+bayes_factor(m3_hln, m4_hln)
+
+# linear or quadratic (slight preference for linear over quatratic)
+bayes_factor(m3_hln, m5_hln)
+
+# include climate vars? (slight preference for without climate basis over wiht)
+bayes_factor(m3_hln, m6_hln)
+
+```
+
+## Processing and visualization
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show processing & visualization functions"
+
+extract_abbr <- function(taxon) {
+  parts <- strsplit(taxon, "_")[[1]]
+  genus_abbr <- substr(parts[1], 1, 2)
+  species_abbr <- substr(parts[2], 1, 2)
+  paste0(genus_abbr, species_abbr)
+}
+
+load_model = function(taxon, template = "model_results_zln_life_tax_sea_pop_xxxx.rds"){
+  filename = gsub("xxxx", extract_abbr(taxon), template)
+  cat(taxon, ":\n\t", filename, "\n")
+  return(readRDS(filename))
+}
+
+model_report = function(model_m){
+  summary(model_m)
+  plot((model_m), ask = FALSE)
+  plot(conditional_effects(model_m), ask = FALSE)
+  pp_check(model_m) +
+    scale_x_log10()
+}
+get_species_name = function(taxon, newline = FALSE) {
+  species_name = str_to_sentence(gsub("_", " ", taxon))
+  if (newline) {
+    species_name = gsub(" ", "\n", species_name)
+  }
+  return(species_name)
+}
+
+samp_pos = function(m_zln, lifestage, season, n, s = 1){
+  pp = data.frame(
+    life_stage_simple = lifestage,
+    season = season,
+    population = "NA"
+  ) %>%
+    slice(rep(1:n(), s))
+  
+  p_samp = posterior_predict(m_zln,
+                             newdata = pp,
+                             ndraws = n,
+                             allow_new_levels = TRUE)
+}
+
+# draws
+collect_draws = function(m_spec){
+  model_vars = get_variables(m_spec)
+  
+  all_life_stage_simple = sort(unique(m_spec$data$life_stage_simple))
+  all_taxon_capture = sort(unique(m_spec$data$taxon_capture))
+  all_prefixes = c("b",
+                   "b_hu",
+                   "b_sigma")
+  
+  param_grid = crossing(prefix = all_prefixes,
+                        life_stage_simple = all_life_stage_simple,
+                        taxon_capture = all_taxon_capture) %>%
+    mutate(param_name = paste0(prefix, "_", taxon_capture, "_", life_stage_simple),
+           t_intercept = paste0(prefix, "_Intercept"),
+           t_lss = if_else(life_stage_simple == all_life_stage_simple[1],
+                               NA,
+                               paste0(prefix, "_life_stage_simple", life_stage_simple)),
+           t_tc = if_else(taxon_capture == all_taxon_capture[1],
+                              NA,
+                              paste0(prefix, "_taxon_capture", taxon_capture)),
+           t_lss_tc = if_else(life_stage_simple == all_life_stage_simple[1] |
+                                taxon_capture == all_taxon_capture[1],
+                              NA,
+                              paste0(prefix, "_life_stage_simple", life_stage_simple, "__", "taxon_capture", taxon_capture))) %>%
+    unite(formula, t_intercept, t_lss, t_tc, t_lss_tc, sep = " + ", remove = FALSE, na.rm = TRUE) %>%
+    mutate(expr = map(formula, ~ rlang::parse_expr(.x)))
+  
+  expr_list = set_names(param_grid$expr, param_grid$param_name)
+  
+  m_spread = m_spec %>%
+    spread_draws(`b_.*`, regex = TRUE)
+  colnames(m_spread) = gsub(":", "__", colnames(m_spread))
+  
+  m_spread_mutated = reduce(
+    .x = names(expr_list),
+    .init = m_spread,
+    .f = function(df, param) {
+      mutate(df,
+             !!param := eval(expr_list[[param]], envir = df))
+    }
+  ) %>%
+    select(.draw,
+           all_of(param_grid$param_name)) %>%
+    pivot_longer(cols = param_grid$param_name, names_to = "param_name") %>%
+    left_join(param_grid %>%
+                select(param_name, prefix, taxon_capture, life_stage_simple), by = "param_name") %>%
+    pivot_wider(id_cols = c(.draw, taxon_capture, life_stage_simple),
+                names_from = prefix) %>%
+    left_join(m_spec %>%
+                spread_draws(c(sd_population__Intercept,
+                               sd_population__hu_Intercept)), by = ".draw") %>%
+    mutate(p0 = plogis(b_hu),
+           prevalence = 1 - p0,
+           sigma = exp(b_sigma),
+           sd_eff_bd_load = sqrt(sigma^2 + sd_population__Intercept^2)) %>%
+    rename(sd_eff_hu = sd_population__hu_Intercept) %>%
+    select(.draw,
+           .chain,
+           .iteration,
+           everything())
+  
+  return(m_spread_mutated)
+}
+
+density_mat = function(lower, upper, len, draws){
+  density_grid = seq(lower, upper, length.out = len)
+  
+  grouped_draws = draws %>%
+    group_by(taxon_capture, life_stage_simple) %>%
+    group_split()
+  
+  group_summaries = map(grouped_draws, function(group_df) {
+    # Get the group labels
+    life_stage = unique(group_df$life_stage_simple)
+    taxon_capture = unique(group_df$taxon_capture)
+    
+    # Compute density matrices
+    pdf_density_mat = pmap(
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        dnorm(density_grid, mean = b, sd = sigma) * (1 - p0)
+      }
+    ) %>%
+      simplify2array() %>%
+      t()
+    
+    ccdf_density_mat = pmap(
+      list(group_df$b, group_df$sigma, group_df$p0),
+      function(b, sigma, p0) {
+        (1 - pnorm(density_grid, mean = b, sd = sigma)) * (1 - p0)
+      }
+    ) %>%
+      simplify2array() %>%
+      t()
+    
+    
+    # Summary statistics:
+    pdf_q.5 = apply(pdf_density_mat, 2, quantile, probs = 0.5)
+    pdf_q.25 = apply(pdf_density_mat, 2, quantile, probs = 0.25)
+    pdf_q.75 = apply(pdf_density_mat, 2, quantile, probs = 0.75)
+    
+    ccdf_q.5 = apply(ccdf_density_mat, 2, quantile, probs = 0.5)
+    ccdf_q.25 = apply(ccdf_density_mat, 2, quantile, probs = 0.25)
+    ccdf_q.75 = apply(ccdf_density_mat, 2, quantile, probs = 0.75)
+    
+    # Return a tidy tibble for plotting or analysis
+    tibble(
+      taxon_capture,
+      life_stage_simple = life_stage,
+      density = density_grid,
+      pdf_median = pdf_q.5,
+      pdf_lower = pdf_q.25,
+      pdf_upper = pdf_q.75,
+      ccdf_median = ccdf_q.5,
+      ccdf_lower = ccdf_q.25,
+      ccdf_upper = ccdf_q.75
+    )
+  })
+  
+  summary_df <- bind_rows(group_summaries)
+}
+
+samp_pos = function(m_zln, lifestage, season, n){
+
+  pp = data.frame(
+    life_stage_simple = lifestage,
+    season = season,
+    population = "NA"
+  )
+  
+  p_samp = posterior_predict(m_zln,
+                             newdata = pp,
+                             ndraws = n,
+                             allow_new_levels = TRUE)
+
+}
+
+sample_posterior_life_sea = function(m_zln, species_name, n = 10000){
+  ps_adult_lluvia = samp_pos(m_zln, "adult", "lluvia", n)
+  ps_adult_seca = samp_pos(m_zln, "adult", "seca", n)
+  ps_subadult_lluvia = samp_pos(m_zln, "subadult", "lluvia", n)
+  ps_subadult_seca = samp_pos(m_zln, "subadult", "seca", n)
+
+  df_samps_adult_lluvia = data.frame(
+    life_stage_simple = "adult",
+    season = "lluvia",
+    bd_load = ps_adult_lluvia
+  )
+
+  df_samps_adult_seca = data.frame(
+    life_stage_simple = "adult",
+    season = "seca",
+    bd_load = ps_adult_seca
+  )
+
+  df_samps_subadult_lluvia = data.frame(
+    life_stage_simple = "subadult",
+    season = "lluvia",
+    bd_load = ps_subadult_lluvia
+  )
+  
+  df_samps_subadult_seca = data.frame(
+    life_stage_simple = "subadult",
+    season = "seca",
+    bd_load = ps_subadult_seca
+  )
+
+  df_samps = bind_rows(df_samps_adult_lluvia,
+                       df_samps_adult_seca,
+                       df_samps_subadult_lluvia,
+                       df_samps_subadult_seca) %>%
+    mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
+           log_bd_load = log(bd_load + 1),
+           taxon_capture = species_name)
+}
+
+sample_posterior_life_1s = function(m_zln, species_name, n = 10000){
+  ps_adult_lluvia = samp_pos(m_zln, "adult", "lluvia", n)
+  ps_subadult_lluvia = samp_pos(m_zln, "subadult", "lluvia", n)
+
+  df_samps_adult_lluvia = data.frame(
+    life_stage_simple = "adult",
+    season = "lluvia",
+    bd_load = ps_adult_lluvia
+  )
+
+  df_samps_subadult_lluvia = data.frame(
+    life_stage_simple = "subadult",
+    season = "lluvia",
+    bd_load = ps_subadult_lluvia
+  )
+
+  df_samps = bind_rows(df_samps_adult_lluvia,
+                       df_samps_subadult_lluvia) %>%
+    mutate(bd_load = ifelse(bd_load < 0.3, 0, bd_load),
+           log_bd_load = log(bd_load + 1),
+           taxon_capture = species_name)
+}
+
+simulate_bd_load = function(draws, n_per_draw = 10, downsample = NA) {
+  if (!is.na(downsample) & downsample < length(unique(draws$.draw))) {
+    draws = draws %>%
+      group_by(taxon_capture, life_stage_simple) %>%
+      slice_sample(n = downsample) %>%
+      ungroup()
+  }
+  
+  
+  draws %>%
+    filter(!is.na(b),
+           !is.na(sigma)) %>%
+    group_by(.draw, taxon_capture, life_stage_simple) %>%
+    reframe(
+      log_bd_load_co_density = rnorm(n_per_draw, mean = b, sd = sigma),
+      .id = "sim_id"
+    ) %>%
+    ungroup()
+}
+
+wilson_ci = function(p_hat, n, conf.level = 0.95) {
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[2])
+}
+
+sample_stats = function(df) {
+  df %>%
+    group_by(taxon_capture,
+             life_stage_simple) %>%
+    summarise(n = n(),
+              n_pos = sum(bd_load_co > 0),
+              bd_prevalence = sum(bd_load_co > 0) / n(),
+              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+              min_log_pos_load_dens = min(log_bd_load_co_density[bd_load_co > 0]),
+              q_25_log_pos_load_dens = quantile(log_bd_load_co_density[bd_load_co > 0], probs = 0.25),
+              q_50_log_pos_load_dens = quantile(log_bd_load_co_density[bd_load_co > 0], probs = 0.50),
+              q_75_log_pos_load_dens = quantile(log_bd_load_co_density[bd_load_co > 0], probs = 0.75),
+              max_log_pos_load_dens = max(log_bd_load_co_density[bd_load_co > 0]),
+              se = sqrt(bd_prevalence * (1 - bd_prevalence) / n),
+              .groups = "drop") %>%
+    mutate(label_y = case_match(life_stage_simple,
+                                "adult" ~ .98,
+                                "subadult" ~ .95))
+}
+# 
+# plot_prev_obs = function(obs_stats, taxon) {
+#   dodge_width = 0.5  # Adjust width as needed
+#   
+#   ggplot(obs_stats %>%
+#            filter(taxon_capture == taxon), aes(y = bd_prevalence, color = life_stage_simple)) +
+#     geom_point(position = position_dodge(width = dodge_width)) +   # dodge points side by side
+#     geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+#                   width = 0.2,
+#                   position = position_dodge(width = dodge_width)) +  # dodge error bars side by side, same width
+#     theme_minimal() +
+#     ggtitle(paste0("Observed prevalence: ", species_name)) +
+#     xlab("Season") +
+#     ylab("Bd prevalence [-]\n(with 95% CI)") +
+#     labs(color = "Life stage") +
+#     geom_text(aes(label = paste0("n=", n)),
+#               position = position_dodge(width = dodge_width + 0.5)) +  # dodge text labels similarly
+#     ylim(0, 1)
+# }
+# 
+# plot_prev_mod = function(draws_spec, species_name){
+#   ggplot(draws_spec, aes(prevalence, x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot(coef = NULL) + 
+#     theme_minimal() +
+#     ggtitle(paste0("Modeled prevalence: ", species_name)) +
+#     xlab("Season") +
+#     ylab("Bd prevalence [-]\n") +
+#     labs(color = "Life stage") +
+#     ylim(0, 1)
+# }
+# 
+# plot_load_obs = function(bd_model_spec, obs_stats, species_name){
+#   ggplot(bd_model_spec %>%
+#            filter(bd_load > 0), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot() + 
+#     theme_minimal() +
+#     ggtitle(paste0("Observed Bd-positive load: ", spec_name)) +
+#     xlab("Season") +
+#     ylab("log(Bd load) [-]") +
+#     labs(color = "Life stage") +
+#     geom_text(
+#       data = obs_stats,
+#       aes(
+#         x = season,
+#         y = q_50_log_load_inf,
+#         label = paste0("n=", n_pos),
+#         group = life_stage_simple
+#       ),
+#       position = position_dodge(width = .75),
+#       vjust = -0.25
+#     ) +
+#     ylim(log(0.3), 20)
+# }
+# 
+# # plot_load_mod = function(draws_spec, species_name) {
+# #   ggplot(draws_spec, aes(b, x = season, color = life_stage_simple, linetype = season)) +
+# #     geom_boxplot() + 
+# #     theme_minimal() +
+# #     ggtitle(paste0("Modeled Bd-positive load: ", species_name)) +
+# #     xlab("Season") +
+# #     ylab("log(Bd load) [-]") +
+# #     labs(color = "Life stage") +
+# #     ylim(log(0.3), 15)
+# # }
+# 
+# plot_load_mod = function(sim, species_name) {
+#   ggplot(sim %>%
+#            filter(log_bd_load > 0.3), aes(log_bd_load, x = season, color = life_stage_simple, linetype = season)) +
+#     geom_boxplot() + 
+#     theme_minimal() +
+#     ggtitle(paste0("Modeled Bd-positive load: ", species_name)) +
+#     xlab("Season") +
+#     ylab("log(Bd load) [-]") +
+#     labs(color = "Life stage") +
+#     ylim(log(0.3), 20)
+# }
+# 
+# plot_pdf = function(density_mat, species_name) {
+#   ggplot(density_mat, aes(x = density,
+#                           y = pdf_median,
+#                           color = life_stage_simple, 
+#                           fill = life_stage_simple,
+#                           linetype = season)) +
+#     geom_ribbon(aes(ymin = pdf_lower,
+#                     ymax = pdf_upper), 
+#                 alpha = 0.15,
+#                 color = NA) +
+#     geom_line() +
+#     theme_minimal() +
+#     ggtitle(paste0("PDF of Bd-positive load: ", species_name)) +
+#     labs(color = "Life stage",
+#          fill = "Life stage",
+#          linetype = "Season") +
+#     xlab("log(Bd load) [-]") +
+#     ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+#     scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0))
+# }
+# 
+# plot_ccdf = function(density_mat, species_name) {
+#   ggplot(density_mat, aes(x = density,
+#                           y = ccdf_median,
+#                           color = life_stage_simple, 
+#                           fill = life_stage_simple,
+#                           linetype = season)) +
+#     geom_ribbon(aes(ymin = ccdf_lower,
+#                     ymax = ccdf_upper), 
+#                 alpha = 0.15,
+#                 color = NA) +
+#     geom_line() +
+#     theme_minimal() +
+#     ggtitle(paste0("CCDF of Bd-positive load: ", species_name)) +
+#     labs(color = "Life stage",
+#          fill = "Life stage",
+#          linetype = "Season") +
+#     xlab("log(Bd load) [-]") +
+#     ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+#     scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#     ylim(0, 1)
+# }
+
+```
+
+# Results
+Results are broken out first by species, then combined for comparison between species
+
+## Collective results
+```{r}
+#| eval: true
+#| echo: true
+#| output: false
+#| code-fold: true
+#| code-summary: Show Colostethus panamansis code
+
+m_zln_all = readRDS("model_results_zln_life_tax_pop_unified.rds")
+
+draws_all = collect_draws(m_zln_all) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+density_mat_all = density_mat(log(0.5), 20, 100, draws_all) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+sim_load_all = simulate_bd_load(draws_all, 10, 1000) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+obs_stats_all = sample_stats(bd_model) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+# summary(m_zln_all)
+# model_report(m_zln_all)
+
+```
+
+::: {.panel-tabset}
+### Observed Prevalence
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# observed prevalence
+ggplot(obs_stats_all, aes(y = bd_prevalence, x = species, color = life_stage_simple)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  labs(color = "Life stage") +
+  geom_text(aes(label = paste0("n=", n),  y = label_y),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1)
+```
+
+### Modeled Prevalence 
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# model prevalence
+ggplot(draws_all, aes(prevalence, x = species, color = life_stage_simple)) +
+  geom_boxplot(coef = NULL) + 
+  theme_minimal() +
+  ggtitle("Modeled prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n") +
+  labs(color = "Life stage") +
+  ylim(0, 1)
+```
+
+### Observed Bd load
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# obsevation bd load
+ggplot(bd_model %>%
+         mutate(species = get_species_name(taxon_capture, newline = TRUE)) %>%
+         filter(bd_load_co > 0), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load density) [-]") +
+  labs(color = "Life stage") +
+  geom_text(
+    data = obs_stats_all,
+    aes(
+      x = species,
+      y = max(bd_model$log_bd_load_co_density) * label_y * 1.05,
+      label = paste0("n=", n_pos),
+      group = life_stage_simple
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.5), 18)
+```
+
+### Modeled Bd load
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# modeled bd load
+ggplot(sim_load_all %>%
+         filter(log_bd_load_co_density > 0.5), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Modeled Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load density) [-]") +
+  labs(color = "Life stage") +
+  ylim(log(0.5), 20)
+```
+
+### Modeled Bd load PDF
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# PDF -- facet by species
+ggplot(density_mat_all, aes(x = density,
+                            y = pdf_median,
+                            color = life_stage_simple, 
+                            fill = life_stage_simple)) +
+  geom_ribbon(aes(ymin = pdf_lower,
+                  ymax = pdf_upper), 
+              alpha = 0.15,
+              color = NA) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled PDF of Bd-positive load") +
+  labs(color = "Life stage",
+       fill = "Life stage") +
+  xlab("log(Bd load) [-]") +
+  ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+  scale_x_continuous(limits = c(log(0.5), 20), expand = c(0, 0)) +
+  facet_grid(. ~ gsub(" ", "\n", species))
+
+# # PDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = pdf_median,
+#                             color = taxon_capture, 
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = pdf_lower,
+#                   ymax = pdf_upper), 
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled PDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   facet_grid(life_stage_simple ~ season)
+```
+
+### Moded Bd load CCDF
+```{r}
+#| echo: false
+#| warning: false
+#| fig-height: 6
+#| fig-width: 12
+# CCDF -- facet by species
+ggplot(density_mat_all, aes(x = density,
+                            y = ccdf_median,
+                            color = life_stage_simple, 
+                            fill = life_stage_simple)) +
+  geom_ribbon(aes(ymin = ccdf_lower,
+                  ymax = ccdf_upper), 
+              alpha = 0.15,
+              color = NA) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled CCDF of Bd-positive load") +
+  labs(color = "Life stage",
+       fill = "Life stage") +
+  xlab("log(Bd load) [-]") +
+  ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+  scale_x_continuous(limits = c(log(0.5), 20), expand = c(0, 0)) +
+  ylim(0, 1) +
+  facet_grid(. ~ gsub(" ", "\n", species))
+
+# # CCDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = ccdf_median,
+#                             color = taxon_capture, 
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = ccdf_lower,
+#                   ymax = ccdf_upper), 
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled CCDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   ylim(0, 1) +
+#   facet_grid(life_stage_simple ~ season)
+```
+:::
+
+# Discussion
+  - General patterns
+    - Lluvia (wet) season:
+      - Most species show greater Bd prevalence in juveniles, with some showing no distinct pattern (*A. varius* an exception)
+      - Some species show greater Bd-positive load in juveniles, with most showing no distinct pattern (*A. varius* an exception)
+    - Across seasons:
+      - *C. panamansis*, *L. warszewitschii*, & *S. flotator* show generally stronger patterns of Bd prevalence with life stage in the wet season, compared with dry (*R. haemataticus* showing the opposite pattern)
+      - Loads generally appear similar in the dry season, not necesarily in the wet season
+  - Bringing in more context
+    - Discuss in the context of species characteristics (Lips et al. 2003)
+      - habitat and development (aquatic vs. terrestrial)
+      - elevation range
+      - population/region
+      - species body size (in general)
+      - activity period
+    - How does seasonal behavior impact species trends (e.g. gathering around puddles - Ana Longo)
+    - Effects of air humidity on Bd growth (e.g. Jordan Gas & Jaimem, 2022)
+ 
+# Next steps:
+  - Confirm data selection & models
+    - utility for case of *A. varius*?
+    - discuss case of *R. marina* (0 positive Bd load obs)
+  - Quantitative hypothesis testing (model comparisons, etc.)
+  - Other ideas?
+ 
