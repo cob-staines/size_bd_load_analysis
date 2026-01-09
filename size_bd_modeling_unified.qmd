@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, runner)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, runner, cmdstanr)
 
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -446,7 +446,7 @@ all_sites_dates = all_sites %>%
 ```
 # environmental data
 ```{r}
-# env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
+env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
 
 sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
   ts_sym <- sym(ts_col_name)
@@ -553,7 +553,9 @@ bd_model_env = bd_model %>%
             year_last = year(max(date)),
             year_count = n_distinct(year(date)),
             adult_n = sum(life_stage_simple == "adult"),
+            adult_n_pos = sum(life_stage_simple == "adult" & bd_detected_co),
             subadult_n = sum(life_stage_simple == "subadult"),
+            subadult_n_pos = sum(life_stage_simple == "subadult" & bd_detected_co),
             .groups = "drop") %>%
   arrange(country,
           taxon_capture))
@@ -567,10 +569,20 @@ bd_model_env = bd_model %>%
             year_last = year(max(date)),
             year_count = n_distinct(year(date)),
             adult_n = sum(life_stage_simple == "adult"),
+            adult_n_pos = sum(life_stage_simple == "adult" & bd_detected_co),
             subadult_n = sum(life_stage_simple == "subadult"),
+            subadult_n_pos = sum(life_stage_simple == "subadult" & bd_detected_co),
             .groups = "drop") %>%
   arrange(country,
           taxon_capture))
+
+species_select = bd_model_env_stats %>%
+  filter(adult_n_pos >= 10,
+         subadult_n_pos >= 10)
+
+bd_model_env_select = bd_model_env %>%
+  filter(taxon_capture %in% species_select$taxon_capture) %>%
+  filter(!is.na(bd_load_co_density))
 
 ```
 
@@ -579,200 +591,289 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 
 
 ```{r}
-# is size a significant factor?
-null_model <- brm(
-  bd_load_co ~ 1,
-  data = bd_model_env %>%
-    filter(!is.na(svl_mm)) %>%
-    select(bd_load_co,
-           svl_mm,
-           taxon_capture),
-  family = hurdle_lognormal(),  # Adjust family as needed (e.g., negbinomial() for counts)
-  chains = 4, warmup = 1000, iter = 2000, cores = 4,
-  seed = 123  # For reproducibility
-)
-
-saveRDS(null_model, file = "unified_models/unfied_model_results_null.rds")
-null_model = readRDS(file = "unified_models/unified_model_results_null.rds")
-
-# Full model with size predictor
-size_model <- brm(
-  bd_load_co ~ svl_mm + (1 | taxon_capture),
-  data = bd_model_env %>%
-    filter(!is.na(svl_mm)) %>%
-    select(bd_load_co,
-           svl_mm,
-           taxon_capture),
-  family = hurdle_lognormal(),  # Match null model family
-  chains = 4, warmup = 1000, iter = 2000, cores = 4,
-  seed = 123,
-  prior = prior(normal(0, 1), class = "b")  # Weakly informative prior for size effect
-)
-
-saveRDS(size_model, file = "unified_models/unfied_model_results_svl.rds")
-size_model = readRDS(file = "unified_models/unified_model_results_svl.rds")
-
-# Add LOO to both models
-null_model <- add_criterion(null_model, "loo")
-size_model <- add_criterion(size_model, "loo")
-
-# Compare (higher elpd is better)
-loo_compare(null_model, size_model)
-
-#            elpd_diff se_diff
-# size_model    0.0       0.0 
-# null_model -732.3      38.4 
-# bayes_factor(null_model, size_model)
-```
-
-```{r}
 #| eval: false
 #| code-fold: true
 #| code-summary: "Show model code"
 
-# unified model
+# unified, scaled model
 
-brms_data <- bd_model_env %>%
+brms_scales = bd_model_env_select %>%
+  group_by() %>%
+  summarize(precip_mm_15_day_sum_mean = mean(precip_mm_15_day_sum),
+            precip_mm_15_day_sum_sd = sd(precip_mm_15_day_sum),
+            precip_mm_30_day_sum_mean = mean(precip_mm_30_day_sum),
+            precip_mm_30_day_sum_sd = sd(precip_mm_30_day_sum),
+            temp_c_15_day_mean_mean = mean(temp_c_15_day_mean),
+            temp_c_15_day_mean_sd = sd(temp_c_15_day_mean),
+            temp_c_30_day_mean_mean = mean(temp_c_30_day_mean),
+            temp_c_30_day_mean_sd = sd(temp_c_30_day_mean),
+            precip_mm_15_day_sum2_mean = mean(precip_mm_15_day_sum ^ 2),
+            precip_mm_15_day_sum2_sd = sd(precip_mm_15_day_sum ^ 2),
+            precip_mm_30_day_sum2_mean = mean(precip_mm_30_day_sum ^ 2),
+            precip_mm_30_day_sum2_sd = sd(precip_mm_30_day_sum ^ 2),
+            temp_c_15_day_mean2_mean = mean(temp_c_15_day_mean ^ 2),
+            temp_c_15_day_mean2_sd = sd(temp_c_15_day_mean ^ 2),
+            temp_c_30_day_mean2_mean = mean(temp_c_30_day_mean ^ 2),
+            temp_c_30_day_mean2_sd = sd(temp_c_30_day_mean ^ 2),
+            site_precip_mm_annual_mean_mean = mean(site_precip_mm_annual_mean),
+            site_precip_mm_annual_mean_sd = sd(site_precip_mm_annual_mean),
+            site_temp_c_mean_mean = mean(site_temp_c_mean),
+            site_temp_c_mean_sd = sd(site_temp_c_mean))
+
+brms_data <- bd_model_env_select %>%
   mutate(
-    precip_mm_30_z  = as.numeric(scale(precip_mm_30_day_sum,  center = TRUE, scale = TRUE)),
-    temp_c_30_z     = as.numeric(scale(temp_c_30_day_mean,    center = TRUE, scale = TRUE)),
-    precip_mm_15_z  = as.numeric(scale(precip_mm_15_day_sum,  center = TRUE, scale = TRUE)),
-    temp_c_15_z     = as.numeric(scale(temp_c_15_day_mean,    center = TRUE, scale = TRUE))
-  ) %>%
-  # squared terms (on the z-scored variables)
-  mutate(
-    precip_mm_30_z2 = precip_mm_30_z^2,
-    temp_c_30_z2    = temp_c_30_z^2,
-    precip_mm_15_z2 = precip_mm_15_z^2,
-    temp_c_15_z2    = temp_c_15_z^2
+    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
+    precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE)),
+    site_precip_mm_annual_mean_z = as.numeric(scale(site_precip_mm_annual_mean, center = TRUE, scale = TRUE)),
+    site_temp_c_mean_z = as.numeric(scale(site_temp_c_mean, center = TRUE, scale = TRUE))
   )
 
-m3_ltp <- brm(
+model_priors <- c(
+  # b
+  prior(normal(0, 10), class = "Intercept"),
+  prior(normal(0, 2),   class = "b"),
+  
+  # hu
+  prior(normal(0, 5), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 1), class = "b", dpar = "hu"),
+  
+  # Sigma
+  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+  prior(normal(0, 0.3), class = "b", dpar = "sigma"),
+  
+  # Random effects
+  prior(exponential(1), class = "sd")
+)
+
+model_priors_fixed <- c(
+  # b
+  prior(normal(0, 10), class = "Intercept"),
+  prior(normal(0, 2),   class = "b"),
+  
+  # hu
+  prior(normal(0, 5), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 1), class = "b", dpar = "hu"),
+  
+  # Sigma
+  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+  prior(normal(0, 0.3), class = "b", dpar = "sigma")
+)
+
+model_report = function(model_m){
+  summary(model_m)
+  plot((model_m), ask = FALSE)
+  plot(conditional_effects(model_m), ask = FALSE)
+  pp_check(model_m) +
+    scale_x_log10()
+}
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+```
+
+# run models
+```{r}
+null_zln <- brm(
+  bd_load_co_density ~ 1,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+null_zln <- add_criterion(null_zln, "loo")
+
+saveRDS(null_zln, file = here("unified_models/unified_model_results_zln_null.rds"))
+null_zln = readRDS(file = here("unified_models/unified_model_results_zln_null.rds"))
+
+m1_zln <- brm(
   formula = bf(
-    bd_load_co ~ 1 + life_stage_simple * taxon_capture + (1 | population),
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture,
+    hu ~ 1 + life_stage_simple * taxon_capture,
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors_fixed,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m1_zln <- add_criterion(m1_zln, "loo")
+
+saveRDS(m1_zln, file = here("unified_models/unified_model_results_zln_life_tax.rds"))
+m1_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax.rds"))
+
+m2_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population),
     hu ~ 1 + life_stage_simple * taxon_capture + (1 | population),
     sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
-  prior = c(prior(normal(0,2), class="b")),
+  prior = model_priors,
   control = list(adapt_delta = 0.95, max_treedepth = 12),
   chains = 4,
-  iter = 4000,
+  iter = 2000,
   warmup = 1000,
   seed = 124,
   cores = 4,
-  save_pars = save_pars(all = TRUE)
+  backend = "cmdstanr"
 )
-saveRDS(m3_ltp, file = "unified_models/unfied_model_results_zln_life_tax_pop.rds")
-m3_ltp = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pop.rds")
 
-m3_hln <- brm(
+m2_zln <- add_criterion(m2_zln, "loo")
+
+saveRDS(m2_zln, file = here("unified_models/unified_model_results_zln_life_tax_pop.rds"))
+m2_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax_pop.rds"))
+
+m3_zln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
-    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 + life_stage_simple | population),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 + life_stage_simple | population),
     sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
-  chains = 4,
-  iter = 4000,
-  warmup = 1000,
-  cores = 4,
+  prior = model_priors,
   control = list(adapt_delta = 0.95, max_treedepth = 12),
-  seed = 123,
-  save_pars = save_pars(all = TRUE)
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
 )
 
-saveRDS(m3_hln, file = "model_results_zln_life_tax_env_unified_simple.rds")
-m3_hln = readRDS(file = "model_results_zln_life_tax_env_unified_simple.rds")
+m3_zln <- add_criterion(m3_zln, "loo")
 
-summary(m3_hln)
-model_report(m3_hln)
+saveRDS(m3_zln, file = here("unified_models/unified_model_results_zln_life_tax_popb.rds"))
+m3_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax_popb.rds"))
 
-m4_hln <- brm(
+
+m4_zln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 | population / site),
-    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 | population / site),
-    sigma ~ 1 + life_stage_simple * taxon_capture
-  ),
-  data = brms_data,
-  family = hurdle_lognormal(),
-  chains = 4,
-  iter = 4000,
-  warmup = 1000,
-  cores = 4,
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  seed = 123,
-  save_pars = save_pars(all = TRUE)
-)
-
-saveRDS(m4_hln, file = "model_results_zln_life_tax_env_unified.rds")
-m4_hln = readRDS(file = "model_results_zln_life_tax_env_unified.rds")
-
-summary(m4_hln)
-model_report(m4_hln)
-
-m5_hln <- brm(
-  formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population / site),
-    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population / site),
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + temp_c_30_z + (1 + life_stage_simple | population),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + temp_c_15_z + (1 + life_stage_simple | population),
     sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
-  chains = 4,
-  iter = 4000,
-  warmup = 1000,
-  cores = 4,
+  prior = model_priors,
   control = list(adapt_delta = 0.95, max_treedepth = 12),
-  seed = 123,
-  save_pars = save_pars(all = TRUE)
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
 )
+m4_zln <- add_criterion(m4_zln, "loo")
 
-saveRDS(m5_hln, file = "model_results_zln_life_tax_env2_unified.rds")
-m5_hln = readRDS(file = "model_results_zln_life_tax_env2_unified.rds")
+saveRDS(m4_zln, file = "unified_models/unified_model_results_zln_life_tax_pop_env.rds")
+m4_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pop_env.rds")
 
-m6_hln <- brm(
+summary(m4_zln)
+model_report(m4_zln)
+
+m5_zln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_30_z + temp_c_30_z + (1 | population / site),
-    hu ~ 1 + life_stage_simple * taxon_capture + site_precip_mm_annual_mean + site_temp_c_mean + precip_mm_15_z + temp_c_15_z + (1 | population / site),
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 + life_stage_simple | population),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 + life_stage_simple | population),
     sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
-  chains = 4,
-  iter = 4000,
-  warmup = 1000,
-  cores = 4,
+  prior = model_priors,
   control = list(adapt_delta = 0.95, max_treedepth = 12),
-  seed = 123,
-  save_pars = save_pars(all = TRUE)
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
 )
 
-saveRDS(m6_hln, file = "model_results_zln_life_tax_env_clim_unified.rds")
-m6_hln = readRDS(file = "model_results_zln_life_tax_env_clim_unified.rds")
+m5_zln <- add_criterion(m5_zln, "loo")
 
-summary(m6_hln)
-model_report(m6_hln)
+saveRDS(m5_zln, file = "unified_models/unified_model_results_zln_life_tax_pop_env2.rds")
+m5_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pop_env2.rds")
 
+m6_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + site_precip_mm_annual_mean_z + site_temp_c_mean_z + (1 + life_stage_simple | population),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + site_precip_mm_annual_mean_z + site_temp_c_mean_z + (1 + life_stage_simple | population),
+    sigma ~ 1 + taxon_capture
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
 
-summary(m5_hln)
-model_report(m5_hln)
+m6_zln <- add_criterion(m6_zln, "loo")
 
-loo_m4 <- loo(m4_hln, moment_match = TRUE)
-loo_m5 <- loo(m5_hln, moment_match = TRUE)
+saveRDS(m6_zln, file = "unified_models/unified_model_results_zln_life_tax_pop_cli_env2.rds")
+m6_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pop_cli_env2.rds")
 
-loo_comp <- loo_compare(list(linear = loo_m4, quadratic = loo_m5))
+```
 
-# life-stage specific standard deviation?
-bayes_factor(m3_hln, m4_hln)
+# model comparison
+```{r}
+# model comparison and selection
+nobs(null_zln)
+nobs(m1_zln)
+nobs(m2_zln)
+nobs(m3_zln)
 
-# linear or quadratic (slight preference for linear over quatratic)
-bayes_factor(m3_hln, m5_hln)
+# summaries
+summary(null_zln)
+summary(m1_zln)
+summary(m2_zln)
+summary(m3_zln)
+summary(m4_zln)
+summary(m5_zln)
+summary(m6_zln)
 
-# include climate vars? (slight preference for without climate basis over wiht)
-bayes_factor(m3_hln, m6_hln)
+# compare with null model
+loo_compare(null_zln,
+            m1_zln,
+            m2_zln,
+            m2b_zln,
+            m3_zln,
+            m4_zln,
+            m5_zln,
+            m6_zln)
+
+# should we include random slopes
+VarCorr(m2_zln)$population$sd[1, "Estimate"]
+fixef(m2_zln)["life_stage_simplesubadult", "Est.Error"] * .5
+# loo_m4 <- loo(m4_hln, moment_match = TRUE)
+# loo_m5 <- loo(m5_hln, moment_match = TRUE)
+
+VarCorr(m5_zln)
+VarCorr(m6_zln)
 
 ```
 
