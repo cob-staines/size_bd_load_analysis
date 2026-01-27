@@ -1,0 +1,50 @@
+---
+title: "Dinámica de Bd según estadio de vida: Patrones comparativos entre especies para entender procesos intraespecíficos"
+author: "Cob Staines"
+format: revealjs
+editor: source
+incremental: true
+bibliography: clh_references.bib
+csl: ecology.csl
+---
+
+# Simposio de Ciencia Transdisciplinaria y Colaborativa en la Investigación y Conservación de Anfibios.
+ * 12 minutos en total
+ * vinculado con colaboracion y comunidad (ciencia colaborativa)
+
+
+# Todas las colaboraciones son responsivas a necesidades (The need)
+
+## La pandemia mundial de Bd (revision breva)
+## Necesidad de conservar la biodiversidad de anfibios, con recursos limitados
+
+# RIBBiTR (The origin)
+## Formado como un esfuerzo de entender dinamicas de enfermedades en anfibios a lo largo de las Americas (revisar objectivos)
+## Sistemas de estudos
+
+# Bd a lo largo de vida (The question)
+## Mountain Yellow-legged Frogs
+## Select literature review
+## Macroparasite overdispersion model (hand-drawn diagrams, lean into Schrock paper)
+## How common is this pattern?
+
+# Methods (data collection & selection)
+
+# Results
+## Subadult Bd prevalence & load generally don't differ from adults, but with exceptions
+
+# Discussion
+## Revisit question
+## Contrast with current literature (not a common pattern)
+## Contrast with macroparasite accumulation model (generally no increase w/ age)
+## Litle correlation between load and prevalence signals, allows to eliminate some simple models (e.g. greater prevalence means greater loads within a species, for example)
+
+# Call for collaboration
+## Sharing data among the scientific community
+### bariers include "data ownership", "study system ownership", "competition for resources"
+## Carefule coordination among research groups, including data collection and sharing agreements
+## Counteracting forces of publication bias, citation bias, AI bias, and species/study system tunnel vision
+## Inductive studies to help drive deductivly informed hypotheses
+### example for Rana Sierrae/Muscosa, ...
+
+# Agradecimientos
