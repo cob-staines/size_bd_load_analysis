@@ -18,23 +18,15 @@ csl: ecology.csl
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, ggplot2, scales)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, loo, bayesplot, tidybayes, scales, cmdstanr)
 
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
 
-# load populations
-data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
-  rename(population = pop_id) %>%
-  mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
-         site = as.character(site)) %>%
-  select(site,
-         population)
-
-
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
 db_sample = tbl(dbcon, Id("survey_data", "sample"))
+
 db_capture = tbl(dbcon, Id("survey_data", "capture"))
 db_ves = tbl(dbcon, Id("survey_data", "ves"))
 db_survey = tbl(dbcon, Id("survey_data", "survey"))
@@ -42,17 +34,52 @@ db_visit = tbl(dbcon, Id("survey_data", "visit"))
 db_site = tbl(dbcon, Id("survey_data", "site"))
 db_region = tbl(dbcon, Id("survey_data", "region"))
 db_country = tbl(dbcon, Id("survey_data", "country"))
+
 db_hist = tbl(dbcon, Id("survey_data", "site_history"))
+db_cmr = tbl(dbcon, Id("survey_data", "cmr"))
 
 bd_sample = db_sample %>%
-  right_join(db_capture, by = "capture_id") %>%
+  inner_join(db_capture, by = "capture_id") %>%
+  left_join(db_cmr, by = "cmr_id") %>%
   left_join(db_survey, by = "survey_id") %>%
   left_join(db_visit, by = "visit_id") %>%
   left_join(db_site, by = "site_id") %>%
   left_join(db_region, by = "region_id") %>%
   left_join(db_country, by = "country_id") %>%
-  filter(sample_type == "bd")
+  filter(sample_type == "bd") %>%
+  inner_join(db_bd %>%
+              filter(!is.na(bd_detected)) %>%
+               # limit to one qPCR result per sample
+              group_by(sample_id) %>%
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     bd_detected,
+                     bd_its1_copies_per_swab), by = "sample_id")
 ```
+
+
+# Collect reintroduced PIT tag refs
+```{r}
+#| eval: false
+#| output: false
+#| code-fold: true
+#| code-summary: "Show reintroduced PIT tag fetch code"
+
+sncon = hopToDB("amphibians", hopReg = FALSE)
+
+sn_relocate_frog = tbl(sncon, Id("public", "relocate_frog"))
+
+relocate_pit = sn_relocate_frog %>%
+  select(pit_tag_ref) %>%
+  distinct() %>%
+  collect() %>%
+  na.omit()
+
+write_csv(relocate_pit, here("data", paste0("sn_relocate_pit_tag_ref_", today(), ".csv")))
+
+```
+
 
 ## Define functions
 For fuzzy grouping and confidence interval calcs
@@ -166,6 +193,18 @@ normal_ci_upper = function(x, conf.level = 0.95) {
 #| code-fold: true
 #| code-summary: "Show data selection code"
 
+# load populations
+data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
+         site = as.character(site)) %>%
+  select(site,
+         population)
+
+# load reintroduced pit tag refs
+reintro_pits = read.csv(here("data", "sn_relocate_pit_tag_ref_2026-02-02.csv")) %>%
+  mutate(pit_tag_ref = as.character(pit_tag_ref))
+
 # identify populations
 bd_population = bd_sample %>%
   filter(country == "usa",
@@ -205,7 +244,7 @@ first_treatment_events =  treatment_events %>%
   summarise(first_treatment_year = min(year),
             .groups = "drop")
 
-post_treatment_mask_sites = c()
+post_treatment_mask_sites = c()  # currently not masking any events
 
 # post_treatment_mask_sites = c("10206",
 #                               "10225",
@@ -229,10 +268,13 @@ post_treatment_mask = expand_grid(unique(first_treatment_events$population),
 ## - 3 years of sampling
 ## - at least 15 each adult and subadult per population
 
-
-
 bd_population_valid = bd_population %>%
+  select(local_cmr_id,
+         life_stage_simple,
+         population,
+         year) %>%
   collect() %>%
+  anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref")) %>%
   anti_join(post_treatment_mask, by = c("population", "year")) %>%
   group_by(population) %>%
   summarise(n_years = n_distinct(year),
@@ -243,7 +285,8 @@ bd_population_valid = bd_population %>%
             .groups = "drop") %>%
   filter(n_years >= 3,
          n_adult >= 15,
-         n_subadult >= 15)
+         n_subadult >= 15, # necessary?
+         )
 
 # pop_year_valid = bd_population %>%
 #   distinct(population, year) %>%
@@ -264,6 +307,7 @@ treatment_events_valid = treatment_events %>%
 
 bd_capture_valid = bd_population %>%
   filter(population %in% bd_population_valid$population) %>%
+  anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref"), copy = TRUE) %>%
   anti_join(post_treatment_mask, by = c("population", "year"), copy = TRUE)
 
 # all years of data for valid pops
@@ -312,6 +356,7 @@ VES & CMR counts
 #| warning: false
 #| code-fold: true
 #| code-summary: "Show adult abundance indicator code"
+
 # sites of interest
 site_oi = db_site %>%
   filter(site %in% bd_site_valid$site)
@@ -334,7 +379,8 @@ visit_oi = db_visit %>%
   arrange(population,
           date) %>%
   group_by(population, year) %>%
-  mutate(survey_period = fuzzy_grouping(as.integer(date), 7)) %>% # consider surveys within a rolling 7 days to be within the same survey period
+  mutate(survey_period = fuzzy_grouping(as.integer(date), 7),  # consider surveys within a rolling 7 days to be within the same survey period
+         survey_period_day = row_number()) %>% 
   ungroup()
 
 # join with survey table
@@ -366,6 +412,7 @@ data_visual = survey_oi %>%
          site,
          date,
          survey_period,
+         survey_period_day,
          year,
          survey_id,
          visit_id,
@@ -408,6 +455,7 @@ data_cmr = survey_oi %>%
          site,
          date,
          survey_period,
+         survey_period_day,
          year,
          survey_id,
          visit_id,
@@ -415,16 +463,20 @@ data_cmr = survey_oi %>%
          comments_survey,
          comments_visit) %>%
   inner_join(db_capture %>%
+               left_join(db_cmr, by = "cmr_id") %>%
                filter(life_stage == "adult",
                       capture_animal_state != "dead",
                       taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
-               select(cmr_id,
+               select(local_cmr_id,
                       capture_id,
                       survey_id,
                       life_stage,
                       capture_animal_state,
                       comments_capture) %>%
-               collect(), by = "survey_id")
+               collect(), by = "survey_id") %>%
+  anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref")) %>%
+  arrange(site, date)
+
 
 # cmr abundance calc
 abundance_cmr = data_cmr %>%
@@ -433,7 +485,7 @@ abundance_cmr = data_cmr %>%
            survey_period) %>%
   summarise(date_start_cmr = first(date),
             cmr_days = n_distinct(date),
-            adult_count_cmr = n_distinct(cmr_id),
+            adult_count_cmr = n_distinct(local_cmr_id),
             .groups = "drop") %>%
   arrange(population, year, desc(adult_count_cmr)) %>%
   group_by(population,
@@ -451,6 +503,14 @@ abundance_stats = abundance_visual %>%
 detection_ratio = abundance_stats %>%
   filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
   group_by(population) %>%
+  summarise(n = n(),
+         ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
+         .groups = "drop")
+
+detection_ratio_site = abundance_stats %>%
+  left_join() %>%
+  filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
+  group_by(site) %>%
   summarise(n = n(),
          ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
          .groups = "drop")
@@ -493,14 +553,6 @@ All adult swabs, grouped by population & year:
 
 bd_stats = bd_capture_valid %>%
   filter(life_stage_simple == "adult") %>%
-  inner_join(db_bd %>%
-              filter(!is.na(detected)) %>%
-              group_by(sample_id) %>%
-              summarise(bd_swab_count = n(),
-                        bd_detected = any(detected),
-                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
-                        .groups = "drop"),
-             by = "sample_id") %>%
   collect() %>%
   group_by(population,
            year) %>%
@@ -508,13 +560,13 @@ bd_stats = bd_capture_valid %>%
             adult_bd_prevalence = sum(bd_detected) / n(),
             adult_bd_prevalence_ci_lower = wilson_ci_lower(sum(bd_detected), n(), conf.level = 0.95),
             adult_bd_prevalence_ci_upper = wilson_ci_upper(sum(bd_detected), n(), conf.level = 0.95),
-            adult_positive_bd_load_median = median(bd_mean_its1_copies_per_swab[bd_detected]),
-            adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
-            adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_mean_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
-            adult_bd_load_median = median(bd_mean_its1_copies_per_swab),
-            adult_bd_load_mean = mean(bd_mean_its1_copies_per_swab),
-            adult_positive_bd_load_geom_mean = exp(mean(log(bd_mean_its1_copies_per_swab[bd_detected]))),
-            adult_bd_load_max = max(bd_mean_its1_copies_per_swab),
+            adult_positive_bd_load_median = median(bd_its1_copies_per_swab[bd_detected]),
+            adult_positive_bd_load_ci_lower = exp(normal_ci_lower(log(bd_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
+            adult_positive_bd_load_ci_upper = exp(normal_ci_upper(log(bd_its1_copies_per_swab[bd_detected]), conf.level = 0.95)),
+            adult_bd_load_median = median(bd_its1_copies_per_swab),
+            adult_bd_load_mean = mean(bd_its1_copies_per_swab),
+            adult_positive_bd_load_geom_mean = exp(mean(log(bd_its1_copies_per_swab[bd_detected]))),
+            adult_bd_load_max = max(bd_its1_copies_per_swab),
             .groups = "drop")
 
 # join with pop_year_ab
@@ -590,6 +642,9 @@ epi_thresholds = pop_year_bd %>%
          # low_count_cmr = adult_count_cmr < 20
          )
 
+# epi_events = epi_thresholds %>%
+#   filter(epi_thresh)
+
 # identify epizootic events
 epi_events = epi_thresholds %>%
   # filter potential event starts to epi threshold years
@@ -641,18 +696,11 @@ pop_year_class = epi_thresholds %>%
       is.na(start_year) & median_prev < 0.5 ~ "1-naive",
       year < start_year ~ "1-naive",
       year >= start_year & year <= end_year ~ "2-epizootic",
-      year > end_year ~ "3-post"),
-    res_class_post = case_when(
-      res_class == "1-naive" ~ "1-naive",
-      res_class == "2-epizootic" ~ "2-epizootic",
-      res_class == "3-post" & !low_count_f ~ "3b-recovering",
-      res_class == "3-post" & low_count_f ~ "3a-persisting",
-      .default = NA_character_
-    )) %>%
+      year > end_year ~ "3-post")) %>%
   group_by(population) %>%
   # interpolation
-  mutate(res_class_post = zoo::na.locf(res_class_post, fromLast = TRUE, na.rm = FALSE),
-         # res_class_post = if_else(is.na(adult_swab_n), NA, res_class_post)
+  mutate(res_class = zoo::na.locf(res_class, fromLast = TRUE, na.rm = FALSE),
+         # res_class = if_else(is.na(adult_swab_n), NA, res_class)
          adult_count_terp = 10^zoo::na.approx(log10(adult_count), na.rm = FALSE),
          adult_bd_prevalence_terp = zoo::na.approx(adult_bd_prevalence, na.rm = FALSE),
          adult_positive_bd_load_median_terp = 10^zoo::na.approx(log10(adult_positive_bd_load_median), na.rm = FALSE),
@@ -674,7 +722,7 @@ knitr::kable(pop_year_class %>%
                       adult_swab_n,
                       adult_bd_prevalence,
                       adult_positive_bd_load_geom_mean,
-                      res_class_post))
+                      res_class))
 ```
 :::
 
@@ -712,7 +760,7 @@ ggplot(pop_year_class, aes(x = year)) +
             aes(label = paste0(adult_swab_n, " swabs"))) +
   
   # classification
-  geom_tile(data = pop_year_class, aes(y = -1, fill = res_class_post), height = 1) +
+  geom_tile(data = pop_year_class, aes(y = -1, fill = res_class), height = 1) +
   
   # thresholds
   geom_hline(yintercept = 0.5 * prev_coef, linetype = "dashed", color = "#f1b6da") +
@@ -753,8 +801,7 @@ ggplot(pop_year_class, aes(x = year)) +
     values = c(
     "1-naive" = "#b8e186",
     "2-epizootic" = "#d01c8b",
-    "3a-persisting" = "#92c5de",
-    "3b-recovering" = "#0571b0"
+    "3-post" = "#0571b0"
   )) +
 
   scale_y_continuous(
@@ -772,6 +819,201 @@ ggplot(pop_year_class, aes(x = year)) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
 ```
+# new classification criteria
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show classification code"
+
+# calculate swab counts
+pop_adult_swab_counts = pop_year_bd %>%
+  group_by(population) %>%
+  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
+
+# # claculate epizootic classification criteria
+# epi_thresholds = pop_year_bd %>%
+#   arrange(population, year) %>%
+#   mutate(epi_thresh = adult_positive_bd_load_geom_mean >= 21000)
+# 
+# # epi_events = epi_thresholds %>%
+# #   filter(epi_thresh)
+# 
+# # identify epizootic events
+# epi_events = epi_thresholds %>%
+#   # filter potential event starts to epi threshold years
+#   filter(epi_thresh) %>%
+#   select(population, year) %>%
+#   rename(start_year = year) %>%
+#   inner_join(epi_thresholds %>%
+#                # filter potential event ends to low_count years
+#                filter(low_count) %>%
+#                select(population, year) %>%
+#                rename(end_year = year), by = "population", relationship = "many-to-many") %>%
+#   # event length 1-5 years (inclusive)
+#   filter(start_year <= end_year,
+#          start_year >= end_year - 5) %>%
+#   group_by(population, start_year) %>%
+#   # pick shortest event which meets above criteria
+#   summarise(end_year = min(end_year),
+#             .groups = "drop") %>%
+#   left_join(pop_year_bd %>%
+#               select(population,
+#                      year,
+#                      adult_count), by = "population", relationship = "many-to-many") %>%
+#   group_by(population, start_year, end_year) %>%
+#   summarize(adult_count_before = median(adult_count[year <= start_year], na.rm = TRUE),
+#             adult_count_after = median(adult_count[year >= end_year], na.rm = TRUE),
+#             .groups = "drop") %>%
+#   mutate(adult_count_before = if_else(is.na(adult_count_before), 0, adult_count_before),
+#          adult_count_after = if_else(is.na(adult_count_after), 0, adult_count_after),
+#          adult_count_drop_ratio = adult_count_after / adult_count_before,
+#          epi_criteria = adult_count_drop_ratio <= 0.1) %>%
+#   # filter to minimum 90% population loss over event
+#   filter(epi_criteria) %>%
+#   # select 1st event which meets all above criteria
+#   arrange(population, start_year) %>%
+#   group_by(population) %>%
+#   slice_head(n = 1) %>%
+#   ungroup()
+
+# bring together with timeseries and classify
+pop_year_class = pop_year_bd %>%
+  left_join(epi_events, by = c("population")) %>%
+  group_by(population) %>%
+  mutate(median_prev = median(adult_bd_prevalence, na.rm = TRUE),
+         low_count_f = zoo::na.locf(low_count, na.rm = FALSE)) %>%
+  ungroup() %>%
+  mutate(
+    res_class = case_when(
+      is.na(start_year) & median_prev >= 0.5 ~ "3-post",
+      is.na(start_year) & median_prev < 0.5 ~ "1-naive",
+      year < start_year ~ "1-naive",
+      year >= start_year & year <= end_year ~ "2-epizootic",
+      year > end_year ~ "3-post")) %>%
+  group_by(population) %>%
+  # interpolation
+  mutate(res_class = zoo::na.locf(res_class, fromLast = TRUE, na.rm = FALSE),
+         # res_class = if_else(is.na(adult_swab_n), NA, res_class)
+         adult_count_terp = 10^zoo::na.approx(log10(adult_count), na.rm = FALSE),
+         adult_bd_prevalence_terp = zoo::na.approx(adult_bd_prevalence, na.rm = FALSE),
+         adult_positive_bd_load_median_terp = 10^zoo::na.approx(log10(adult_positive_bd_load_median), na.rm = FALSE),
+         adult_bd_load_median_terp = 10^zoo::na.approx(log10(adult_bd_load_median), na.rm = FALSE),
+         adult_bd_load_mean_terp = 10^zoo::na.approx(log10(adult_bd_load_mean), na.rm = FALSE),
+         adult_positive_bd_load_geom_mean_terp = 10^zoo::na.approx(log10(adult_positive_bd_load_geom_mean), na.rm = FALSE),
+         adult_bd_load_max_terp = 10^zoo::na.approx(log10(adult_bd_load_max), na.rm = FALSE)) %>%
+  ungroup()
+
+```
+::: {.callout-note collapse="true"}
+### Classification data
+
+```{r}
+knitr::kable(pop_year_class %>%
+               select(population,
+                      year,
+                      adult_count,
+                      adult_swab_n,
+                      adult_bd_prevalence,
+                      adult_positive_bd_load_geom_mean,
+                      res_class))
+```
+:::
+
+
+# Visualization of Classification
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show visualization code"
+#| fig-height: 15
+#| fig-width: 10
+
+psize = 1.5
+prev_coef = 8.64439
+
+manual_legend_df = data.frame(
+  x = NA, y = NA,
+  event = c("✱  Release event", "†  Antifungal treatment")
+)
+
+ggplot(pop_year_class, aes(x = year)) +
+  
+  # time series (points and interpolations)
+  geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
+  geom_line(aes(y = adult_bd_prevalence_terp * prev_coef, color = "Bd prevalence")) +
+  geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
+  geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(+Bd load)")) +
+  geom_point(aes(y = log10(adult_count + 1), color = "Adult count"), size = psize, shape = "triangle") +
+  geom_line(aes(y = log10(adult_count_terp + 1), color = "Adult count")) +
+
+  # swab counts
+  geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3,
+            aes(label = paste0(adult_swab_n, " swabs"))) +
+  
+  # classification
+  geom_tile(data = pop_year_class, aes(y = -1, fill = res_class), height = 1) +
+  
+  # thresholds
+  geom_hline(yintercept = 0.5 * prev_coef, linetype = "dashed", color = "#f1b6da") +
+  geom_hline(yintercept = log10(10 + 1), linetype = "dashed", color = "#0571b0") +
+  geom_hline(yintercept = log10(21000 + 1), linetype = "dashed", color = "#d01c8b") +
+
+  # event markers
+  geom_text(data = treatment_events_valid %>% filter(grepl("release", treatment_type)),
+            aes(x = year), y = -2.1, size = 5, label = "*") +
+  geom_text(data = treatment_events_valid %>% filter(grepl("antifungal", treatment_type)),
+            aes(x = year), y = -1.75, size = 2.5, label = "†") +
+  geom_point(
+    data = manual_legend_df,
+    aes(x = x, y = y, alpha = event),
+    colour = NA
+  ) +
+  scale_alpha_discrete(
+    name = "Events",
+    guide = guide_legend(override.aes = list(
+      colour = NA,
+      shape = NA,
+      size = 0
+    ))
+  ) +
+
+  facet_wrap(population ~ .) +
+
+  scale_color_manual(
+    name = "Timeseries",
+    values = c(
+    "Adult count" = "#0571b0",
+    "Bd prevalence" = "#f1b6da",
+    "geom-mean(+Bd load)" = "#d01c8b"
+  )) +
+
+  scale_fill_manual(
+    name = "Resillience classification",
+    values = c(
+    "1-naive" = "#b8e186",
+    "2-epizootic" = "#d01c8b",
+    "3-post" = "#0571b0"
+  )) +
+
+  scale_y_continuous(
+    name = "Adult abundance & Geometric mean Bd load",
+    breaks = c(0, 3, 6, 9),
+    labels = function(x) {
+      labs = scales::math_format(10^.x+1)(x)
+      labs[x == 0] = "0"
+      labs
+    },
+    sec.axis = sec_axis(~./prev_coef, name="Bd Prevalence")
+  ) +
+  ggtitle("Time series and resilience trajectory classification (from adults only)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+```
+
 # Discussion & Next Steps
 
     - Review population/year classifications for agreement with site history and/or issues
