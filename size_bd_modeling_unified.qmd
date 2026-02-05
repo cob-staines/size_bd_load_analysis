@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, bayesplot, runner, cmdstanr, bayestestR)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR)
 
 ```
 ## Data selection
@@ -543,16 +543,39 @@ site_climate = read_csv(here("data", "site_climate.csv"))
 # ggplot(env_agg, aes(x = date, y = temp_c_year_mean, color = site)) +
 #   geom_line()
 
+# taxon_climate = env_agg %>%
+#   left_join(bd_model %>%
+#              select(taxon_capture, site) %>%
+#              distinct(), by = "site") %>%
+#   group_by(taxon_capture) %>%
+#   summarize(precip_mm_15_day_sum_spmean = mean(precip_mm_15_day_sum),
+#             precip_mm_15_day_sum_spsd = sd(precip_mm_15_day_sum),
+#             precip_mm_30_day_sum_spmean = mean(precip_mm_30_day_sum),
+#             precip_mm_30_day_sum_spsd = sd(precip_mm_30_day_sum),
+#             temp_c_15_day_mean_spmean = mean(temp_c_15_day_mean, na.rm = TRUE),
+#             temp_c_15_day_mean_spsd = sd(temp_c_15_day_mean, na.rm = TRUE),
+#             temp_c_30_day_mean_spmean = mean(temp_c_30_day_mean, na.rm = TRUE),
+#             temp_c_30_day_mean_spsd = sd(temp_c_30_day_mean, na.rm = TRUE),
+#             precip_mm_15_day_sum2_spmean = mean(precip_mm_15_day_sum^2),
+#             precip_mm_15_day_sum2_spsd = sd(precip_mm_15_day_sum^2),
+#             precip_mm_30_day_sum2_spmean = mean(precip_mm_30_day_sum^2),
+#             precip_mm_30_day_sum2_spsd = sd(precip_mm_30_day_sum^2),
+#             temp_c_15_day_mean2_spmean = mean(temp_c_15_day_mean^2, na.rm = TRUE),
+#             temp_c_15_day_mean2_spsd = sd(temp_c_15_day_mean^2, na.rm = TRUE),
+#             temp_c_30_day_mean2_spmean = mean(temp_c_30_day_mean^2, na.rm = TRUE),
+#             temp_c_30_day_mean2_spsd = sd(temp_c_30_day_mean^2, na.rm = TRUE))
+# 
+# write_csv(taxon_climate, here("data", "taxon_climate.csv"))
 
-bd_model_env = bd_model %>%
-  left_join(env_agg, by = c("site", "date")) %>%
-  left_join(site_climate, by = "site") %>%
-  filter(!is.na(precip_mm_15_day_sum),
-         !is.na(precip_mm_30_day_sum),
-         !is.na(temp_c_15_day_mean),
-         !is.na(temp_c_30_day_mean))
-
-save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
+# bd_model_env = bd_model %>%
+#   left_join(env_agg, by = c("site", "date")) %>%
+#   left_join(site_climate, by = "site") %>%
+#   filter(!is.na(precip_mm_15_day_sum),
+#          !is.na(precip_mm_30_day_sum),
+#          !is.na(temp_c_15_day_mean),
+#          !is.na(temp_c_30_day_mean))
+# 
+# save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
 
 ```
 
@@ -564,7 +587,9 @@ save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), 
 #| code-fold: true
 #| code-summary: "Show data loading code"
 
-bd_model_env = load(here("data", "bd_model_env_unified_2026-01-23.RData"))
+load(here("data", "bd_model_env_unified_2026-01-23.RData"))
+
+taxon_climate = read_csv(here("data", "taxon_climate.csv"))
 
 ```
 
@@ -614,7 +639,6 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 #| code-summary: "Show model setup code"
 
 # unified, scaled model
-
 brms_scales = bd_model_env_select %>%
   group_by() %>%
   summarize(precip_mm_15_day_sum_mean = mean(precip_mm_15_day_sum),
@@ -652,6 +676,7 @@ brms_rescale = function(df, scales) {
 }
 
 brms_data <- bd_model_env_select %>%
+  left_join(taxon_climate, by = "taxon_capture") %>%
   mutate(
     precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
     temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
@@ -662,8 +687,58 @@ brms_data <- bd_model_env_select %>%
     precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
     temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE)),
     site_precip_mm_annual_mean_z = as.numeric(scale(site_precip_mm_annual_mean, center = TRUE, scale = TRUE)),
-    site_temp_c_mean_z = as.numeric(scale(site_temp_c_mean, center = TRUE, scale = TRUE))
-  )
+    site_temp_c_mean_z = as.numeric(scale(site_temp_c_mean, center = TRUE, scale = TRUE)),
+    ##
+    precip_mm_30_sp_z = (precip_mm_30_day_sum - precip_mm_30_day_sum_spmean) / precip_mm_30_day_sum_spsd,
+    temp_c_30_sp_z = (temp_c_30_day_mean - temp_c_30_day_mean_spmean) / temp_c_30_day_mean_spsd,
+    precip_mm_15_sp_z = (precip_mm_15_day_sum - precip_mm_15_day_sum_spmean) / precip_mm_15_day_sum_spsd,
+    temp_c_15_sp_z = (temp_c_15_day_mean - temp_c_15_day_mean_spmean) / temp_c_15_day_mean_spsd,
+    precip_mm_30_sp_z2 = (precip_mm_30_day_sum ^ 2 - precip_mm_30_day_sum2_spmean) / precip_mm_30_day_sum2_spsd,
+    temp_c_30_sp_z2 = (temp_c_30_day_mean ^ 2 - temp_c_30_day_mean2_spmean) / temp_c_30_day_mean2_spsd,
+    precip_mm_15_sp_z2 = (precip_mm_15_day_sum ^ 2 - precip_mm_15_day_sum2_spmean) / precip_mm_15_day_sum2_spsd,
+    temp_c_15_sp_z2 = (temp_c_15_day_mean ^ 2 - temp_c_15_day_mean2_spmean) / temp_c_15_day_mean2_spsd
+  ) %>%
+  select(taxon_capture,
+         -any_of(colnames(taxon_climate)),
+         everything())
+
+# check z-scored means and sds
+peace = brms_data %>%
+  summarize(t_15_mean = mean(temp_c_15_z),
+            t_15_sd = sd(temp_c_15_z),
+            t_30_mean = mean(temp_c_30_z),
+            t_30_sd = sd(temp_c_30_z),
+            p_15_mean = mean(precip_mm_15_z),
+            p_15_sd = sd(precip_mm_15_z),
+            p_30_mean = mean(precip_mm_30_z),
+            p_30_sd = sd(precip_mm_30_z),
+            t2_15_mean = mean(temp_c_15_z2),
+            t2_15_sd = sd(temp_c_15_z2),
+            t2_30_mean = mean(temp_c_30_z2),
+            t2_30_sd = sd(temp_c_30_z2),
+            p2_15_mean = mean(precip_mm_15_z2),
+            p2_15_sd = sd(precip_mm_15_z2),
+            p2_30_mean = mean(precip_mm_30_z2),
+            p2_30_sd = sd(precip_mm_30_z2))
+
+hope = brms_data %>%
+  group_by(taxon_capture) %>%
+  summarize(t_15_sp_mean = mean(temp_c_15_sp_z),
+            t_15_sp_sd = sd(temp_c_15_sp_z),
+            t_30_sp_mean = mean(temp_c_30_sp_z),
+            t_30_sp_sd = sd(temp_c_30_sp_z),
+            p_15_sp_mean = mean(precip_mm_15_sp_z),
+            p_15_sp_sd = sd(precip_mm_15_sp_z),
+            p_30_sp_mean = mean(precip_mm_30_sp_z),
+            p_30_sp_sd = sd(precip_mm_30_sp_z),
+            t2_15_sp_mean = mean(temp_c_15_sp_z2),
+            t2_15_sp_sd = sd(temp_c_15_sp_z2),
+            t2_30_sp_mean = mean(temp_c_30_sp_z2),
+            t2_30_sp_sd = sd(temp_c_30_sp_z2),
+            p2_15_sp_mean = mean(precip_mm_15_sp_z2),
+            p2_15_sp_sd = sd(precip_mm_15_sp_z2),
+            p2_30_sp_mean = mean(precip_mm_30_sp_z2),
+            p2_30_sp_sd = sd(precip_mm_30_sp_z2))
 
 model_priors <- c(
   # b
@@ -748,6 +823,24 @@ null_zln <- add_criterion(null_zln, "loo")
 saveRDS(null_zln, file = here("unified_models/unified_model_results_zln_null.rds"))
 null_zln = readRDS(file = here("unified_models/unified_model_results_zln_null.rds"))
 
+nullb_zln <- brm(
+  bd_load_co ~ 1,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+nullb_zln <- add_criterion(nullb_zln, "loo")
+
+saveRDS(nullb_zln, file = here("unified_models/unified_model_results_zln_nullb.rds"))
+nullb_zln = readRDS(file = here("unified_models/unified_model_results_zln_nullb.rds"))
+
 m1_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + life_stage_simple * taxon_capture,
@@ -771,6 +864,7 @@ m1_zln <- add_criterion(m1_zln, "loo")
 
 saveRDS(m1_zln, file = here("unified_models/unified_model_results_zln_life_tax.rds"))
 m1_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax.rds"))
+
 
 # m2_zln <- brm(
 #   formula = bf(
@@ -866,6 +960,30 @@ m3_zln <- add_criterion(m3_zln, "loo")
 
 saveRDS(m3_zln, file = here("unified_models/unified_model_results_zln_life_tax_poptls.rds"))
 m3_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax_poptls.rds"))
+
+m3b_zln <- brm(
+  formula = bf(
+    bd_load_co ~ 1 + life_stage_simple * taxon_capture + (1 + population) +  (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 + population) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture + (1 + population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m3b_zln <- add_criterion(m3b_zln, "loo")
+
+saveRDS(m3b_zln, file = here("unified_models/unified_model_results_zln_life_tax_poptls_nodens.rds"))
+m3b_zln = readRDS(file = here("unified_models/unified_model_results_zln_life_tax_poptls_nodens.rds"))
 
 # m4_zln <- brm(
 #   formula = bf(
@@ -1038,8 +1156,8 @@ m5f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_popt
 
 m5g_zln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
-    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
     sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
   ),
   data = brms_data,
@@ -1057,8 +1175,130 @@ m5g_zln <- brm(
 
 m5g_zln <- add_criterion(m5g_zln, "loo")
 
-saveRDS(m5g_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_sigls.rds")
-m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_sigls.rds")
+saveRDS(m5g_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+
+m6_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_sp_z + precip_mm_15_sp_z2 + temp_c_15_sp_z + temp_c_15_sp_z2 + (1 | population) + (1 + precip_mm_15_sp_z + precip_mm_15_sp_z2 + temp_c_15_sp_z + temp_c_15_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m6_zln <- add_criterion(m6_zln, "loo")
+
+saveRDS(m6_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+m6_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+
+m6b_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_15_sp_z + precip_mm_15_sp_z2 + temp_c_15_sp_z + temp_c_15_sp_z2 | taxon_capture) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m6b_zln <- add_criterion(m6b_zln, "loo")
+
+saveRDS(m6b_zln, file = "unified_models/unified_model_results_zln_life_tax_popt2envsp2.rds")
+m6b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_popt2envsp2.rds")
+
+m6c_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m6c_zln <- add_criterion(m6c_zln, "loo")
+
+saveRDS(m6c_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_envsp2_30.rds")
+m6c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_envsp2_30.rds")
+
+m6d_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_sp_z + precip_mm_30_sp_z2 + temp_c_30_sp_z + temp_c_30_sp_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m6d_zln <- add_criterion(m6d_zln, "loo")
+
+saveRDS(m6d_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_30.rds")
+m6d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2envsp2_30.rds")
+
+m7_zln <- brm(
+  formula = bf(
+    bd_load_co ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population) + (1 + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m7_zln <- add_criterion(m7_zln, "loo")
+
+saveRDS(m7_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_nodens.rds")
+m7_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_nodens.rds")
+
+
 
 ```
 
@@ -1068,7 +1308,7 @@ Model formula:
 
 bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
 
-hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+hu ~ 1 + life_stage_simple * taxon_capture + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 + (1 | population) + (1 + precip_mm_15_z + precip_mm_15_z2 + temp_c_15_z + temp_c_15_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
 
 sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
 ```{r}
@@ -1078,10 +1318,12 @@ sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
 # model comparison and selection
 
 (loo_comp_out = loo_compare(null_zln,
+                            nullb_zln, # no density
                             m1_zln,
                             # m2_zln,
                             m2b_zln,
                             m3_zln,
+                            m3b_zln,  # no density
                             # m4_zln,
                             m5_zln,
                             # m5b_zln,
@@ -1089,7 +1331,12 @@ sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
                             # m5d_zln,
                             # m5e_zln,
                             m5f_zln,
-                            m5g_zln))
+                            m5g_zln,
+                            m6_zln,
+                            m6b_zln,
+                            m6c_zln,
+                            m6d_zln
+                            ))
 ```
 
 ## Model checks
@@ -1102,9 +1349,8 @@ sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
 #| fig-height: 6
 #| fig-width: 8
 
-m5f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
-
-VarCorr(m5f_zln)
+m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+VarCorr(m5g_zln)
 ```
 
 ### Posterios predictive checks
@@ -1158,7 +1404,7 @@ color_scheme_set("viridis")
 # pp_check(m5e_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
 #   scale_x_log10()
 
-pp_check(m5f_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
+pp_check(m5g_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
   scale_x_log10()
 ```
 
@@ -1171,7 +1417,7 @@ pp_check(m5f_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
 #| fig-width: 8
 
 mcmc_plot(m5f_zln, type = "dens", variable = c("prior_Intercept", "b_Intercept")) +
-  xlim(-40, 40)
+  xlim(-20, 20)
 
 mcmc_plot(m5f_zln, type = "dens", variable = c("prior_b", "b_taxon_capturecolostethus_panamansis", "b_taxon_capturelithobates_blairi", 
 "b_taxon_capturelithobates_sphenocephalus", "b_taxon_capturelithobates_warszewitschii", 
@@ -1542,7 +1788,8 @@ Results are broken out first by species, then combined for comparison between sp
 
 # model_select = m3_zln
 # model_select = m5f_zln
-model_select = m5_zln
+# model_select = m5f_zln
+model_select = m5g_zln
 
 species = brms_data %>%
   select(taxon_capture) %>%
@@ -1579,10 +1826,14 @@ hu_taxon_subadult = spread_draws(model_select, `b_hu_life_stage_simplesubadult.*
   ungroup() %>%
   mutate(hu_subadult_sc = hu_subadult / sp_sd)
 
+log_th = pi / sqrt(3)
+
 hu_taxon_subadult_rope = hu_taxon_subadult %>%
-  mutate(in_rope = abs(hu_subadult) <= 0.18) %>%
+  mutate(in_rope = abs(hu_subadult) <= log_th) %>%
   group_by(species) %>%
   summarize(n = n(),
+            pd = pd(hu_subadult)$pd,
+            hdi = hdi(hu_subadult, ci = 0.89),
             ratio_rope = sum(in_rope) / n(),
             ratio_positive = sum(hu_subadult > 0) / n(),
             ratio_negative = sum(hu_subadult < 0) / n(),
@@ -1591,12 +1842,22 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
             hu_mean = mean(hu_subadult),
             .groups = "drop")
 
+# absolute
+ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
+  geom_density(fill = "yellow", alpha = 0.5) +
+  facet_wrap("species") +
+  xlim(-5, 5) +
+  theme_minimal()
+
+# rope
 ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
   geom_density(fill = "yellow", alpha = 0.5) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
   facet_wrap("species") +
   # geom_vline(xintercept=0) +
   annotate("rect", 
-           xmin = -0.18, xmax = 0.18, 
+           xmin = -log_th, xmax = log_th, 
            ymin = -Inf, ymax = Inf,
            fill = "red", alpha = 0.3) +
   geom_text(data = hu_taxon_subadult_rope,
@@ -1625,8 +1886,10 @@ b_taxon_subadult = spread_draws(model_select, `b_life_stage_simplesubadult.*`, r
 
 b_taxon_subadult_rope = b_taxon_subadult %>%
   mutate(in_rope = abs(b_subadult_sc) <= 0.1) %>%
-  group_by(species) %>%
+  group_by(species, sp_sd) %>%
   summarize(n = n(),
+            pd = pd(b_subadult)$pd,
+            hdi = hdi(b_subadult, ci = 0.89),
             ratio_rope = sum(in_rope) / n(),
             ratio_positive = sum(b_subadult_sc > 0) / n(),
             ratio_negative = sum(b_subadult_sc < 0) / n(),
@@ -1637,6 +1900,14 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
             b_sc_mean = mean(b_subadult_sc),
             .groups = "drop")
 
+# absolute
+ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  facet_wrap("species") +
+  theme_minimal()
+
+# rope
 ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
   geom_density(fill = "blue", alpha = 0.5) +
   facet_wrap("species") +
@@ -1652,6 +1923,117 @@ ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
             size = 3) +
   xlim(-5, 5) +
   theme_minimal()
+
+# unscaled rope
+ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+  geom_vline(xintercept = 0, alpha = 1) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  geom_rect(data = b_taxon_subadult_rope, 
+            aes(xmin = -0.1 * sp_sd, xmax = 0.1 * sp_sd, ymin = -Inf, ymax = Inf, 
+                fill = "red"), alpha = 0.3, inherit.aes = FALSE) +
+  facet_wrap("species") +
+  theme_minimal() +
+  xlim(-4, 6)
+  
+
+taxon_subadult = b_taxon_subadult %>%
+  left_join(hu_taxon_subadult, by = c(".draw", ".iteration", ".chain", "taxon_capture", "species"))
+
+# net direction
+taxon_subadult_rope = hu_taxon_subadult_rope %>%
+  full_join(b_taxon_subadult_rope, by = "species", suffix = c("_hu", "_b"))
+
+ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = species)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  xlim(-1, 1) +
+  ylim(-1, 1) +
+  theme_minimal()
+
+# rope
+ggplot(taxon_subadult_rope, aes(x = 1 / ratio_rope_hu, y = 1 / ratio_rope_b, color = species)) +
+  geom_vline(xintercept = 20, color = "#aaa") +
+  geom_hline(yintercept = 20, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal() +
+  scale_x_log10() +
+  scale_y_log10()
+
+# medians
+ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+  stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.89, alpha = 0.3) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+
+# # relative spread...
+# relative_b = spread_draws(model_select, `^b_Intercept$|^b_life_stage_simple.*|^b_taxon_capture.*`, regex = TRUE) %>%
+#   mutate(`b_taxon_captureanaxyrus_americanus` = 0,
+#          `b_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
+#   pivot_longer(
+#     cols = starts_with(c("b_taxon", "b_life_stage_simplesubadult:taxon")),
+#     names_to = c(".value", "taxon_capture"),
+#     names_pattern = "(.*taxon_capture)([a-z]*_[a-z]*$)") %>%
+#   mutate(adult_b = b_Intercept + b_taxon_capture,
+#          subadult_b = b_Intercept + b_taxon_capture + b_life_stage_simplesubadult + `b_life_stage_simplesubadult:taxon_capture`,
+#          adult_relative_b = adult_b / subadult_b,
+#          subadult_relative_b = subadult_b / adult_b)
+# 
+# relative_hu = spread_draws(model_select, `^b_hu_Intercept$|^b_hu_life_stage_simple.*|^b_hu_taxon_capture.*`, regex = TRUE) %>%
+#   mutate(`b_hu_taxon_captureanaxyrus_americanus` = 0,
+#          `b_hu_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
+#   pivot_longer(
+#     cols = starts_with(c("b_hu_taxon", "b_hu_life_stage_simplesubadult:taxon")),
+#     names_to = c(".value", "taxon_capture"),
+#     names_pattern = "(.*taxon_capture)([a-z]*_[a-z]*$)") %>%
+#   mutate(adult_hu = b_hu_Intercept + b_hu_taxon_capture,
+#          subadult_hu = b_hu_Intercept + b_hu_taxon_capture + b_hu_life_stage_simplesubadult + `b_hu_life_stage_simplesubadult:taxon_capture`,
+#          adult_relative_hu = adult_hu / subadult_hu,
+#          subadult_relative_hu = subadult_hu / adult_hu)
+# 
+# relative_params = relative_b %>%
+#   left_join(relative_hu, by = c(".chain", ".iteration", ".draw", "taxon_capture"))
+# 
+# relative_params_agg = relative_params %>%
+#   group_by(taxon_capture) %>%
+#   summarize(adult_relative_b_median = median(adult_relative_b),
+#             adult_relative_hu_median = median(adult_relative_hu),
+#             subadult_relative_b_median = median(subadult_relative_b),
+#             subadult_relative_hu_median = median(subadult_relative_hu))
+# 
+# ggplot(relative_params, aes(x = subadult_b, y = subadult_hu, color = taxon_capture)) +
+#   stat_ellipse()
+# 
+# ggplot(relative_params, aes(x = subadult_relative_b, y = subadult_relative_hu, color = taxon_capture)) +
+#   stat_ellipse()
+# 
+# ggplot(relative_params_agg, aes(x = adult_relative_b_median, y = adult_relative_hu_median, color = taxon_capture)) +
+#   stat_ellipse(data = relative_params, aes(x = adult_relative_b, y = adult_relative_hu), level = 0.5, alpha = 0.3) +
+#   geom_vline(xintercept = 1, color = "#aaa") +
+#   geom_hline(yintercept = 1, color = "#aaa") + 
+#   geom_point() +
+#   geom_text_repel(aes(label = taxon_capture)) +
+#   theme_minimal()
+# 
+# ggplot(relative_params_agg, aes(x = subadult_relative_hu_median, y = subadult_relative_b_median, color = taxon_capture)) +
+#   geom_point() +
+#   geom_text_repel(aes(label = taxon_capture)) +
+#   geom_vline(xintercept = 1, color = "#aaa") +
+#   geom_hline(yintercept = 1, color = "#aaa")
+
 ```
 
 ## Collective results
@@ -1662,9 +2044,9 @@ ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
 #| code-fold: true
 #| code-summary: Show code
 
-m5f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
+# m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
 
-choice_model = m5f_zln
+choice_model = m5g_zln
 
 model_data = brms_data
 
@@ -1823,8 +2205,8 @@ ggplot(density_mat_all, aes(x = density,
 ```{r}
 #| echo: false
 #| warning: false
-#| fig-height: 6
-#| fig-width: 12
+#| fig-height: 8
+#| fig-width: 8
 # CCDF -- facet by species
 ggplot(density_mat_all, aes(x = density,
                             y = ccdf_median,
@@ -1841,9 +2223,10 @@ ggplot(density_mat_all, aes(x = density,
        fill = "Life stage") +
   xlab("log(Bd load) [-]") +
   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
-  scale_x_continuous(limits = c(log(0.5), 20), expand = c(0, 0)) +
+  scale_x_continuous(limits = c(log(0.5), 12), expand = c(0, 0)) +
   ylim(0, 0.75) +
-  facet_grid(. ~ gsub(" ", "\n", species))
+  # facet_grid(. ~ gsub(" ", "\n", species))
+  facet_wrap("species")
 
 # CCDF -- facet by life_stage & season
 # ggplot(density_mat_all, aes(x = density,
@@ -1889,7 +2272,7 @@ ggplot(density_mat_all, aes(x = density,
 #        title = "Temperature v. precipitation") +
 #   theme_minimal()
 
-# 30-day
+# 30-day by species
 ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
   stat_ellipse() +
@@ -1900,6 +2283,34 @@ ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = 
        y = "30-day precipitation total (mm)",
        title = "Temperature v. precipitation") +
   theme_minimal()
+
+# 30 day collective
+ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = taxon_capture)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  labs(x = "30-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+# 30 day collective, scaled to climate by species
+ggplot(brms_data, aes(x = temp_c_30_sp_z, y = precip_mm_30_sp_z, color = taxon_capture)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  labs(x = "30-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+
+# ggplot(brms_data, aes(x = temp_c_30_sp_z2, y = precip_mm_30_sp_z2, color = life_stage_simple)) +
+#   geom_point(alpha = 0.1) +
+#   stat_ellipse() +
+#   facet_wrap(. ~ taxon_capture) +
+#   labs(x = "30-day temperature mean (degC)", 
+#        y = "30-day precipitation total (mm)",
+#        title = "Temperature v. precipitation") +
+#   theme_minimal()
 ```
 
 ## Tempurature effects
@@ -1910,7 +2321,10 @@ ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = 
 #| fig-height: 6
 #| fig-width: 8
 
-climate_draws = spread_draws(m5f_zln, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
+select_model = m5f_zln
+# select_model = m6_zln
+
+climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
 
 # Temperature dependence
 temp_range = seq(-5, 45, length.out = 100)
@@ -1976,6 +2390,166 @@ ggplot(temp_grid, aes(x = temp_c)) +
 ```
 
 ## Precipitation effects
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show precipitation effects code"
+#| fig-height: 6
+#| fig-width: 8
+# precipitation depencence
+
+daily_precip_range = seq(0, 20, length.out = 100)
+
+precip_grid = expand_grid(daily_precip = daily_precip_range, .draw = 1:nrow(climate_draws)) %>%
+  mutate(precip_mm_15_day_sum = daily_precip * 15,
+         precip_mm_30_day_sum = daily_precip * 30) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    precip_mm_15_z = (precip_mm_15_day_sum - brms_scales$precip_mm_15_day_sum_mean) / brms_scales$precip_mm_15_day_sum_sd,
+    precip_mm_15_z2 = (precip_mm_15_day_sum^2 - brms_scales$precip_mm_15_day_sum2_mean) / brms_scales$precip_mm_15_day_sum2_sd,
+    precip_mm_30_z = (precip_mm_30_day_sum - brms_scales$precip_mm_30_day_sum_mean) / brms_scales$precip_mm_30_day_sum_sd,
+    precip_mm_30_z2 = (precip_mm_30_day_sum^2 - brms_scales$precip_mm_30_day_sum2_mean) / brms_scales$precip_mm_30_day_sum2_sd,
+    b_pred = b_precip_mm_30_z * precip_mm_30_z + b_precip_mm_30_z2 * precip_mm_30_z2 + b_Intercept,
+    hu_pred = b_hu_precip_mm_15_z * precip_mm_15_z + b_hu_precip_mm_15_z2 * precip_mm_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(daily_precip,
+           precip_mm_15_day_sum,
+           precip_mm_30_day_sum) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  )
+
+# prevalence
+ggplot(precip_grid, aes(x = precip_mm_15_day_sum)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day total precipitation (mm)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. precipitation") +
+  theme_minimal()
+
+# load
+ggplot(precip_grid, aes(x = precip_mm_30_day_sum)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day total precipitation (mm)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. precipitation") +
+  theme_minimal()
+
+```
+
+## Tempurature effects (scaled by species climate)
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show temperature effects code"
+#| fig-height: 6
+#| fig-width: 8
+
+
+select_model = m6_zln
+
+# fixed effects
+climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
+
+# Temperature dependence
+temp_range = seq(-3, 3, length.out = 100)
+
+# taxa = brms_data %>%
+#   select(taxon_capture) %>%
+#   distinct() %>%
+#   pull(taxon_capture) %>%
+#   sort()
+
+## Stumped by how to back-calculate the temp_z2 values from the temp_z values... I think this has to be done on a species-by-species basis...
+
+temp_grid = expand_grid(temp_z_15_mean = temp_range,
+                        .draw = 1:nrow(climate_draws)) %>%
+  mutate(temp_z_30_mean = temp_z_15_mean) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    temp_c_15_z = (temp_c_15_day_mean - brms_scales$temp_c_15_day_mean_mean) / brms_scales$temp_c_15_day_mean_sd,
+    temp_c_15_z2 = (temp_c_15_day_mean^2 - brms_scales$temp_c_15_day_mean2_mean) / brms_scales$temp_c_15_day_mean2_sd,
+    temp_c_30_z = (temp_c_30_day_mean - brms_scales$temp_c_30_day_mean_mean) / brms_scales$temp_c_30_day_mean_sd,
+    temp_c_30_z2 = (temp_c_30_day_mean^2 - brms_scales$temp_c_30_day_mean2_mean) / brms_scales$temp_c_30_day_mean2_sd,
+    b_pred = b_temp_c_30_sp_z * temp_c_30_z + b_temp_c_30_sp_z2 * temp_c_30_z2 + b_Intercept,
+    hu_pred = b_hu_temp_c_15_sp_z * temp_c_15_z + b_hu_temp_c_15_sp_z2 * temp_c_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(temp_c_15_day_mean) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  ) %>%
+  rename(temp_c = temp_c_15_day_mean)
+
+# prevalence
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day mean temperature (degC)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. temperature") +
+  theme_minimal()
+
+# load
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day mean temperature (degC)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. temperature") +
+  theme_minimal()
+```
+
+## Precipitation effects (scaled by species climate)
 ```{r}
 #| eval: true
 #| code-fold: true
