@@ -1,0 +1,300 @@
+---
+title: "Panama Resilience Paper abundance"
+author: Cob Staines
+date: 2025-10-09
+format:
+  html:
+    toc: true
+df-print: kable
+---
+# Objective
+
+Calculate species list and abundance of panama species from 2016 - 2025
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
+
+## Connect to DB
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_ves = tbl(dbcon, Id("survey_data", "ves"))
+db_aural = tbl(dbcon, Id("survey_data", "aural"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+```
+
+# Pull data
+```{r}
+# capture data
+data_capture = db_capture %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(country == "panama",
+         site %in% c("guabal", "rio_blanco"),
+         date >= "2012-01-01",
+         date <= "2025-12-31") %>%
+  select(detection_type,
+         taxon_capture,
+         capture_transect_m,
+         svl_mm,
+         body_mass_g,
+         life_stage,
+         sex,
+         capture_animal_state,
+         comments_capture,
+         number_observers,
+         time_of_capture,
+         time_of_day,
+         date,
+         site,
+         region,
+         country,
+         capture_id) %>%
+  collect() %>%
+  mutate(off_transect = ((grepl("off", comments_capture, ignore.case = TRUE) &
+                           grepl("transect|time", comments_capture, ignore.case = TRUE)) |
+                           grepl("off", capture_transect_m, ignore.case = TRUE)),
+         count = 1) %>%
+  rename(animal_state = capture_animal_state,
+         comments = comments_capture,
+         taxon = taxon_capture,
+         transect_m = capture_transect_m)
+
+# visual
+data_visual = db_ves %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(country == "panama",
+         site %in% c("guabal", "rio_blanco"),
+         date >= "2016-01-01",
+         date <= "2025-12-31") %>%
+  select(detection_type,
+         count_ves,
+         taxon_ves,
+         ves_transect_m,
+         life_stage,
+         sex,
+         visual_animal_state,
+         comments_ves,
+         number_observers,
+         time_of_day,
+         date,
+         site,
+         region,
+         country,
+         ves_id) %>%
+  collect() %>%
+  mutate(off_transect = (grepl("off", comments_ves, ignore.case = TRUE) &
+                           grepl("transect|time", comments_ves, ignore.case = TRUE) |
+                           grepl("off", ves_transect_m, ignore.case = TRUE))) %>%
+  rename(animal_state = visual_animal_state,
+         comments = comments_ves,
+         taxon = taxon_ves,
+         transect_m = ves_transect_m,
+         count = count_ves)
+
+# aural
+data_aural = db_aural %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(country == "panama",
+         site %in% c("guabal", "rio_blanco"),
+         date >= "2016-01-01",
+         date <= "2025-12-31") %>%
+  select(detection_type,
+         count_aural,
+         taxon_aural,
+         aural_transect_m,
+         life_stage,
+         sex,
+         comments_aural,
+         number_observers,
+         time_of_day,
+         date,
+         site,
+         region,
+         country,
+         aural_id) %>%
+  collect() %>%
+  mutate(off_transect = (grepl("off", comments_aural, ignore.case = TRUE) &
+                           grepl("transect|time", comments_aural, ignore.case = TRUE) |
+                           grepl("off", aural_transect_m, ignore.case = TRUE))) %>%
+  rename(comments = comments_aural,
+         taxon = taxon_aural,
+         transect_m = aural_transect_m,
+         count = count_aural)
+
+```
+
+# Filter data
+```{r}
+data_abundance = bind_rows(data_capture,
+                           data_visual) %>%
+  mutate(count = if_else(is.na(count), 1, count),
+         year = year(date),
+         survey_period = case_when(
+           year <= 2016 ~ "2012-2016",
+           year >= 2018 ~ "2018-2025",
+           .default = NA
+         )) %>%
+  filter(year != 2017,
+         !(life_stage %in% c("tadpole")),
+         !(animal_state %in% c("dead")),
+         !off_transect,
+         !is.na(taxon))
+
+peace = data_abundance %>%
+  filter(taxon == "silverstoneia_flotator") %>%
+  arrange(date)
+
+
+data_presence = bind_rows(data_capture,
+                          data_visual,
+                          data_aural) %>%
+  filter(!is.na(taxon)) %>%
+  mutate(count = if_else(is.na(count), 1, count)) %>%
+  group_by(site, taxon) %>%
+  summarize(total = sum(count),
+            .groups = "drop") %>%
+  pivot_wider(names_from = "site",
+              values_from = "total",
+              names_prefix = "count_",
+              values_fill = 0) %>%
+  mutate(total = count_guabal + count_rio_blanco) %>%
+  arrange(taxon)
+
+
+site_surveys = db_survey %>%
+  full_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(country == "panama",
+         site %in% c("guabal", "rio_blanco"),
+         date >= "2012-01-01",
+         date <= "2025-12-31",
+         detection_type %in% c("capture", "visual")
+         ) %>%
+  select(detection_type,
+         duration_minutes,
+         observers_survey,
+         comments_survey,
+         number_observers,
+         time_of_day,
+         site,
+         date,
+         visit_id,
+         comments_visit) %>%
+  collect() %>%
+  arrange(date, time_of_day, site)
+
+surveys_clean = site_surveys %>%
+  mutate(tadpole_only = grepl("for tadpoles", comments_visit)) %>%
+  filter(!tadpole_only) %>%
+  arrange(date, time_of_day, site, duration_minutes) %>%
+  group_by(date, time_of_day, site) %>%
+  slice_head(n = 1) %>%
+  mutate(distance_surveyed_m = case_when(
+    visit_id == "b5984c24-4afd-4476-9058-a2be88b74c0e" ~ 110,
+    site == "guabal" ~ 200,
+    site == "rio_blanco" ~ 200),
+    year = year(date),
+    survey_period = case_when(
+           year <= 2016 ~ "2012-2016",
+           year >= 2018 ~ "2018-2025",
+           .default = NA
+         )) %>%
+  filter(year != 2017)
+
+survey_stats_site_year = surveys_clean %>%
+  group_by(site, year) %>%
+  summarize(total_surveys = n(),
+            total_distance_m = sum(distance_surveyed_m),
+            total_time = sum(duration_minutes, na.rm = TRUE),
+            n_observers_mean = mean(number_observers, na.rm = TRUE),
+            .groups = "drop")
+
+survey_stats_site = surveys_clean %>%
+  group_by(site, survey_period) %>%
+  summarize(total_surveys = n(),
+            total_distance_m = sum(distance_surveyed_m),
+            total_time = sum(duration_minutes, na.rm = TRUE),
+            n_observers_mean = mean(number_observers, na.rm = TRUE),
+            .groups = "drop")
+
+survey_stats_year = surveys_clean %>%
+  group_by(year) %>%
+  summarize(total_surveys = n(),
+            total_distance_m = sum(distance_surveyed_m),
+            total_time = sum(duration_minutes, na.rm = TRUE),
+            n_observers_mean = mean(number_observers, na.rm = TRUE),
+            .groups = "drop")
+
+survey_stats = surveys_clean %>%
+  group_by(survey_period) %>%
+  summarize(total_surveys = n(),
+            total_distance_m = sum(distance_surveyed_m),
+            total_time = sum(duration_minutes, na.rm = TRUE),
+            n_observers_mean = mean(number_observers, na.rm = TRUE),
+            .groups = "drop")
+```
+
+
+# Abundance calc
+```{r}
+abundance_annual = data_abundance %>%
+  group_by(taxon, year, survey_period) %>%
+  summarize(total = sum(count),
+            .groups = "drop") %>%
+  left_join(survey_stats_year, by = "year") %>%
+  mutate(abundance_km = total * 1000 / total_distance_m)
+
+abundance_annual_wide = abundance_annual %>%
+  arrange(year) %>%
+  pivot_wider(id_cols = "taxon",
+              names_from = "year",
+              values_from = "abundance_km",
+              values_fill = 0) %>%
+  arrange(taxon)
+
+abundance_sd = abundance_annual %>%
+  group_by(taxon, survey_period) %>%
+  summarize(annual_n = n(),
+            abundance_annual_sd = sd(abundance_km, na.rm = TRUE),
+            .groups = "drop")
+
+abundance_total = data_abundance %>%
+  group_by(taxon, survey_period) %>%
+  summarize(total_count = sum(count),
+            .groups = "drop") %>%
+  left_join(survey_stats, by = "survey_period") %>%
+  mutate(abundance_per_km = total_count * 1000 / total_distance_m) %>%
+  left_join(abundance_sd, by = c("taxon", "survey_period")) %>%
+  arrange(survey_period, taxon)
+
+write.csv(abundance_total, here("pa_resilience_paper_files", paste0("abundance_calc_", today(), ".csv")), row.names = FALSE)
+write.csv(data_presence, here("pa_resilience_paper_files", paste0("presence_", today(), ".csv")), row.names = FALSE)
+
+```
