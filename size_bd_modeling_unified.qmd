@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape)
 
 ```
 ## Data selection
@@ -1826,21 +1826,34 @@ hu_taxon_subadult = spread_draws(model_select, `b_hu_life_stage_simplesubadult.*
   ungroup() %>%
   mutate(hu_subadult_sc = hu_subadult / sp_sd)
 
-log_th = pi / sqrt(3)
+log_th = 0.1 * pi / sqrt(3)
 
 hu_taxon_subadult_rope = hu_taxon_subadult %>%
   mutate(in_rope = abs(hu_subadult) <= log_th) %>%
   group_by(species) %>%
   summarize(n = n(),
             pd = pd(hu_subadult)$pd,
-            hdi = hdi(hu_subadult, ci = 0.89),
+            hdi_89 = hdi(hu_subadult, ci = 0.89),
+            hdi_95 = hdi(hu_subadult, ci = 0.95),
             ratio_rope = sum(in_rope) / n(),
             ratio_positive = sum(hu_subadult > 0) / n(),
             ratio_negative = sum(hu_subadult < 0) / n(),
             ratio_net = ratio_positive - ratio_negative,
             hu_median = median(hu_subadult),
             hu_mean = mean(hu_subadult),
-            .groups = "drop")
+            .groups = "drop") %>%
+  mutate(
+    hdi_rope_89 = case_when(
+      hdi_89$CI_low > log_th | hdi_89$CI_high <= -log_th ~ TRUE,
+      hdi_89$CI_low > -log_th & hdi_89$CI_high <= log_th ~ FALSE,
+      .default = NA
+    ),
+    hdi_rope_95 = case_when(
+      hdi_95$CI_low > log_th | hdi_95$CI_high <= -log_th ~ TRUE,
+      hdi_95$CI_low > -log_th & hdi_95$CI_high <= log_th ~ FALSE,
+      .default = NA
+    ),
+  )
 
 # absolute
 ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
@@ -1859,7 +1872,7 @@ ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
   annotate("rect", 
            xmin = -log_th, xmax = log_th, 
            ymin = -Inf, ymax = Inf,
-           fill = "red", alpha = 0.3) +
+           fill = "red", alpha = 0.5) +
   geom_text(data = hu_taxon_subadult_rope,
             aes(x = -2.5,
                 y = 0.75,
@@ -1889,7 +1902,8 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
   group_by(species, sp_sd) %>%
   summarize(n = n(),
             pd = pd(b_subadult)$pd,
-            hdi = hdi(b_subadult, ci = 0.89),
+            hdi_89 = hdi(b_subadult, ci = 0.89),
+            hdi_95 = hdi(b_subadult, ci = 0.95),
             ratio_rope = sum(in_rope) / n(),
             ratio_positive = sum(b_subadult_sc > 0) / n(),
             ratio_negative = sum(b_subadult_sc < 0) / n(),
@@ -1898,7 +1912,18 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
             b_mean = mean(b_subadult),
             b_sc_median = median(b_subadult_sc),
             b_sc_mean = mean(b_subadult_sc),
-            .groups = "drop")
+            .groups = "drop") %>%
+  mutate(
+    hdi_rope_89 = case_when(
+      hdi_89$CI_low > 0.1 * sp_sd | hdi_89$CI_high <= -0.1 * sp_sd ~ TRUE,
+      hdi_89$CI_low > -0.1 * sp_sd & hdi_89$CI_high <= 0.1 * sp_sd ~ FALSE,
+      .default = NA
+    ),
+    hdi_rope_95 = case_when(
+      hdi_95$CI_low > 0.1 * sp_sd | hdi_95$CI_high <= -0.1 * sp_sd ~ TRUE,
+      hdi_95$CI_low > -0.1 * sp_sd & hdi_95$CI_high <= 0.1 * sp_sd ~ FALSE,
+      .default = NA
+    ))
 
 # absolute
 ggplot(b_taxon_subadult, aes(x = b_subadult)) +
@@ -1915,7 +1940,7 @@ ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
   annotate("rect", 
            xmin = -0.1, xmax = 0.1, 
            ymin = -Inf, ymax = Inf,
-           fill = "red", alpha = 0.3) +
+           fill = "red", alpha = 0.5) +
   geom_text(data = b_taxon_subadult_rope,
             aes(x = -2.5,
                 y = 1,
@@ -1926,11 +1951,11 @@ ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
 
 # unscaled rope
 ggplot(b_taxon_subadult, aes(x = b_subadult)) +
-  geom_vline(xintercept = 0, alpha = 1) +
+  # geom_vline(xintercept = 0, alpha = 1) +
   geom_density(fill = "blue", alpha = 0.5) +
   geom_rect(data = b_taxon_subadult_rope, 
-            aes(xmin = -0.1 * sp_sd, xmax = 0.1 * sp_sd, ymin = -Inf, ymax = Inf, 
-                fill = "red"), alpha = 0.3, inherit.aes = FALSE) +
+            aes(xmin = -0.1 * sp_sd, xmax = 0.1 * sp_sd, ymin = -Inf, ymax = Inf),
+            fill = "red", alpha = 0.5, inherit.aes = FALSE) +
   facet_wrap("species") +
   theme_minimal() +
   xlim(-4, 6)
@@ -1938,6 +1963,14 @@ ggplot(b_taxon_subadult, aes(x = b_subadult)) +
 
 taxon_subadult = b_taxon_subadult %>%
   left_join(hu_taxon_subadult, by = c(".draw", ".iteration", ".chain", "taxon_capture", "species"))
+
+# probability of direction
+ggplot(taxon_subadult_rope, aes(x = pd_hu, y = pd_b, color = species)) +
+  # geom_vline(xintercept = 0, color = "#aaa") +
+  # geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
 
 # net direction
 taxon_subadult_rope = hu_taxon_subadult_rope %>%
@@ -2034,6 +2067,76 @@ ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
 #   geom_vline(xintercept = 1, color = "#aaa") +
 #   geom_hline(yintercept = 1, color = "#aaa")
 
+```
+## Phylogenetic tree
+```{r}
+#| eval: true
+#| echo: false
+#| warning: false
+
+# build tree from 
+species_list = sort(get_species_name(bd_model_env_select_stats$taxon_capture))
+tnrs_resolved = tnrs_match_names(species_list)
+tnrs_info = taxonomy_taxon_info(ott_ids = ott_id(tnrs_resolved))
+src = tax_sources(tnrs_info)
+tr = tol_induced_subtree(ott_ids = ott_id(tnrs_resolved),
+                         label_format = "name")
+
+source_studies <- map_dfr(tnrs_resolved$unique_name, function(species) {
+  result <- studies_find_trees(
+    property = "ot:ottTaxonName", 
+    value = species,
+    detailed = TRUE
+  )
+  
+  tibble(
+    species = species,
+    study_id = result$study_ids,
+    n_matched_trees = result$n_matched_trees,
+    study_year = result$study_year,
+    title = result$title
+  )
+})
+
+source_studies_wide = source_studies %>%
+  select(species, study_id) %>%
+  mutate(value = 1) %>%
+  pivot_wider(names_from = species,
+              values_from = value,
+              values_fill = 0) %>%
+  arrange(study_id)
+
+source_studies_unique = source_studies %>%
+  select(-species) %>%
+  distinct() %>%
+  arrange(study_id)
+
+tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
+
+# plot tree
+ggtree(tr, layout = "rectangular") +
+  geom_tiplab(size = 3, align = TRUE) +
+  theme_tree2() +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
+                     breaks = c(1, 3, 5, 7))
+
+ggtree(tr_reordered, layout = "rectangular") +
+  geom_tiplab(size = 3, align = TRUE) +
+  theme_tree2() +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
+                     breaks = c(1, 3, 5, 7))
+
+
+# correlate phylogeny with trends
+cophen_dist = cophenetic(tr_reordered)
+cophen_sorted = cophen_dist[sort(rownames(cophen_dist)), sort(colnames(cophen_dist))]
+cophen_upper = cophen_sorted[upper.tri(cophen_sorted, diag = FALSE)]
+
+hu_dist = dist(hu_taxon_subadult_rope$hu_median)
+b_dist = dist(b_taxon_subadult_rope$b_median)
+
+hu_rho = cor.test(hu_dist, cophen_upper, method = "spearman")
+b_rho = cor.test(b_dist, cophen_upper, method = "spearman")
 ```
 
 ## Collective results
