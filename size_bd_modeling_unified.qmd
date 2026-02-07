@@ -628,6 +628,17 @@ bd_model_env_select = bd_model_env %>%
   filter(adult_n_pos >= 5,
          subadult_n_pos >= 5))
 
+# write.csv(bd_model_env_select_stats, here("data", paste0("bd_model_unified_select_stats", today(), ".csv")))
+
+spp_climate_stats = bd_model_env_select %>%
+  select(taxon_capture,
+         site) %>%
+  distinct() %>%
+  left_join(site_climate, by = "site") %>%
+  group_by(taxon_capture) %>%
+  summarize(mean_annual_precip_mm = mean(site_precip_mm_annual_mean),
+            mean_annual_temp_c = mean(site_temp_c_mean))
+
 ```
 
 # Modeling
