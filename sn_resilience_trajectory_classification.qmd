@@ -233,21 +233,6 @@ data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
 reintro_pits = read.csv(here("data", "sn_relocate_pit_tag_ref_2026-02-02.csv")) %>%
   mutate(pit_tag_ref = as.character(pit_tag_ref))
 
-# identify populations
-bd_population = bd_sample %>%
-  filter(country == "usa",
-         region == "california",
-         life_stage != "tadpole",
-         !is.na(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))) %>%
-  left_join(data_pop, by = "site", copy = TRUE) %>%
-  mutate(year = year(date),
-         life_stage_simple = life_stage,
-         life_stage_simple = case_when(
-           is.na(svl_mm) ~ life_stage,
-           (svl_mm >= 40) ~ "adult",
-           (svl_mm < 40) ~ "subadult",
-           .default = life_stage))
-
 # identify translocation release events by population
 treatment_events = db_hist %>%
   left_join(db_site, by = "site_id") %>%
@@ -291,6 +276,23 @@ post_treatment_mask = expand_grid(unique(first_treatment_events$population),
   filter(year >= first_treatment_year) %>%
   select(-first_treatment_year) %>%
   filter(population %in% post_treatment_mask_sites)
+
+# identify valid populations
+bd_population = bd_sample %>%
+  filter(country == "usa",
+         region == "california",
+         life_stage != "tadpole",
+         !is.na(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))) %>%
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(year = year(date),
+         life_stage_simple = life_stage,
+         life_stage_simple = case_when(
+           is.na(svl_mm) ~ life_stage,
+           (svl_mm >= 40) ~ "adult",
+           (svl_mm < 40) ~ "subadult",
+           .default = life_stage))
+
+
 
 # selection criteria for populations
 ## - 3 years of sampling
