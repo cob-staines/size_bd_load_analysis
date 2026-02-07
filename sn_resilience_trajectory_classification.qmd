@@ -193,13 +193,41 @@ normal_ci_upper = function(x, conf.level = 0.95) {
 #| code-fold: true
 #| code-summary: "Show data selection code"
 
+# pops with no local extirpation before reintroduction
+augmentations = c("10102_pop",
+                  "10315_pop",
+                  "20198_pop",
+                  "22008_pop",
+                  "70327_pop")
+
+# pops with local extirpation before reintroduction (treat as two distinct pops)
+reintroductions = c("10206",
+                    "10225_pop",
+                    "11495_pop",
+                    "50133_pop",
+                    "70413_pop",
+                    "70449",
+                    "70505_pop",
+                    "70550",
+                    "70556",
+                    "72973_pop",
+                    "84218_pop",
+                    "84235_pop")
+
 # load populations
 data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
   rename(population = pop_id) %>%
   mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
          site = as.character(site)) %>%
   select(site,
-         population)
+         population) %>%
+  mutate(reintro_status = case_when(
+    population %in% augmentations ~ "augmentation",
+    population %in% reintroductions ~ "reintroduction",
+    .default = "none"
+  ))
+
+
 
 # load reintroduced pit tag refs
 reintro_pits = read.csv(here("data", "sn_relocate_pit_tag_ref_2026-02-02.csv")) %>%
@@ -306,8 +334,11 @@ treatment_events_valid = treatment_events %>%
   filter(population %in% bd_population_valid$population)
 
 bd_capture_valid = bd_population %>%
+  # filter to valid populations
   filter(population %in% bd_population_valid$population) %>%
+  # drop reintroduced individuals
   anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref"), copy = TRUE) %>%
+  # drop any individuals after treatments we want to mask
   anti_join(post_treatment_mask, by = c("population", "year"), copy = TRUE)
 
 # all years of data for valid pops
@@ -474,7 +505,9 @@ data_cmr = survey_oi %>%
                       capture_animal_state,
                       comments_capture) %>%
                collect(), by = "survey_id") %>%
-  anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref")) %>%
+  left_join(reintro_pits %>%
+              mutate(reintro = TRUE), by = c("local_cmr_id" = "pit_tag_ref")) %>%
+  mutate(reintro = if_else(is.na(reintro), FALSE, reintro)) %>%
   arrange(site, date)
 
 
@@ -486,40 +519,91 @@ abundance_cmr = data_cmr %>%
   summarise(date_start_cmr = first(date),
             cmr_days = n_distinct(date),
             adult_count_cmr = n_distinct(local_cmr_id),
+            adult_count_cmr_reintro = n_distinct(local_cmr_id[reintro]),
             .groups = "drop") %>%
   arrange(population, year, desc(adult_count_cmr)) %>%
   group_by(population,
            year) %>%
   slice_head(n = 1) %>%  # select max count
   ungroup() %>%
-  select(-survey_period)
+  select(-survey_period) %>%
+  mutate(adult_count_cmr_native_ratio = 1 - (adult_count_cmr_reintro / adult_count_cmr))
 
 # join visual and cmr abundance data
 abundance_stats = abundance_visual %>%
   full_join(abundance_cmr, by = c("population", "year")) %>%
   mutate(adult_count = adult_count_visual,
          adult_count = if_else(population == "50783" & !is.na(adult_count_cmr), adult_count_cmr, adult_count))
-
-detection_ratio = abundance_stats %>%
-  filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
-  group_by(population) %>%
-  summarise(n = n(),
-         ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
-         .groups = "drop")
-
-detection_ratio_site = abundance_stats %>%
-  left_join() %>%
-  filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
-  group_by(site) %>%
-  summarise(n = n(),
-         ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
-         .groups = "drop")
-
-median(detection_ratio$ves_cmr_ratio)
+# 
+# detection_ratio = abundance_stats %>%
+#   filter(!is.na(adult_count_visual) & !is.na(adult_count_cmr)) %>%
+#   group_by(population) %>%
+#   summarise(n = n(),
+#          ves_cmr_ratio = mean(adult_count_visual/adult_count_cmr),
+#          .groups = "drop")
+# 
+# site_cmr = data_cmr %>%
+#   group_by(population,
+#            site,
+#            year,
+#            survey_period) %>%
+#   summarise(date_start_cmr = first(date),
+#             cmr_days = n_distinct(date),
+#             adult_count_cmr = n_distinct(local_cmr_id),
+#             .groups = "drop") %>%
+#   arrange(population, site, year, desc(adult_count_cmr)) %>%
+#   group_by(population,
+#            site,
+#            year) %>%
+#   slice_head(n = 1) %>%  # select max count
+#   ungroup() %>%
+#   select(-survey_period)
+# 
+# site_visual = data_visual %>%
+#   group_by(population,
+#            site,
+#            year,
+#            survey_period
+#            ) %>%
+#   # rename(date_ves = date) %>%
+#   summarise(date_start_ves = first(date),
+#             ves_days = n_distinct(date),
+#             adult_count_visual = sum(count_ves),
+#             .groups = "drop") %>%
+#   arrange(population, site, year, desc(adult_count_visual)) %>%
+#   group_by(population,
+#            site,
+#            year) %>%
+#   slice_head(n = 1) %>% # select max count
+#   ungroup() %>%
+#   select(-survey_period)
+# 
+# site_detection_ratio = site_visual %>%
+#   full_join(site_cmr, by = c("population", "site", "year")) %>%
+#   mutate(detection_ratio = adult_count_visual/adult_count_cmr) %>%
+#   filter(!is.na(detection_ratio))
+# 
+# peace = db_ves %>%
+#   left_join(db_survey, by = "survey_id") %>%
+#   left_join(db_visit, by = "visit_id") %>%
+#   left_join(db_site, by = "site_id") %>%
+#   filter(site == "72996",
+#          date >= "2009-01-01",
+#          date <= "2029-12-31",
+#          taxon_ves == "rana_sierrae") %>%
+#   collect() %>%
+#   arrange(date)
+# 
+# 
+# median(detection_ratio$ves_cmr_ratio)
 
 # join with pop_year_tx
 pop_year_ab = pop_year_tx %>%
-  left_join(abundance_stats, by = c("population", "year"))
+  left_join(abundance_stats, by = c("population", "year")) %>%
+  arrange(population, year) %>%
+  group_by(population) %>%
+  mutate(adult_count_cmr_native_ratio_terp = zoo::na.locf(adult_count_cmr_native_ratio, fromLast = FALSE, na.rm = FALSE)) %>%
+  ungroup()
 
 
 ```
@@ -939,15 +1023,48 @@ manual_legend_df = data.frame(
   event = c("✱  Release event", "†  Antifungal treatment")
 )
 
+ggplot(pop_year_bd, aes(x = year)) +
+  # timeseries
+  geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
+  geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
+  geom_point(aes(y = log10(adult_count_cmr + 1), color = "CMR count"), size = psize, shape = "triangle") +
+  geom_point(aes(y = log10(adult_count_visual + 1), color = "Visual count"), size = psize, shape = "triangle") +
+  # interventions
+  geom_text(data = treatment_events_valid %>% filter(grepl("release", treatment_type)),
+            aes(x = year), y = 8, size = 5, label = "*") +
+  geom_text(data = treatment_events_valid %>% filter(grepl("antifungal", treatment_type)),
+            aes(x = year), y = 8, size = 2.5, label = "†") +
+  # aesthetics
+  scale_color_manual(
+    name = "Timeseries",
+    values = c(
+    "CMR count" = "#0571b0",
+    "Visual count" = "#92c5de",
+    "Bd prevalence" = "#f1b6da",
+    "geom-mean(+Bd load)" = "#d01c8b"
+  )) +
+  scale_y_continuous(
+    name = "Adult abundance & Geometric mean Bd load",
+    breaks = c(0, 3, 6, 9),
+    labels = function(x) {
+      labs = scales::math_format(10^.x+1)(x)
+      labs[x == 0] = "0"
+      labs
+    },
+    sec.axis = sec_axis(~./prev_coef, name="Bd Prevalence")
+  ) +
+  facet_wrap(population ~ .) +
+  theme_minimal()
+
 ggplot(pop_year_class, aes(x = year)) +
   
   # time series (points and interpolations)
   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
-  geom_line(aes(y = adult_bd_prevalence_terp * prev_coef, color = "Bd prevalence")) +
+  # geom_line(aes(y = adult_bd_prevalence_terp * prev_coef, color = "Bd prevalence")) +
   geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
-  geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(+Bd load)")) +
+  # geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(+Bd load)")) +
   geom_point(aes(y = log10(adult_count + 1), color = "Adult count"), size = psize, shape = "triangle") +
-  geom_line(aes(y = log10(adult_count_terp + 1), color = "Adult count")) +
+  # geom_line(aes(y = log10(adult_count_terp + 1), color = "Adult count")) +
 
   # swab counts
   geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3,
