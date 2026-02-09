@@ -630,14 +630,14 @@ bd_model_env_select = bd_model_env %>%
 
 # write.csv(bd_model_env_select_stats, here("data", paste0("bd_model_unified_select_stats", today(), ".csv")))
 
-spp_climate_stats = bd_model_env_select %>%
-  select(taxon_capture,
-         site) %>%
-  distinct() %>%
-  left_join(site_climate, by = "site") %>%
-  group_by(taxon_capture) %>%
-  summarize(mean_annual_precip_mm = mean(site_precip_mm_annual_mean),
-            mean_annual_temp_c = mean(site_temp_c_mean))
+# spp_climate_stats = bd_model_env_select %>%
+#   select(taxon_capture,
+#          site) %>%
+#   distinct() %>%
+#   left_join(site_climate, by = "site") %>%
+#   group_by(taxon_capture) %>%
+#   summarize(mean_annual_precip_mm = mean(site_precip_mm_annual_mean),
+#             mean_annual_temp_c = mean(site_temp_c_mean))
 
 ```
 
@@ -1866,13 +1866,13 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
     ),
   )
 
-# absolute
-ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
-  geom_vline(xintercept = 0, alpha = 0.5) +
-  geom_density(fill = "yellow", alpha = 0.5) +
-  facet_wrap("species") +
-  xlim(-5, 5) +
-  theme_minimal()
+# # absolute
+# ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+#   geom_vline(xintercept = 0, alpha = 0.5) +
+#   geom_density(fill = "yellow", alpha = 0.5) +
+#   facet_wrap("species") +
+#   xlim(-5, 5) +
+#   theme_minimal()
 
 # rope
 ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
@@ -1887,10 +1887,13 @@ ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
   geom_text(data = hu_taxon_subadult_rope,
             aes(x = -2.5,
                 y = 0.75,
-                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 4)))),
+                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
             size = 3) +
   xlim(-5, 5) +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "Logit Prevalence (hu) Parameter Values",
+       x = "Logit Prevalence (hu)",
+       y = "Density")
 
 # load
 b_taxon_subadult = spread_draws(model_select, `b_life_stage_simplesubadult.*`, regex = TRUE) %>%
@@ -1937,28 +1940,28 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
     ))
 
 # absolute
-ggplot(b_taxon_subadult, aes(x = b_subadult)) +
-  geom_vline(xintercept = 0, alpha = 0.5) +
-  geom_density(fill = "blue", alpha = 0.5) +
-  facet_wrap("species") +
-  theme_minimal()
+# ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+#   geom_vline(xintercept = 0, alpha = 0.5) +
+#   geom_density(fill = "blue", alpha = 0.5) +
+#   facet_wrap("species") +
+#   theme_minimal()
 
-# rope
-ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
-  geom_density(fill = "blue", alpha = 0.5) +
-  facet_wrap("species") +
-  # geom_vline(xintercept=0) +
-  annotate("rect", 
-           xmin = -0.1, xmax = 0.1, 
-           ymin = -Inf, ymax = Inf,
-           fill = "red", alpha = 0.5) +
-  geom_text(data = b_taxon_subadult_rope,
-            aes(x = -2.5,
-                y = 1,
-                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 4)))),
-            size = 3) +
-  xlim(-5, 5) +
-  theme_minimal()
+# # rope
+# ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
+#   geom_density(fill = "blue", alpha = 0.5) +
+#   facet_wrap("species") +
+#   # geom_vline(xintercept=0) +
+#   annotate("rect", 
+#            xmin = -0.1, xmax = 0.1, 
+#            ymin = -Inf, ymax = Inf,
+#            fill = "red", alpha = 0.5) +
+#   geom_text(data = b_taxon_subadult_rope,
+#             aes(x = -2.5,
+#                 y = 1,
+#                 label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 4)))),
+#             size = 3) +
+#   xlim(-5, 5) +
+#   theme_minimal()
 
 # unscaled rope
 ggplot(b_taxon_subadult, aes(x = b_subadult)) +
@@ -1967,26 +1970,35 @@ ggplot(b_taxon_subadult, aes(x = b_subadult)) +
   geom_rect(data = b_taxon_subadult_rope, 
             aes(xmin = -0.1 * sp_sd, xmax = 0.1 * sp_sd, ymin = -Inf, ymax = Inf),
             fill = "red", alpha = 0.5, inherit.aes = FALSE) +
+  geom_text(data = b_taxon_subadult_rope,
+            aes(x = -2.5,
+                y = 1,
+                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
+            size = 3) +
   facet_wrap("species") +
   theme_minimal() +
-  xlim(-4, 6)
+  xlim(-4, 6) + 
+  labs(title = "Log Load (b) Parameter Values",
+       x = "Log Load (b)",
+       y = "Density")
   
 
 taxon_subadult = b_taxon_subadult %>%
   left_join(hu_taxon_subadult, by = c(".draw", ".iteration", ".chain", "taxon_capture", "species"))
 
 # probability of direction
-ggplot(taxon_subadult_rope, aes(x = pd_hu, y = pd_b, color = species)) +
-  # geom_vline(xintercept = 0, color = "#aaa") +
-  # geom_hline(yintercept = 0, color = "#aaa") + 
-  geom_point() +
-  geom_text_repel(aes(label = species)) +
-  theme_minimal()
-
-# net direction
 taxon_subadult_rope = hu_taxon_subadult_rope %>%
   full_join(b_taxon_subadult_rope, by = "species", suffix = c("_hu", "_b"))
 
+ggplot(taxon_subadult_rope, aes(x = pd_hu, y = pd_b, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal() +
+  labs(title = "Probability of Direction",
+       x = "Prevalence (hu)",
+       y = "Load (b)")
+
+# net direction
 ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = species)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
@@ -1994,17 +2006,20 @@ ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = speci
   geom_text_repel(aes(label = species)) +
   xlim(-1, 1) +
   ylim(-1, 1) +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "Net Direction",
+       x = "Prevalence (hu)",
+       y = "Load (b)")
 
 # rope
-ggplot(taxon_subadult_rope, aes(x = 1 / ratio_rope_hu, y = 1 / ratio_rope_b, color = species)) +
-  geom_vline(xintercept = 20, color = "#aaa") +
-  geom_hline(yintercept = 20, color = "#aaa") + 
-  geom_point() +
-  geom_text_repel(aes(label = species)) +
-  theme_minimal() +
-  scale_x_log10() +
-  scale_y_log10()
+# ggplot(taxon_subadult_rope, aes(x = 1 / ratio_rope_hu, y = 1 / ratio_rope_b, color = species)) +
+#   geom_vline(xintercept = 20, color = "#aaa") +
+#   geom_hline(yintercept = 20, color = "#aaa") + 
+#   geom_point() +
+#   geom_text_repel(aes(label = species)) +
+#   theme_minimal() +
+#   scale_x_log10() +
+#   scale_y_log10()
 
 # medians
 ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
@@ -2012,7 +2027,10 @@ ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
   geom_text_repel(aes(label = species)) +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "Median Parameter Values",
+       x = "Median prevalence (hu)",
+       y = "Median load (b)")
 
 ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.89, alpha = 0.3) +
@@ -2020,7 +2038,10 @@ ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
   geom_text_repel(aes(label = species)) +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "Parameter Value Distributions",
+       x = "Prevalence (hu)",
+       y = "Load (b)")
 
 
 # # relative spread...
@@ -2079,6 +2100,7 @@ ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
 #   geom_hline(yintercept = 1, color = "#aaa")
 
 ```
+
 ## Phylogenetic tree
 ```{r}
 #| eval: true
@@ -2093,48 +2115,48 @@ src = tax_sources(tnrs_info)
 tr = tol_induced_subtree(ott_ids = ott_id(tnrs_resolved),
                          label_format = "name")
 
-source_studies <- map_dfr(tnrs_resolved$unique_name, function(species) {
-  result <- studies_find_trees(
-    property = "ot:ottTaxonName", 
-    value = species,
-    detailed = TRUE
-  )
-  
-  tibble(
-    species = species,
-    study_id = result$study_ids,
-    n_matched_trees = result$n_matched_trees,
-    study_year = result$study_year,
-    title = result$title
-  )
-})
+# source_studies <- map_dfr(tnrs_resolved$unique_name, function(species) {
+#   result <- studies_find_trees(
+#     property = "ot:ottTaxonName", 
+#     value = species,
+#     detailed = TRUE
+#   )
+#   
+#   tibble(
+#     species = species,
+#     study_id = result$study_ids,
+#     n_matched_trees = result$n_matched_trees,
+#     study_year = result$study_year,
+#     title = result$title
+#   )
+# })
 
-source_studies_wide = source_studies %>%
-  select(species, study_id) %>%
-  mutate(value = 1) %>%
-  pivot_wider(names_from = species,
-              values_from = value,
-              values_fill = 0) %>%
-  arrange(study_id)
-
-source_studies_unique = source_studies %>%
-  select(-species) %>%
-  distinct() %>%
-  arrange(study_id)
+# source_studies_wide = source_studies %>%
+#   select(species, study_id) %>%
+#   mutate(value = 1) %>%
+#   pivot_wider(names_from = species,
+#               values_from = value,
+#               values_fill = 0) %>%
+#   arrange(study_id)
+# 
+# source_studies_unique = source_studies %>%
+#   select(-species) %>%
+#   distinct() %>%
+#   arrange(study_id)
 
 tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
 
 # plot tree
-ggtree(tr, layout = "rectangular") +
-  geom_tiplab(size = 3, align = TRUE) +
-  theme_tree2() +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
-                     breaks = c(1, 3, 5, 7))
+# ggtree(tr, layout = "rectangular") +
+#   geom_tiplab(size = 3, align = TRUE) +
+#   theme_tree2() +
+#   scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
+#                      breaks = c(1, 3, 5, 7))
 
 ggtree(tr_reordered, layout = "rectangular") +
-  geom_tiplab(size = 3, align = TRUE) +
+  geom_tiplab(size = 4, align = TRUE) +
   theme_tree2() +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
+  scale_x_continuous(expand = expansion(mult = c(0, 0.4)),
                      breaks = c(1, 3, 5, 7))
 
 
@@ -2147,7 +2169,9 @@ hu_dist = dist(hu_taxon_subadult_rope$hu_median)
 b_dist = dist(b_taxon_subadult_rope$b_median)
 
 hu_rho = cor.test(hu_dist, cophen_upper, method = "spearman")
+hu_rho
 b_rho = cor.test(b_dist, cophen_upper, method = "spearman")
+b_rho
 ```
 
 ## Collective results
