@@ -1872,6 +1872,7 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
   group_by(species) %>%
   summarize(n = n(),
             pd = pd(hu_subadult)$pd,
+            hdi_50 = hdi(hu_subadult, ci = 0.50),
             hdi_89 = hdi(hu_subadult, ci = 0.89),
             hdi_95 = hdi(hu_subadult, ci = 0.95),
             ratio_rope = sum(in_rope) / n(),
@@ -1884,17 +1885,34 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
             hu_var = var(hu_subadult),
             .groups = "drop") %>%
   mutate(
+    hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_50 = case_when(
+      hdi_50$CI_low > log_th | hdi_50$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
     hdi_rope_89 = case_when(
-      hdi_89$CI_low > log_th | hdi_89$CI_high <= -log_th ~ TRUE,
-      hdi_89$CI_low > -log_th & hdi_89$CI_high <= log_th ~ FALSE,
-      .default = NA
+      hdi_89$CI_low > log_th | hdi_89$CI_high < -log_th ~ TRUE,
+      .default = FALSE
     ),
     hdi_rope_95 = case_when(
-      hdi_95$CI_low > log_th | hdi_95$CI_high <= -log_th ~ TRUE,
-      hdi_95$CI_low > -log_th & hdi_95$CI_high <= log_th ~ FALSE,
-      .default = NA
-    ),
+      hdi_95$CI_low > log_th | hdi_95$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    )
   )
+
+hu_effect_weak = hu_taxon_subadult_rope %>%
+  filter(hdi_zero_50)
 
 # rope prevalence (hu)
 p_hu_dist = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
@@ -1916,12 +1934,38 @@ p_hu_dist = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
   labs(
        # title = "Subadult Effect on Bd Prevalence",
        x = "Bd Prevalence - Subadult Effect Size (logit scale) [-]",
-       y = "Posterior Probability Density [-] [-]") +
+       y = "Posterior Density [-] [-]") +
   theme(text=element_text(size=14))
 
 ggsave(here("clh", "prevalence_hu_distributions.png"), plot = p_hu_dist, width = 12, height = 6, units = "in")
 
 p_hu_dist
+
+# zero prevalence (hu)
+p_hu_dist_hdi = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+  geom_density(fill = "#66c2a5", alpha = 1) +
+  facet_wrap("species") +
+  # geom_vline(xintercept=0) +
+  geom_rect(data = hu_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
+                ymin = -0.15, ymax = 0),
+            fill = "#bbb", alpha = 1) +
+  geom_rect(data = hu_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
+                ymin = -0.15, ymax = 0),
+            fill = "#666", alpha = 1) + 
+  geom_vline(xintercept = 0, alpha = 1) +
+  xlim(-2.7, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_hu_distributions_hdi.png"), plot = p_hu_dist_hdi, width = 12, height = 6, units = "in")
+
+p_hu_dist_hdi
 
 # posterior median sigma
 sigma_draws <- posterior_epred(model_select, dpar = "sigma")
@@ -1947,6 +1991,7 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
   group_by(species) %>%
   summarize(n = n(),
             pd = pd(b_subadult)$pd,
+            hdi_50 = hdi(b_subadult, ci = 0.50),
             hdi_89 = hdi(b_subadult, ci = 0.89),
             hdi_95 = hdi(b_subadult, ci = 0.95),
             ratio_rope = sum(in_rope) / n(),
@@ -1961,17 +2006,34 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
             b_sc_mean = mean(b_subadult_sc),
             .groups = "drop") %>%
   mutate(
+   hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_50 = case_when(
+      hdi_50$CI_low > log_th | hdi_50$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
     hdi_rope_89 = case_when(
-      hdi_89$CI_low > 0.1 * median_b_sigma | hdi_89$CI_high <= -0.1 * median_b_sigma ~ TRUE,
-      hdi_89$CI_low > -0.1 * median_b_sigma & hdi_89$CI_high <= 0.1 * median_b_sigma ~ FALSE,
-      .default = NA
+      hdi_89$CI_low > log_th | hdi_89$CI_high < -log_th ~ TRUE,
+      .default = FALSE
     ),
     hdi_rope_95 = case_when(
-      hdi_95$CI_low > 0.1 * median_b_sigma | hdi_95$CI_high <= -0.1 * median_b_sigma ~ TRUE,
-      hdi_95$CI_low > -0.1 * median_b_sigma & hdi_95$CI_high <= 0.1 * median_b_sigma ~ FALSE,
-      .default = NA
-    ))
+      hdi_95$CI_low > log_th | hdi_95$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    )
+   )
 
+b_effect_weak = b_taxon_subadult_rope %>%
+  filter(hdi_zero_50)
 
 # rope load (b)
 p_b_dist = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
@@ -1991,13 +2053,40 @@ p_b_dist = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
   xlim(-4, 6) + 
   labs(
        # title = "Subadult Effect: Bd Load",
-       x = "Bd Load - Subadult Effect Size (log scale) [-]",
-       y = "Posterior Probability Density [-]") +
+       x = "Bd Load Subadult Effect Size (log scale) [-]",
+       y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
 ggsave(here("clh", "prevalence_b_distributions.png"), plot = p_b_dist, width = 12, height = 6, units = "in")
 
 p_b_dist
+
+# zero load (b)
+p_b_dist_hdi = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+  # geom_vline(xintercept = 0, alpha = 1) +
+  geom_density(fill = "#8da0cb", alpha = 1) +
+  geom_rect(data = b_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
+                ymin = -0.08, ymax = 0),
+            fill = "#bbb", alpha = 1) +
+  geom_rect(data = b_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
+                ymin = -0.08, ymax = 0),
+            fill = "#666", alpha = 1) + 
+  geom_vline(xintercept = 0, alpha = 1) +
+  facet_wrap("species") +
+  theme_minimal() +
+  xlim(-4, 6) + 
+  labs(
+       # title = "Subadult Effect: Bd Load",
+       x = "Bd Load - Subadult Effect Size (log scale) [-]\nwith 50% & 95% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_b_distributions_hdi.png"), plot = p_b_dist_hdi, width = 12, height = 6, units = "in")
+
+p_b_dist_hdi
+  
   
 
 taxon_subadult = b_taxon_subadult %>%
@@ -2061,7 +2150,26 @@ p_ppos = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positi
   scale_color_manual(values = upper_half)
 
 ggsave(here("clh", "probability_positive_effect.png"), plot = p_ppos, width = 12, height = 6, units = "in")
-p_pos
+p_ppos
+
+# no text
+p_ppos_no_text = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") + 
+  geom_point(size = 4) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence:\nProbability of positive effect [-]",
+       y = "Bd Load:\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+
+ggsave(here("clh", "probability_positive_effect_no_text.png"), plot = p_ppos_no_text, width = 12, height = 6, units = "in")
+p_ppos_no_text
 
 p_ppos_grid = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
   geom_vline(xintercept = 0.5, color = "#aaa") +
