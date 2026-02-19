@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis)
 
 ```
 ## Data selection
@@ -60,7 +60,7 @@ I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd densi
 #| code-summary: "Show data collection code"
 
 ## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
+dbcon = hopToDB("ribbitr_ch", hopReg = FALSE)
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -194,12 +194,14 @@ bd_life_stage = bd_population %>%
     ((taxon_capture == "rana_clamitans") & (svl_mm >= 60)) ~ "adult",
     ((taxon_capture == "rana_clamitans") & (svl_mm < 60)) ~ "subadult",
     # Knapp
+    ((taxon_capture == "rana_muscosa") & is.na(svl_mm)) ~ life_stage,
     ((taxon_capture == "rana_muscosa") & (svl_mm >= 40)) ~ "adult",
     ((taxon_capture == "rana_muscosa") & (svl_mm < 40)) ~ "subadult",
     # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
     ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
     ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
     # Knapp
+    ((taxon_capture == "rana_sierrae") & is.na(svl_mm)) ~ life_stage,
     ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
     ((taxon_capture == "rana_sierrae") & (svl_mm < 40)) ~ "subadult",
     # Martof 1963
@@ -627,6 +629,37 @@ bd_model_env_select = bd_model_env %>%
 (bd_model_env_select_stats = bd_model_env_stats %>%
   filter(adult_n_pos >= 5,
          subadult_n_pos >= 5))
+
+agg_species_stats = bd_model_env_select_stats %>%
+  group_by() %>%
+  summarize(med_sites = median(site_n),
+            med_years = median(year_count),
+            med_adult = median(adult_n),
+            med_sub = median(subadult_n),
+            sum_adult = sum(adult_n),
+            sum_sub = sum(subadult_n),
+            .groups = "drop")
+
+add_visit_stats = bd_model_env_select %>%
+  select(site, date) %>%
+  distinct() %>%
+  nrow()
+
+# write_csv(bd_model_env_select_stats, here("clh", "species_data_stats.csv"))
+
+# export site coords
+# all_sites = unique(bd_model_env_select$site)
+# 
+# select_sites = db_site %>%
+#               filter(site %in% all_sites) %>%
+#   select(site_id,
+#          site,
+#          site_latitude,
+#          site_longitude) %>%
+#   collect() %>%
+#   arrange(site)
+# 
+# write.csv(select_sites, here("data", paste0("bd_model_unified_select_sites", today(), ".csv")))
 
 # write.csv(bd_model_env_select_stats, here("data", paste0("bd_model_unified_select_stats", today(), ".csv")))
 
@@ -1794,8 +1827,8 @@ Results are broken out first by species, then combined for comparison between sp
 #| eval: true
 #| echo: false
 #| warning: false
-#| fig-height: 6
-#| fig-width: 10
+#| fig-height: 8
+#| fig-width: 12
 
 # model_select = m3_zln
 # model_select = m5f_zln
@@ -1807,21 +1840,16 @@ species = brms_data %>%
   distinct() %>%
   arrange(taxon_capture)
 
-# sig_taxon = spread_draws(m5f_zln, `b_sigma.*`, regex = TRUE) %>%
-#   mutate(b_sigma_taxon_captureanaxyrus_americanus = 0) %>%
-#   pivot_longer(starts_with("b_sigma_taxon"),
-#                names_to = "parameter",
-#                values_to = "sigma_adj") %>%
-#   mutate(taxon_capture = gsub("b_sigma_taxon_capture", "", parameter),
-#          sigma = b_sigma_Intercept + sigma_adj) %>%
-#   select(.draw,
-#          taxon_capture,
-#          sigma)
 
-# sig_taxon_med = sig_taxon %>%
-#   group_by(taxon_capture) %>%
-#   summarize(sigma_med = median(sigma),
-#             .groups = "drop")
+b_hu = spread_draws(model_select, `b_hu.*`, regex = TRUE)
+
+median_b_hu = median(b_hu$b_hu_Intercept)
+median_b_hu_p = plogis(median_b_hu)
+hu_p_upper = median_b_hu_p + 0.05
+hu_p_lower = median_b_hu_p - 0.05
+hu_q_upper = qlogis(hu_p_upper)
+hu_q_lower = qlogis(hu_p_lower)
+hu_scale = (hu_q_upper - hu_q_lower) / 2
 
 # prevalence
 hu_taxon_subadult = spread_draws(model_select, `b_hu_life_stage_simplesubadult.*`, regex = TRUE) %>%
@@ -1837,7 +1865,7 @@ hu_taxon_subadult = spread_draws(model_select, `b_hu_life_stage_simplesubadult.*
   ungroup() %>%
   mutate(hu_subadult_sc = hu_subadult / sp_sd)
 
-log_th = 0.1 * pi / sqrt(3)
+log_th = hu_scale
 
 hu_taxon_subadult_rope = hu_taxon_subadult %>%
   mutate(in_rope = abs(hu_subadult) <= log_th) %>%
@@ -1852,6 +1880,8 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
             ratio_net = ratio_positive - ratio_negative,
             hu_median = median(hu_subadult),
             hu_mean = mean(hu_subadult),
+            hu_sd = sd(hu_subadult),
+            hu_var = var(hu_subadult),
             .groups = "drop") %>%
   mutate(
     hdi_rope_89 = case_when(
@@ -1866,34 +1896,38 @@ hu_taxon_subadult_rope = hu_taxon_subadult %>%
     ),
   )
 
-# # absolute
-# ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
-#   geom_vline(xintercept = 0, alpha = 0.5) +
-#   geom_density(fill = "yellow", alpha = 0.5) +
-#   facet_wrap("species") +
-#   xlim(-5, 5) +
-#   theme_minimal()
-
-# rope
-ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
-  geom_density(fill = "yellow", alpha = 0.5) +
-  geom_vline(xintercept = 0, alpha = 0.5) +
+# rope prevalence (hu)
+p_hu_dist = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+  geom_density(fill = "#66c2a5", alpha = 1) +
   facet_wrap("species") +
   # geom_vline(xintercept=0) +
   annotate("rect", 
            xmin = -log_th, xmax = log_th, 
            ymin = -Inf, ymax = Inf,
-           fill = "red", alpha = 0.5) +
+           fill = "#fc8d62", alpha = 0.5) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
   geom_text(data = hu_taxon_subadult_rope,
-            aes(x = -2.5,
-                y = 0.75,
+            aes(x = 2,
+                y = 1,
                 label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
-            size = 3) +
-  xlim(-5, 5) +
+            size = 3.5) +
+  xlim(-2.7, 3.5) +
   theme_minimal() +
-  labs(title = "Logit Prevalence (hu) Parameter Values",
-       x = "Logit Prevalence (hu)",
-       y = "Density")
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence - Subadult Effect Size (logit scale) [-]",
+       y = "Posterior Probability Density [-] [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_hu_distributions.png"), plot = p_hu_dist, width = 12, height = 6, units = "in")
+
+p_hu_dist
+
+# posterior median sigma
+sigma_draws <- posterior_epred(model_select, dpar = "sigma")
+sigma_mean_per_draw <- apply(sigma_draws, 1, mean)
+median_b_sigma <- median(sigma_mean_per_draw)
+
 
 # load
 b_taxon_subadult = spread_draws(model_select, `b_life_stage_simplesubadult.*`, regex = TRUE) %>%
@@ -1904,16 +1938,13 @@ b_taxon_subadult = spread_draws(model_select, `b_life_stage_simplesubadult.*`, r
   mutate(taxon_capture = gsub("b_life_stage_simplesubadult:taxon_capture", "", parameter),
          b_subadult = b_life_stage_simplesubadult + b_adj,
          species = get_species_name(taxon_capture)) %>%
-  group_by(species) %>%
-  mutate(sp_sd = sd(b_subadult)) %>%
-  ungroup() %>%
-  mutate(b_subadult_sc = b_subadult / sp_sd)
+  mutate(b_subadult_sc = b_subadult / median_b_sigma)
 
 
 
 b_taxon_subadult_rope = b_taxon_subadult %>%
   mutate(in_rope = abs(b_subadult_sc) <= 0.1) %>%
-  group_by(species, sp_sd) %>%
+  group_by(species) %>%
   summarize(n = n(),
             pd = pd(b_subadult)$pd,
             hdi_89 = hdi(b_subadult, ci = 0.89),
@@ -1924,79 +1955,156 @@ b_taxon_subadult_rope = b_taxon_subadult %>%
             ratio_net = ratio_positive - ratio_negative,
             b_median = median(b_subadult),
             b_mean = mean(b_subadult),
+            b_sd = sd(b_subadult),
+            b_var = var(b_subadult),
             b_sc_median = median(b_subadult_sc),
             b_sc_mean = mean(b_subadult_sc),
             .groups = "drop") %>%
   mutate(
     hdi_rope_89 = case_when(
-      hdi_89$CI_low > 0.1 * sp_sd | hdi_89$CI_high <= -0.1 * sp_sd ~ TRUE,
-      hdi_89$CI_low > -0.1 * sp_sd & hdi_89$CI_high <= 0.1 * sp_sd ~ FALSE,
+      hdi_89$CI_low > 0.1 * median_b_sigma | hdi_89$CI_high <= -0.1 * median_b_sigma ~ TRUE,
+      hdi_89$CI_low > -0.1 * median_b_sigma & hdi_89$CI_high <= 0.1 * median_b_sigma ~ FALSE,
       .default = NA
     ),
     hdi_rope_95 = case_when(
-      hdi_95$CI_low > 0.1 * sp_sd | hdi_95$CI_high <= -0.1 * sp_sd ~ TRUE,
-      hdi_95$CI_low > -0.1 * sp_sd & hdi_95$CI_high <= 0.1 * sp_sd ~ FALSE,
+      hdi_95$CI_low > 0.1 * median_b_sigma | hdi_95$CI_high <= -0.1 * median_b_sigma ~ TRUE,
+      hdi_95$CI_low > -0.1 * median_b_sigma & hdi_95$CI_high <= 0.1 * median_b_sigma ~ FALSE,
       .default = NA
     ))
 
-# absolute
-# ggplot(b_taxon_subadult, aes(x = b_subadult)) +
-#   geom_vline(xintercept = 0, alpha = 0.5) +
-#   geom_density(fill = "blue", alpha = 0.5) +
-#   facet_wrap("species") +
-#   theme_minimal()
 
-# # rope
-# ggplot(b_taxon_subadult, aes(x = b_subadult_sc)) +
-#   geom_density(fill = "blue", alpha = 0.5) +
-#   facet_wrap("species") +
-#   # geom_vline(xintercept=0) +
-#   annotate("rect", 
-#            xmin = -0.1, xmax = 0.1, 
-#            ymin = -Inf, ymax = Inf,
-#            fill = "red", alpha = 0.5) +
-#   geom_text(data = b_taxon_subadult_rope,
-#             aes(x = -2.5,
-#                 y = 1,
-#                 label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 4)))),
-#             size = 3) +
-#   xlim(-5, 5) +
-#   theme_minimal()
-
-# unscaled rope
-ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+# rope load (b)
+p_b_dist = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
   # geom_vline(xintercept = 0, alpha = 1) +
-  geom_density(fill = "blue", alpha = 0.5) +
+  geom_density(fill = "#8da0cb", alpha = 1) +
   geom_rect(data = b_taxon_subadult_rope, 
-            aes(xmin = -0.1 * sp_sd, xmax = 0.1 * sp_sd, ymin = -Inf, ymax = Inf),
-            fill = "red", alpha = 0.5, inherit.aes = FALSE) +
+            aes(xmin = -0.1 * median_b_sigma, xmax = 0.1 * median_b_sigma, ymin = -Inf, ymax = Inf),
+            fill = "#fc8d62", alpha = 0.5, inherit.aes = FALSE) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
   geom_text(data = b_taxon_subadult_rope,
-            aes(x = -2.5,
-                y = 1,
+            aes(x = 3,
+                y = 0.72,
                 label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
-            size = 3) +
+            size = 3.5) +
   facet_wrap("species") +
   theme_minimal() +
   xlim(-4, 6) + 
-  labs(title = "Log Load (b) Parameter Values",
-       x = "Log Load (b)",
-       y = "Density")
+  labs(
+       # title = "Subadult Effect: Bd Load",
+       x = "Bd Load - Subadult Effect Size (log scale) [-]",
+       y = "Posterior Probability Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_b_distributions.png"), plot = p_b_dist, width = 12, height = 6, units = "in")
+
+p_b_dist
   
 
 taxon_subadult = b_taxon_subadult %>%
   left_join(hu_taxon_subadult, by = c(".draw", ".iteration", ".chain", "taxon_capture", "species"))
 
-# probability of direction
+# Fraction in ROPE
 taxon_subadult_rope = hu_taxon_subadult_rope %>%
   full_join(b_taxon_subadult_rope, by = "species", suffix = c("_hu", "_b"))
 
+ggplot(taxon_subadult_rope, aes(x = ratio_rope_hu, y = ratio_rope_b, color = species)) +
+  geom_vline(xintercept = 0.025, color = "blue") +
+  geom_hline(yintercept = 0.025, color = "blue") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: ROPE",
+       x = "Bd Prevalence ROPE fraction (logit scale)",
+       y = "Subadult Bd Load ROPE fraction (log scale)")
+
+# HU median sd
+ggplot(taxon_subadult_rope, aes(y = hu_median, x = ratio_rope_hu, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+# B median sd
+ggplot(taxon_subadult_rope, aes(y = b_median, x = ratio_rope_b, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+
+# probability of direction
 ggplot(taxon_subadult_rope, aes(x = pd_hu, y = pd_b, color = species)) +
   geom_point() +
   geom_text_repel(aes(label = species)) +
   theme_minimal() +
-  labs(title = "Probability of Direction",
-       x = "Prevalence (hu)",
-       y = "Load (b)")
+  labs(title = "Subadult Effect: Probability of Direction (Pd)",
+       x = "Bd Prevalence Pd (logit scale)",
+       y = "Subadult Bd Load Pd (log scale)")
+
+# probability of positive effect
+n_groups <- 19
+full_pal <- plasma(2 * n_groups)  # Generate double for subsetting
+upper_half <- full_pal[1:n_groups]  # Upper ~half
+
+p_ppos = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") + 
+  geom_point(size = 4) +
+  geom_text_repel(aes(label = species), size = 4, seed = 123) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence:\nProbability of positive effect [-]",
+       y = "Bd Load:\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+
+ggsave(here("clh", "probability_positive_effect.png"), plot = p_ppos, width = 12, height = 6, units = "in")
+p_pos
+
+p_ppos_grid = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") + 
+  geom_vline(xintercept = 0.10, color = "#222", alpha = 0.5, size = 4) +
+  geom_hline(yintercept = 0.10, color = "#222", alpha = 0.5, size = 4) + 
+  geom_vline(xintercept = 0.90, color = "#222", alpha = 0.5, size = 4) +
+  geom_hline(yintercept = 0.90, color = "#222", alpha = 0.5, size = 4) + 
+  geom_point(size = 4) +
+  geom_text_repel(aes(label = species), size = 4, seed = 123) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence:\nProbability of positive effect [-]",
+       y = "Bd Load:\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+ggsave(here("clh", "probability_positive_effect_grid.png"), plot = p_ppos_grid, width = 12, height = 6, units = "in")
+p_ppos_grid
+
+ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") +
+  geom_vline(xintercept = 0.025, color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 0.025, color = "blue", alpha = 0.5) + 
+  geom_vline(xintercept = 0.975, color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 0.975, color = "blue", alpha = 0.5) + 
+  # geom_rect(data = data.frame(xmin = 0.025, xmax = 0.975, ymin = 0.025, ymax = 0.975),
+  #         aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+  #         fill = "blue", alpha = 0.1, inherit.aes = FALSE) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence FAZ (logit scale)",
+       y = "Bd Load FAZ (log scale)") +
+  theme(legend.position="none")
+
 
 # net direction
 ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = species)) +
@@ -2007,31 +2115,54 @@ ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = speci
   xlim(-1, 1) +
   ylim(-1, 1) +
   theme_minimal() +
-  labs(title = "Net Direction",
-       x = "Prevalence (hu)",
-       y = "Load (b)")
+  labs(title = "Subadult Effect: Net Direction (Nd)",
+       x = "Bd Prevalence Nd (logit scale)",
+       y = "Bd Load Nd (log scale)") +
+  theme(legend.position="none")
 
-# rope
-# ggplot(taxon_subadult_rope, aes(x = 1 / ratio_rope_hu, y = 1 / ratio_rope_b, color = species)) +
-#   geom_vline(xintercept = 20, color = "#aaa") +
-#   geom_hline(yintercept = 20, color = "#aaa") + 
-#   geom_point() +
-#   geom_text_repel(aes(label = species)) +
-#   theme_minimal() +
-#   scale_x_log10() +
-#   scale_y_log10()
-
-# medians
-ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+# median
+p_b_hu_median = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
-  geom_point() +
-  geom_text_repel(aes(label = species)) +
+  geom_point(size = 4) +
+  geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  xlim(-1.6, 1.6) +
+  ylim(-3.5, 3.5) +
   theme_minimal() +
-  labs(title = "Median Parameter Values",
-       x = "Median prevalence (hu)",
-       y = "Median load (b)")
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size (logit scale) [-]",
+       y = "Bd Load\nMedian Subadult Effect Size (log scale) [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
 
+ggsave(here("clh", "median_effect.png"), plot = p_b_hu_median, width = 12, height = 6, units = "in")
+
+p_b_hu_median
+
+# median no text
+p_b_hu_median_no_text = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 4) +
+  xlim(-1.6, 1.6) +
+  ylim(-3.5, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size (logit scale) [-]",
+       y = "Bd Load\nMedian Subadult Effect Size (log scale) [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+
+ggsave(here("clh", "median_effect_no_text.png"), plot = p_b_hu_median_no_text, width = 12, height = 6, units = "in")
+
+p_b_hu_median
+
+
+# median with elipsoid
 ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.89, alpha = 0.3) +
   geom_vline(xintercept = 0, color = "#aaa") +
@@ -2040,64 +2171,99 @@ ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
   geom_text_repel(aes(label = species)) +
   theme_minimal() +
   labs(title = "Parameter Value Distributions",
-       x = "Prevalence (hu)",
-       y = "Load (b)")
+       x = "Bd Prevalence (logit scale)",
+       y = "Median Bd Load (log scale)")
+
+# violins
+hu_order = hu_taxon_subadult_rope %>%
+  arrange(hu_median) %>%
+  pull(species)
+
+hu_taxon_subadult$taxon_capture = factor(hu_taxon_subadult$species, levels = hu_order)
+
+hu_violin = ggplot(hu_taxon_subadult, aes(y = taxon_capture, x = hu_subadult)) +
+  geom_violin(draw_quantiles = 0.5, fill = "grey80") +
+  theme_minimal()
 
 
-# # relative spread...
-# relative_b = spread_draws(model_select, `^b_Intercept$|^b_life_stage_simple.*|^b_taxon_capture.*`, regex = TRUE) %>%
-#   mutate(`b_taxon_captureanaxyrus_americanus` = 0,
-#          `b_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
-#   pivot_longer(
-#     cols = starts_with(c("b_taxon", "b_life_stage_simplesubadult:taxon")),
-#     names_to = c(".value", "taxon_capture"),
-#     names_pattern = "(.*taxon_capture)([a-z]*_[a-z]*$)") %>%
-#   mutate(adult_b = b_Intercept + b_taxon_capture,
-#          subadult_b = b_Intercept + b_taxon_capture + b_life_stage_simplesubadult + `b_life_stage_simplesubadult:taxon_capture`,
-#          adult_relative_b = adult_b / subadult_b,
-#          subadult_relative_b = subadult_b / adult_b)
-# 
-# relative_hu = spread_draws(model_select, `^b_hu_Intercept$|^b_hu_life_stage_simple.*|^b_hu_taxon_capture.*`, regex = TRUE) %>%
-#   mutate(`b_hu_taxon_captureanaxyrus_americanus` = 0,
-#          `b_hu_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
-#   pivot_longer(
-#     cols = starts_with(c("b_hu_taxon", "b_hu_life_stage_simplesubadult:taxon")),
-#     names_to = c(".value", "taxon_capture"),
-#     names_pattern = "(.*taxon_capture)([a-z]*_[a-z]*$)") %>%
-#   mutate(adult_hu = b_hu_Intercept + b_hu_taxon_capture,
-#          subadult_hu = b_hu_Intercept + b_hu_taxon_capture + b_hu_life_stage_simplesubadult + `b_hu_life_stage_simplesubadult:taxon_capture`,
-#          adult_relative_hu = adult_hu / subadult_hu,
-#          subadult_relative_hu = subadult_hu / adult_hu)
-# 
-# relative_params = relative_b %>%
-#   left_join(relative_hu, by = c(".chain", ".iteration", ".draw", "taxon_capture"))
-# 
-# relative_params_agg = relative_params %>%
-#   group_by(taxon_capture) %>%
-#   summarize(adult_relative_b_median = median(adult_relative_b),
-#             adult_relative_hu_median = median(adult_relative_hu),
-#             subadult_relative_b_median = median(subadult_relative_b),
-#             subadult_relative_hu_median = median(subadult_relative_hu))
-# 
-# ggplot(relative_params, aes(x = subadult_b, y = subadult_hu, color = taxon_capture)) +
-#   stat_ellipse()
-# 
-# ggplot(relative_params, aes(x = subadult_relative_b, y = subadult_relative_hu, color = taxon_capture)) +
-#   stat_ellipse()
-# 
-# ggplot(relative_params_agg, aes(x = adult_relative_b_median, y = adult_relative_hu_median, color = taxon_capture)) +
-#   stat_ellipse(data = relative_params, aes(x = adult_relative_b, y = adult_relative_hu), level = 0.5, alpha = 0.3) +
-#   geom_vline(xintercept = 1, color = "#aaa") +
-#   geom_hline(yintercept = 1, color = "#aaa") + 
-#   geom_point() +
-#   geom_text_repel(aes(label = taxon_capture)) +
-#   theme_minimal()
-# 
-# ggplot(relative_params_agg, aes(x = subadult_relative_hu_median, y = subadult_relative_b_median, color = taxon_capture)) +
-#   geom_point() +
-#   geom_text_repel(aes(label = taxon_capture)) +
-#   geom_vline(xintercept = 1, color = "#aaa") +
-#   geom_hline(yintercept = 1, color = "#aaa")
+b_order = b_taxon_subadult_rope %>%
+  arrange(b_median) %>%
+  pull(species)
+
+b_taxon_subadult$taxon_capture = factor(b_taxon_subadult$species, levels = b_order)
+
+b_violin = ggplot(b_taxon_subadult, aes(x = taxon_capture, y = b_subadult)) +
+  geom_violin(draw_quantiles = 0.5, fill = "grey80") +
+  theme_minimal() +
+  scale_x_discrete(position = "top") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0, hjust=0))
+
+# HDI
+
+hu_taxon_subadult_rope$taxon_capture = factor(hu_taxon_subadult_rope$species, levels = rev(hu_order))
+
+hu_box = ggplot(hu_taxon_subadult_rope, aes(x = taxon_capture)) +
+  geom_boxplot(
+    aes(ymin = hdi_89$CI_low, ymax = hdi_89$CI_high,
+        lower = hdi_89$CI_low, upper = hdi_89$CI_high, middle = hu_median),
+    stat = "identity", fill = "black", color = "white") +
+  theme_minimal() +
+  annotate("rect", 
+           ymin = -log_th, ymax = log_th, 
+           xmin = -Inf, xmax = Inf,
+           fill = "red", alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red") +
+  coord_flip()
+
+b_taxon_subadult_rope$taxon_capture = factor(b_taxon_subadult_rope$species, levels = b_order)
+
+b_box = ggplot(b_taxon_subadult_rope, aes(x = taxon_capture)) +
+  geom_boxplot(
+    aes(ymin = hdi_89$CI_low, ymax = hdi_89$CI_high,
+        lower = hdi_89$CI_low, upper = hdi_89$CI_high, middle = b_median),
+    stat = "identity", fill = "black", color = "white") +
+  theme_minimal() +
+  scale_x_discrete(position = "top") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0, hjust=0)) +
+    annotate("rect", 
+           ymin = -0.1 * median_b_sigma, ymax = 0.1 * median_b_sigma, 
+           xmin = -Inf, xmax = Inf,
+           fill = "red", alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red")
+
+# cophen heatmap
+
+# cophen_dist_ordered = 
+hu_order_m = factor(gsub(" ", "_", hu_order), levels = gsub(" ", "_", hu_order))
+b_order_m = factor(gsub(" ", "_", b_order), levels = gsub(" ", "_", b_order))
+cophen_dist_ranked = cophen_dist[b_order_m, hu_order_m]
+
+# combined
+
+# ## with violin
+# b_hu_median +
+#   ylim(-3, 5) +
+#   xlim(-2, 2) +
+#   theme(legend.position="none") +
+#   b_violin +
+#   ylim(-3, 5) +
+#   hu_violin +
+#   xlim(-2, 2) +
+#   plot_layout(ncol = 2)
+
+## with box
+b_hu_median +
+  ylim(-3, 5) +
+  xlim(-2, 2) +
+  theme(legend.position="none") +
+  b_box +
+  ylim(-3, 5) +
+  hu_box +
+  ylim(-2, 2) +
+  plot_layout(ncol = 2)
+
+# absolute bd values?
+## hu adult vs subadult
 
 ```
 
@@ -2145,6 +2311,7 @@ tr = tol_induced_subtree(ott_ids = ott_id(tnrs_resolved),
 #   arrange(study_id)
 
 tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
+tr_reordered$tip.label = get_species_name(tr_reordered$tip.label)
 
 # plot tree
 # ggtree(tr, layout = "rectangular") +
@@ -2153,11 +2320,15 @@ tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
 #   scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
 #                      breaks = c(1, 3, 5, 7))
 
-ggtree(tr_reordered, layout = "rectangular") +
+p_phylo_tree = ggtree(tr_reordered, layout = "rectangular") +
   geom_tiplab(size = 4, align = TRUE) +
   theme_tree2() +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.4)),
+  scale_x_continuous(expand = expansion(mult = c(0, 0.8)),
                      breaks = c(1, 3, 5, 7))
+
+ggsave(here("clh", "phologeny_tree.png"), plot = p_phylo_tree, width = 5, height = 6, units = "in")
+
+p_phylo_tree
 
 
 # correlate phylogeny with trends
