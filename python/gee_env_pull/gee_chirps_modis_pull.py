@@ -31,15 +31,19 @@ def to_ee_geometry(p: PolyLike) -> ee.Geometry:
     # shapely geometry
     return ee.Geometry(p.__geo_interface__)
 
+
 def compute_chirps_average(
-    sites: pd.DataFrame,
-    start_date: str,
-    end_date: str,
-    scale: int = 5000,
-    per_poly_export_threshold: int = 5000,
+        sites: pd.DataFrame,
+        scale: int = 5000,
+        per_poly_export_threshold: int = 5000,
 ) -> Tuple[pd.DataFrame, Dict[int, Dict]]:
     """
     Always produce a daily timeseries.
+
+    Expected columns in sites DataFrame:
+      - W, S, E, N: bounding box coordinates
+      - start_date: start date string for this site
+      - end_date: end date string for this site
 
     Returns:
       - pivot: pandas.DataFrame indexed by date with columns = poly_id for polygons pulled client-side
@@ -56,12 +60,16 @@ def compute_chirps_average(
     rows_modis = []
     exports_modis = {}
 
-    for i, p in tqdm(enumerate(polygons)):
+    for i, (idx, row) in tqdm(enumerate(sites.iterrows())):
+        p = polygons[i]
         g = to_ee_geometry(p)
+
+        start_date = row['start_date']
+        end_date = row['end_date']
+
         # single-feature collection for this polygon
         fc = ee.FeatureCollection([ee.Feature(g, {"poly_id": i})])
 
-        # limit the image collection to this polygon
         chirps_p = (
             ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
             .select("precipitation")
@@ -188,20 +196,17 @@ if __name__ == "__main__":
     sites = pd.read_csv(config['site_coords_path'])
     sites['site_index'] = range(len(sites))
 
-    start = config['start_date']
-    end = config['end_date']
-
     # # Get a single average per polygon across the date range
     # avg_per_poly = compute_chirps_average(polygons, start, end, timeseries=False)
     # print("Average daily rainfall (mm/day) per polygon id:", avg_per_poly)
 
     # Or get a daily timeseries per polygon (pandas DataFrame)
-    ts = compute_chirps_average(sites, start, end)
+    ts = compute_chirps_average(sites)
     ts_chirps = pd.DataFrame(ts[0]).reset_index()
     ts_modis = pd.DataFrame(ts[1]).reset_index()
 
-    ts_long_chirps = pd.melt(ts_chirps, id_vars='date', var_name='site_index', value_name='precipitation_mm')
-    ts_long_modis = pd.melt(ts_modis, id_vars='date', var_name='site_index', value_name='temperature_c')
+    ts_long_chirps = pd.melt(ts_chirps, id_vars='date', var_name='site_index', value_name='precipitation_mm').dropna(subset = ['precipitation_mm'])
+    ts_long_modis = pd.melt(ts_modis, id_vars='date', var_name='site_index', value_name='temperature_c').dropna(subset = ['temperature_c'])
     ts_long_modis['temperature_c'] = ts_long_modis['temperature_c'] * 0.02 - 273.15  # scale and convert to Celsius
     ts_out = ts_long_chirps.merge(ts_long_modis, on=['date', 'site_index'], how="outer").merge(sites[['site_index', 'site']], on='site_index')[['site', 'date', 'precipitation_mm', 'temperature_c']]
     ts_out.to_csv(config['output_path'], index=False)
