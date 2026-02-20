@@ -2234,8 +2234,8 @@ p_b_hu_median = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, col
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point(size = 4) +
   geom_text_repel(aes(label = species), size = 4, seed = 135) +
-  xlim(-1.6, 1.6) +
-  ylim(-3.5, 3.5) +
+  # xlim(-1.6, 1.6) +
+  # ylim(-3.5, 3.5) +
   theme_minimal() +
   labs(
        # title = "Subadult Effect",
