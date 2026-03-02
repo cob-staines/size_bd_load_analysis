@@ -1,0 +1,1731 @@
+---
+title: "Size vs. Bd modeling: Panamá preliminary results"
+author: Cob Staines
+date: 2025-09-29
+format:
+  html:
+    toc: true
+df-print: kable
+bibliography: references.bib
+csl: ecology.csl
+---
+
+# setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis)
+
+```
+
+## Data selection
+
+```{r}
+#| eval: false
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show data collection code"
+
+## Connect to DB
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+# preliminary data
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd",
+         taxon_capture %in% c("rana_muscosa",
+                              "rana_sierrae")) %>%
+  inner_join(db_bd %>%
+              filter(!is.na(bd_detected)) %>%
+              group_by(sample_id) %>%
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     bd_detected,
+                     bd_its1_copies_per_swab), by = "sample_id") %>%
+  rename(bd_load = bd_its1_copies_per_swab) %>%
+  mutate(bd_detected_co = bd_load >= 6,
+         bd_load_co = if_else(bd_load < 6,
+                                  0,
+                                  bd_load),
+         bd_load_co_density = bd_load_co / svl_mm)
+
+# load populations
+site_year_pop = read.csv(here("data", "sn_resilience_trajectory_classification_pop_lookup_2026-02-28.csv")) %>%
+  mutate(site = as.character(site))
+
+# load resilience trajectory classifications
+pop_year_class = read.csv(here("data", "sn_resilience_trajectory_classification_2026-02-28.csv"))
+
+# load environmental data
+env_agg = read_csv(here("data", "unified_env_agg.csv"))
+
+# define life stage simple
+bd_life_stage = bd_sample %>%
+  filter(life_stage %in% c("adult",
+                           "subadult",
+                           NA)) %>%
+  mutate(life_stage_simple = case_when(
+    is.na(svl_mm) ~ life_stage,
+    (svl_mm >= 40) ~ "adult",
+    (svl_mm < 40) ~ "subadult",
+    .default = NA),
+    year = year(date)) %>%
+  filter(!is.na(life_stage_simple))
+
+bd_model = bd_life_stage %>%
+  filter(site %in% site_year_pop$site) %>%
+  select(sample_id,
+         bd_detected,
+         bd_load,
+         bd_detected_co,
+         bd_load_co,
+         bd_load_co_density,
+         sample_name,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         date,
+         year,
+         site,
+         site_id,
+         region,
+         country) %>%
+  collect() %>%
+  left_join(site_year_pop, by = c("site", "year")) %>%
+  inner_join(pop_year_class %>%
+              select(population,
+                     year,
+                     res_class), by = c("population", "year")) %>%
+  left_join(env_agg %>%
+              select(site,
+                     date,
+                     precip_mm_30_day_sum,
+                     temp_c_30_day_mean), by = c("site", "date")) %>%
+  filter(!is.na(bd_load_co_density))
+
+```
+
+# Descriptive stats
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show descriptive stats code"
+
+bd_model_stats = bd_model %>%
+  group_by(taxon_capture,
+           res_class,
+           life_stage_simple) %>%
+  summarize(n = n(),
+            .groups= "drop")
+
+```
+
+# Modeling
+
+## Model setup
+```{r}
+#| code-fold: true
+#| code-summary: "Show model setup code"
+
+# unified, scaled model
+brms_scales = bd_model %>%
+  group_by() %>%
+  summarize(precip_mm_30_day_sum_mean = mean(precip_mm_30_day_sum),
+            precip_mm_30_day_sum_sd = sd(precip_mm_30_day_sum),
+            temp_c_30_day_mean_mean = mean(temp_c_30_day_mean),
+            temp_c_30_day_mean_sd = sd(temp_c_30_day_mean),
+            precip_mm_30_day_sum2_mean = mean(precip_mm_30_day_sum ^ 2),
+            precip_mm_30_day_sum2_sd = sd(precip_mm_30_day_sum ^ 2),
+            temp_c_30_day_mean2_mean = mean(temp_c_30_day_mean ^ 2),
+            temp_c_30_day_mean2_sd = sd(temp_c_30_day_mean ^ 2))
+
+brms_rescale = function(df, scales) {
+  df_out = df %>%
+    mutate( precip_mm_30_z = (precip_mm_30_day_sum - scales$precip_mm_30_day_sum_mean)/scales$precip_mm_30_day_sum_sd,
+            temp_c_30_z = (temp_c_30_day_mean - scales$temp_c_30_day_mean_mean)/scales$temp_c_30_day_mean_sd,
+            precip_mm_30_z2 = (precip_mm_30_day_sum^2 - scales$precip_mm_30_day_sum2_mean)/scales$precip_mm_30_day_sum2_sd,
+            temp_c_30_z2 = (temp_c_30_day_mean^2 - scales$temp_c_30_day_mean2_mean)/scales$temp_c_30_day_mean2_sd
+    )
+}
+
+brms_data = bd_model %>%
+  mutate(
+    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE))
+  )
+
+
+model_priors <- c(
+  # b
+  prior(normal(0, 5), class = "Intercept"),
+  prior(normal(0, 2),   class = "b"),
+  
+  # hu
+  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 1), class = "b", dpar = "hu"),
+  
+  # Sigma
+  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+  prior(normal(0, 0.3), class = "b", dpar = "sigma"),
+  
+  # Random effects
+  prior(exponential(1), class = "sd")
+)
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+```
+
+## Model fitting
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model fitting code"
+
+# null model
+null_zln <- brm(
+  bd_load_co_density ~ 1,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+null_zln = add_criterion(null_zln, "loo")
+
+saveRDS(null_zln, file = here("snrt_models/snrt_model_results_zln_null.rds"))
+null_zln = readRDS(file = here("snrt_models/snrt_model_results_zln_null.rds"))
+
+
+# fixed env
+m6_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture * res_class + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:res_class:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture * res_class + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:res_class:life_stage_simple),
+    sigma ~ 1 + life_stage_simple * taxon_capture * res_class + (1 | population:res_class:life_stage_simple)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m6_zln = add_criterion(m6_zln, "loo")
+
+saveRDS(m6_zln, file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+
+```
+
+
+## Model comparison
+
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model comparison code"
+# model comparison and selection
+
+(loo_comp_out = loo_compare(null_zln,
+                            m6_zln))
+```
+
+## Model report
+```{r}
+model_select = m6_zln
+
+summary(model_select)
+plot((model_select), ask = FALSE)
+plot(conditional_effects(model_select), ask = FALSE)
+
+```
+
+## pp_check
+```{r}
+model_select = m6_zln
+
+# all
+pp_check(model_select) +
+  scale_x_log10()
+
+# break out by taxon_capture, life_stage_simple, res_class
+brms_data$taxon_life_res = paste(brms_data$taxon_capture, brms_data$life_stage, brms_data$res_class, sep ="_")
+
+brms_data$taxon_life_res = interaction(brms_data$taxon_capture, brms_data$life_stage, brms_data$res_class, drop = TRUE)
+
+pp_check(model_select,
+         type = "dens_overlay_grouped",
+         group = "taxon_capture",
+         ndraws = 1000) +
+  scale_x_log10()
+
+pp_check(model_select,
+         type = "dens_overlay_grouped",
+         group = "life_stage_simple",
+         ndraws = 1000) +
+  scale_x_log10()
+
+pp_check(model_select,
+         type = "dens_overlay_grouped",
+         group = "res_class",
+         ndraws = 1000) +
+  scale_x_log10()
+
+
+```
+
+
+### Prior checks
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show prior checks code"
+#| fig-height: 6
+#| fig-width: 8
+
+model_select = m6_zln
+
+mcmc_plot(model_select, type = "dens", variable = c("prior_b", "b_Intercept", "b_taxon_capturerana_sierrae")) +
+  xlim(-10, 10)
+
+mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept_sigma", "b_sigma_Intercept", "b_sigma_taxon_capturerana_sierrae")) +
+  xlim(-2, 2)
+
+mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept_hu", "b_hu_Intercept", "b_hu_taxon_capturerana_sierrae")) +
+  xlim(-5, 5)
+
+
+```
+
+## Processing and visualization
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show processing & visualization functions"
+
+get_species_name = function(taxon, newline = FALSE) {
+  species_name = str_to_sentence(gsub("_", " ", taxon))
+  if (newline) {
+    species_name = gsub(" ", "\n", species_name)
+  }
+  return(species_name)
+}
+
+```
+
+# Results
+Results are broken out first by species, then combined for comparison between species
+
+## Hypothesis testing
+```{r}
+#| eval: true
+#| echo: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 12
+
+# model_select = m3_zln
+# model_select = m5f_zln
+# model_select = m5f_zln
+model_select = m6_zln
+
+# prevalence
+hu_taxon_subadult = spread_draws(model_select, `b_hu_life_stage_simplesubadult.*`, regex = TRUE) %>%
+  mutate(`b_hu_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
+  pivot_longer(starts_with("b_hu_life_stage_simplesubadult:taxon_capture"),
+               names_to = "parameter",
+               values_to = "hu_adj") %>%
+  mutate(taxon_capture = gsub("b_hu_life_stage_simplesubadult:taxon_capture", "", parameter),
+         hu_subadult = b_hu_life_stage_simplesubadult + hu_adj,
+         species = get_species_name(taxon_capture)) %>%
+  group_by(species) %>%
+  mutate(sp_sd = sd(hu_subadult)) %>%
+  ungroup() %>%
+  mutate(hu_subadult_sc = hu_subadult / sp_sd)
+
+log_th = hu_scale
+
+hu_taxon_subadult_rope = hu_taxon_subadult %>%
+  mutate(in_rope = abs(hu_subadult) <= log_th) %>%
+  group_by(species) %>%
+  summarize(n = n(),
+            pd = pd(hu_subadult)$pd,
+            hdi_50 = hdi(hu_subadult, ci = 0.50),
+            hdi_89 = hdi(hu_subadult, ci = 0.89),
+            hdi_95 = hdi(hu_subadult, ci = 0.95),
+            ratio_rope = sum(in_rope) / n(),
+            ratio_positive = sum(hu_subadult > 0) / n(),
+            ratio_negative = sum(hu_subadult < 0) / n(),
+            ratio_net = ratio_positive - ratio_negative,
+            hu_median = median(hu_subadult),
+            hu_mean = mean(hu_subadult),
+            hu_sd = sd(hu_subadult),
+            hu_var = var(hu_subadult),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_50 = case_when(
+      hdi_50$CI_low > log_th | hdi_50$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_89 = case_when(
+      hdi_89$CI_low > log_th | hdi_89$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_95 = case_when(
+      hdi_95$CI_low > log_th | hdi_95$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    )
+  )
+
+hu_effect_weak = hu_taxon_subadult_rope %>%
+  filter(hdi_zero_50)
+
+# rope prevalence (hu)
+p_hu_dist = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+  geom_density(fill = "#66c2a5", alpha = 1) +
+  facet_wrap("species") +
+  # geom_vline(xintercept=0) +
+  annotate("rect", 
+           xmin = -log_th, xmax = log_th, 
+           ymin = -Inf, ymax = Inf,
+           fill = "#fc8d62", alpha = 0.5) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
+  geom_text(data = hu_taxon_subadult_rope,
+            aes(x = 2,
+                y = 1,
+                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
+            size = 3.5) +
+  xlim(-2.7, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence - Subadult Effect Size (logit scale) [-]",
+       y = "Posterior Density [-] [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_hu_distributions.png"), plot = p_hu_dist, width = 12, height = 6, units = "in")
+
+p_hu_dist
+
+# zero prevalence (hu)
+p_hu_dist_hdi = ggplot(hu_taxon_subadult, aes(x = hu_subadult)) +
+  geom_density(fill = "#66c2a5", alpha = 1) +
+  facet_wrap("species") +
+  # geom_vline(xintercept=0) +
+  geom_rect(data = hu_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
+                ymin = -0.15, ymax = 0),
+            fill = "#bbb", alpha = 1) +
+  geom_rect(data = hu_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
+                ymin = -0.15, ymax = 0),
+            fill = "#666", alpha = 1) + 
+  geom_vline(xintercept = 0, alpha = 1) +
+  xlim(-2.7, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_hu_distributions_hdi.png"), plot = p_hu_dist_hdi, width = 12, height = 6, units = "in")
+
+p_hu_dist_hdi
+
+# posterior median sigma
+# sigma_draws <- posterior_epred(model_select, dpar = "sigma")
+# sigma_mean_per_draw <- apply(sigma_draws, 1, mean)
+# median_b_sigma <- median(sigma_mean_per_draw)
+
+
+# load
+b_taxon_subadult = spread_draws(model_select, `b_life_stage_simplesubadult.*`, regex = TRUE) %>%
+  mutate(`b_life_stage_simplesubadult:taxon_captureanaxyrus_americanus` = 0) %>%
+  pivot_longer(starts_with("b_life_stage_simplesubadult:taxon_capture"),
+               names_to = "parameter",
+               values_to = "b_adj") %>%
+  mutate(taxon_capture = gsub("b_life_stage_simplesubadult:taxon_capture", "", parameter),
+         b_subadult = b_life_stage_simplesubadult + b_adj,
+         species = get_species_name(taxon_capture))
+
+
+
+b_taxon_subadult_rope = b_taxon_subadult %>%
+  mutate(in_rope = abs(b_subadult_sc) <= 0.1) %>%
+  group_by(species) %>%
+  summarize(n = n(),
+            pd = pd(b_subadult)$pd,
+            hdi_50 = hdi(b_subadult, ci = 0.50),
+            hdi_89 = hdi(b_subadult, ci = 0.89),
+            hdi_95 = hdi(b_subadult, ci = 0.95),
+            # ratio_rope = sum(in_rope) / n(),
+            # ratio_positive = sum(b_subadult_sc > 0) / n(),
+            # ratio_negative = sum(b_subadult_sc < 0) / n(),
+            # ratio_net = ratio_positive - ratio_negative,
+            b_median = median(b_subadult),
+            b_mean = mean(b_subadult),
+            b_sd = sd(b_subadult),
+            b_var = var(b_subadult),
+            # b_sc_median = median(b_subadult_sc),
+            # b_sc_mean = mean(b_subadult_sc),
+            .groups = "drop") %>%
+  mutate(
+   hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_50 = case_when(
+      hdi_50$CI_low > log_th | hdi_50$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_89 = case_when(
+      hdi_89$CI_low > log_th | hdi_89$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_rope_95 = case_when(
+      hdi_95$CI_low > log_th | hdi_95$CI_high < -log_th ~ TRUE,
+      .default = FALSE
+    )
+   )
+
+b_effect_weak = b_taxon_subadult_rope %>%
+  filter(hdi_zero_50)
+
+# rope load (b)
+p_b_dist = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+  # geom_vline(xintercept = 0, alpha = 1) +
+  geom_density(fill = "#8da0cb", alpha = 1) +
+  geom_rect(data = b_taxon_subadult_rope, 
+            aes(xmin = -0.1 * median_b_sigma, xmax = 0.1 * median_b_sigma, ymin = -Inf, ymax = Inf),
+            fill = "#fc8d62", alpha = 0.5, inherit.aes = FALSE) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
+  geom_text(data = b_taxon_subadult_rope,
+            aes(x = 3,
+                y = 0.72,
+                label = paste0("ROPE: ", as.character(round(ratio_rope, digits = 3)))),
+            size = 3.5) +
+  facet_wrap("species") +
+  theme_minimal() +
+  xlim(-4, 6) + 
+  labs(
+       # title = "Subadult Effect: Bd Load",
+       x = "Bd Load Density Subadult Effect Size (log scale) [-]",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_b_distributions.png"), plot = p_b_dist, width = 12, height = 6, units = "in")
+
+p_b_dist
+
+# zero load (b)
+p_b_dist_hdi = ggplot(b_taxon_subadult, aes(x = b_subadult)) +
+  # geom_vline(xintercept = 0, alpha = 1) +
+  geom_density(fill = "#8da0cb", alpha = 1) +
+  geom_rect(data = b_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
+                ymin = -0.08, ymax = 0),
+            fill = "#bbb", alpha = 1) +
+  geom_rect(data = b_taxon_subadult_rope, inherit.aes = FALSE,
+            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
+                ymin = -0.08, ymax = 0),
+            fill = "#666", alpha = 1) + 
+  geom_vline(xintercept = 0, alpha = 1) +
+  facet_wrap("species") +
+  theme_minimal() +
+  xlim(-4, 6) + 
+  labs(
+       # title = "Subadult Effect: Bd Load",
+       x = "Bd Load Density Subadult Effect Size (log scale) [-]\nwith 50% & 95% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
+ggsave(here("clh", "prevalence_b_distributions_hdi.png"), plot = p_b_dist_hdi, width = 12, height = 6, units = "in")
+
+p_b_dist_hdi
+  
+  
+
+taxon_subadult = b_taxon_subadult %>%
+  left_join(hu_taxon_subadult, by = c(".draw", ".iteration", ".chain", "taxon_capture", "species"))
+
+# Fraction in ROPE
+taxon_subadult_rope = hu_taxon_subadult_rope %>%
+  full_join(b_taxon_subadult_rope, by = "species", suffix = c("_hu", "_b")) %>%
+  left_join(bd_model_env_select_stats %>%
+              mutate(species = get_species_name(taxon_capture)), by = "species") %>%
+  mutate(region = recode_values(country,
+                                "panama" ~ "Central America",
+                                "usa" ~ "North America",
+                                default = NA))
+
+ggplot(taxon_subadult_rope, aes(x = ratio_rope_hu, y = ratio_rope_b, color = species)) +
+  geom_vline(xintercept = 0.025, color = "blue") +
+  geom_hline(yintercept = 0.025, color = "blue") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: ROPE",
+       x = "Bd Prevalence ROPE fraction (logit scale)",
+       y = "Subadult Bd Load ROPE fraction (log scale)")
+
+# HU median sd
+ggplot(taxon_subadult_rope, aes(y = hu_median, x = ratio_rope_hu, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+# B median sd
+ggplot(taxon_subadult_rope, aes(y = b_median, x = ratio_rope_b, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal()
+
+
+# probability of direction
+ggplot(taxon_subadult_rope, aes(x = pd_hu, y = pd_b, color = species)) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: Probability of Direction (Pd)",
+       x = "Bd Prevalence Pd (logit scale)",
+       y = "Subadult Bd Load Pd (log scale)")
+
+# probability of positive effect
+n_groups <- 19
+full_pal <- plasma(2 * n_groups)  # Generate double for subsetting
+upper_half <- full_pal[1:n_groups]  # Upper ~half
+
+p_ppos = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") + 
+  geom_point(size = 4, color = "#660099") +
+  geom_text_repel(aes(label = species), size = 4, color = "#660099", seed = 123) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence\nProbability of positive effect [-]",
+       y = "Bd Load Density\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16))
+
+ggsave(here("clh", "probability_positive_effect.png"), plot = p_ppos, width = 12, height = 6, units = "in")
+p_ppos
+
+# # colored
+# ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = country)) +
+#   geom_vline(xintercept = 0.5, color = "#aaa") +
+#   geom_hline(yintercept = 0.5, color = "#aaa") + 
+#   geom_point(size = 4) +
+#   geom_text_repel(aes(label = species), size = 4, seed = 123) +
+#   xlim(0, 1) +
+#   ylim(0, 1) +
+#   theme_minimal() +
+#   labs(
+#        # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+#        x = "Bd Prevalence\nProbability of positive effect [-]",
+#        y = "Bd Load Density\nProbability of positive effect [-]") +
+#   theme(legend.position="none") +
+#   theme(text=element_text(size=16))
+
+# no text
+p_ppos_no_text = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") + 
+  geom_point(size = 4, color = "#660099") +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence\nProbability of positive effect [-]",
+       y = "Bd Load Density\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16))
+
+ggsave(here("clh", "probability_positive_effect_no_text.png"), plot = p_ppos_no_text, width = 12, height = 6, units = "in")
+p_ppos_no_text
+
+p_ppos_no_text_classic = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b)) +
+  geom_point(size = 4, color = "#660099") +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_classic() +
+  labs(
+       x = "Bd Prevalence\nProbability of positive effect [-]",
+       y = "Bd Load Density\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+
+ggsave(here("clh", "probability_positive_effect_no_text_classic.png"), plot = p_ppos_no_text_classic, width = 12, height = 6, units = "in")
+
+p_ppos_classic = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b)) +
+  geom_point(size = 4, color = "#660099") +
+  geom_text_repel(aes(label = species), size = 4, color = "#660099", seed = 123) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_classic() +
+  labs(
+       x = "Bd Prevalence\nProbability of positive effect [-]",
+       y = "Bd Load Density\nProbability of positive effect [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = upper_half)
+
+ggsave(here("clh", "probability_positive_effect_classic.png"), plot = p_ppos_classic, width = 12, height = 6, units = "in")
+
+# p_ppos_grid = ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+#   geom_vline(xintercept = 0.5, color = "#aaa") +
+#   geom_hline(yintercept = 0.5, color = "#aaa") + 
+#   geom_vline(xintercept = 0.10, color = "#222", alpha = 0.5, size = 4) +
+#   geom_hline(yintercept = 0.10, color = "#222", alpha = 0.5, size = 4) + 
+#   geom_vline(xintercept = 0.90, color = "#222", alpha = 0.5, size = 4) +
+#   geom_hline(yintercept = 0.90, color = "#222", alpha = 0.5, size = 4) + 
+#   geom_point(size = 4) +
+#   geom_text_repel(aes(label = species), size = 4, seed = 123) +
+#   xlim(0, 1) +
+#   ylim(0, 1) +
+#   theme_minimal() +
+#   labs(
+#        # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+#        x = "Bd Prevalence:\nProbability of positive effect [-]",
+#        y = "Bd Load:\nProbability of positive effect [-]") +
+#   theme(legend.position="none") +
+#   theme(text=element_text(size=16)) +
+#   scale_color_manual(values = upper_half)
+# ggsave(here("clh", "probability_positive_effect_grid.png"), plot = p_ppos_grid, width = 12, height = 6, units = "in")
+# p_ppos_grid
+
+ggplot(taxon_subadult_rope, aes(x = ratio_positive_hu, y = ratio_positive_b, color = species)) +
+  geom_vline(xintercept = 0.5, color = "#aaa") +
+  geom_hline(yintercept = 0.5, color = "#aaa") +
+  geom_vline(xintercept = 0.025, color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 0.025, color = "blue", alpha = 0.5) + 
+  geom_vline(xintercept = 0.975, color = "blue", alpha = 0.5) +
+  geom_hline(yintercept = 0.975, color = "blue", alpha = 0.5) + 
+  # geom_rect(data = data.frame(xmin = 0.025, xmax = 0.975, ymin = 0.025, ymax = 0.975),
+  #         aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+  #         fill = "blue", alpha = 0.1, inherit.aes = FALSE) +
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence FAZ (logit scale)",
+       y = "Bd Load FAZ (log scale)") +
+  theme(legend.position="none")
+
+
+# net direction
+ggplot(taxon_subadult_rope, aes(x = ratio_net_hu, y = ratio_net_b, color = species)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_text_repel(aes(label = species)) +
+  xlim(-1, 1) +
+  ylim(-1, 1) +
+  theme_minimal() +
+  labs(title = "Subadult Effect: Net Direction (Nd)",
+       x = "Bd Prevalence Nd (logit scale)",
+       y = "Bd Load Nd (log scale)") +
+  theme(legend.position="none")
+
+# median
+p_b_hu_median = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 4, color = "#660099") +
+  geom_text_repel(aes(label = species), size = 4, color = "#660099", seed = 135) +
+  # xlim(-1.6, 1.6) +
+  # ylim(-3.5, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size (logit scale) [-]",
+       y = "Bd Load Density\nMedian Subadult Effect Size (log scale) [-]") +
+  theme(legend.position="none")
+
+ggsave(here("clh", "median_effect.png"), plot = p_b_hu_median, width = 12, height = 6, units = "in")
+
+p_b_hu_median
+
+# median no text
+p_b_hu_median_no_text = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 4, color = "#660099") +
+  xlim(-1.6, 1.6) +
+  ylim(-3.5, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size (logit scale) [-]",
+       y = "Bd Load Density\nMedian Subadult Effect Size (log scale) [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16))
+
+ggsave(here("clh", "median_effect_no_text.png"), plot = p_b_hu_median_no_text, width = 12, height = 6, units = "in")
+
+p_b_hu_median_no_text
+
+# median colored
+p_b_hu_median_country = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = region)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 4) +
+  geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  # xlim(-1.6, 1.6) +
+  # ylim(-3.5, 3.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size (logit scale) [-]",
+       y = "Bd Load Density\nMedian Subadult Effect Size (log scale) [-]",
+       color = "Region") +
+  theme(legend.position = c(0.9, 0.9),
+        legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "black")) +
+  theme(text=element_text(size=16)) +
+  scale_color_brewer(palette = "Dark2", type = "qual")
+
+ggsave(here("clh", "median_effect_country.png"), plot = p_b_hu_median_country, width = 12, height = 6, units = "in")
+
+p_b_hu_median_country
+
+# median with ellipse
+p_b_hu_median_ellipse = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+  stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.95, alpha = 0.3) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size w/ 95% Ellipse [-]",
+       y = "Bd Load Density\nMedian Subadult Effect Size  w/ 95% Ellipse [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = rep("#660099", 19))
+
+ggsave(here("clh", "median_effect_ellipse.png"), plot = p_b_hu_median_ellipse, width = 12, height = 6, units = "in")
+
+p_b_hu_median_ellipse
+
+# median with ellipse no text
+p_b_hu_median_ellipse_no_text = ggplot(taxon_subadult_rope, aes(x = hu_median, y = b_median, color = species)) +
+  stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.95, alpha = 0.3) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point(size = 3) +
+  # geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect",
+       x = "Bd Prevalence\nMedian Subadult Effect Size w/ 95% Ellipse [-]",
+       y = "Bd Load Density\nMedian Subadult Effect Size  w/ 95% Ellipse [-]") +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = rep("#660099", 19))
+
+ggsave(here("clh", "median_effect_ellipse_no_text.png"), plot = p_b_hu_median_ellipse_no_text, width = 12, height = 6, units = "in")
+
+p_b_hu_median_ellipse_no_text
+
+
+
+
+# violins
+hu_order = hu_taxon_subadult_rope %>%
+  arrange(hu_median) %>%
+  pull(species)
+
+hu_taxon_subadult$taxon_capture = factor(hu_taxon_subadult$species, levels = hu_order)
+
+hu_violin = ggplot(hu_taxon_subadult, aes(y = taxon_capture, x = hu_subadult)) +
+  geom_violin(draw_quantiles = 0.5, fill = "grey80") +
+  theme_minimal()
+
+
+b_order = b_taxon_subadult_rope %>%
+  arrange(b_median) %>%
+  pull(species)
+
+b_taxon_subadult$taxon_capture = factor(b_taxon_subadult$species, levels = b_order)
+
+b_violin = ggplot(b_taxon_subadult, aes(x = taxon_capture, y = b_subadult)) +
+  geom_violin(draw_quantiles = 0.5, fill = "grey80") +
+  theme_minimal() +
+  scale_x_discrete(position = "top") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0, hjust=0))
+
+# HDI
+
+hu_taxon_subadult_rope$taxon_capture = factor(hu_taxon_subadult_rope$species, levels = rev(hu_order))
+
+hu_box = ggplot(hu_taxon_subadult_rope, aes(x = taxon_capture)) +
+  geom_boxplot(
+    aes(ymin = hdi_89$CI_low, ymax = hdi_89$CI_high,
+        lower = hdi_89$CI_low, upper = hdi_89$CI_high, middle = hu_median),
+    stat = "identity", fill = "black", color = "white") +
+  theme_minimal() +
+  annotate("rect", 
+           ymin = -log_th, ymax = log_th, 
+           xmin = -Inf, xmax = Inf,
+           fill = "red", alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red") +
+  coord_flip()
+
+b_taxon_subadult_rope$taxon_capture = factor(b_taxon_subadult_rope$species, levels = b_order)
+
+b_box = ggplot(b_taxon_subadult_rope, aes(x = taxon_capture)) +
+  geom_boxplot(
+    aes(ymin = hdi_89$CI_low, ymax = hdi_89$CI_high,
+        lower = hdi_89$CI_low, upper = hdi_89$CI_high, middle = b_median),
+    stat = "identity", fill = "black", color = "white") +
+  theme_minimal() +
+  scale_x_discrete(position = "top") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0, hjust=0)) +
+    annotate("rect", 
+           ymin = -0.1 * median_b_sigma, ymax = 0.1 * median_b_sigma, 
+           xmin = -Inf, xmax = Inf,
+           fill = "red", alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red")
+
+# cophen heatmap
+
+```
+
+## absolute indicator values
+```{r}
+
+get_variables(model_select)
+
+hu_taxon_adult = spread_draws(model_select, `b_hu_Intercept|b_hu_taxon_capture.*`, regex = TRUE) %>%
+  mutate(`b_hu_taxon_captureanaxyrus_americanus` = 0) %>%
+  pivot_longer(starts_with("b_hu_taxon_capture"),
+               names_to = "parameter",
+               values_to = "hu_adj") %>%
+  mutate(taxon_capture = gsub("b_hu_taxon_capture", "", parameter),
+         hu_adult = b_hu_Intercept + hu_adj,
+         species = get_species_name(taxon_capture))
+
+b_taxon_adult = spread_draws(model_select, `b_Intercept|b_taxon_capture.*`, regex = TRUE) %>%
+  mutate(`b_taxon_captureanaxyrus_americanus` = 0) %>%
+  pivot_longer(starts_with("b_taxon_capture"),
+               names_to = "parameter",
+               values_to = "b_adj") %>%
+  mutate(taxon_capture = gsub("b_taxon_capture", "", parameter),
+         b_adult = b_Intercept + b_adj,
+         species = get_species_name(taxon_capture))
+
+sigma_taxon = spread_draws(model_select, `b_sigma_Intercept|b_sigma_taxon_capture.*`, regex = TRUE) %>%
+  mutate(`b_sigma_taxon_captureanaxyrus_americanus` = 0) %>%
+  pivot_longer(starts_with("b_sigma_taxon_capture"),
+               names_to = "parameter",
+               values_to = "sigma_adj") %>%
+  mutate(taxon_capture = gsub("b_sigma_taxon_capture", "", parameter),
+         sigma = b_sigma_Intercept + sigma_adj,
+         species = get_species_name(taxon_capture))
+
+param_wide = hu_taxon_adult %>%
+  left_join(hu_taxon_subadult %>%
+              select(.draw,
+                     taxon_capture,
+                     hu_subadult) %>%
+              rename(hu_subadult_marginal = hu_subadult), by = c(".draw", "taxon_capture")) %>%
+  left_join(b_taxon_adult %>%
+              select(.draw,
+                     taxon_capture,
+                     b_adult), by = c(".draw", "taxon_capture")) %>%
+  left_join(b_taxon_subadult %>%
+              select(.draw,
+                     taxon_capture,
+                     b_subadult) %>%
+              rename(b_subadult_marginal = b_subadult), by = c(".draw", "taxon_capture")) %>%
+    left_join(sigma_taxon %>%
+              select(.draw,
+                     taxon_capture,
+                     sigma), by = c(".draw", "taxon_capture")) %>%
+  mutate(hu_subadult = hu_adult + hu_subadult_marginal,
+         b_subadult = b_adult + b_subadult_marginal)
+
+param_long_hu = param_wide %>%
+  pivot_longer(c("hu_adult",
+                 "hu_subadult"),
+               names_to = "life_stage",
+               values_to = "hu")
+
+param_long_b = param_wide %>%
+  pivot_longer(c("b_adult",
+                 "b_subadult"),
+               names_to = "life_stage",
+               values_to = "b")
+
+param_wide_sum = param_wide %>%
+  group_by(taxon_capture, species) %>%
+  summarize(hu_adult_median = median(hu_adult),
+            hu_subadult_median = median(hu_subadult),
+            b_adult_median = median(b_adult),
+            b_subadult_median = median(b_subadult),
+            .groups = "drop")
+
+ggplot(param_wide_sum, aes(x = hu_adult_median, y = hu_subadult_median, color = species)) +
+  # stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.95, alpha = 0.3) +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  theme_minimal() +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = rep("#660099", 19)) +
+  geom_abline(slope=1, intercept=0)
+
+ggplot(param_wide_sum, aes(x = b_adult_median, y = b_subadult_median, color = species)) +
+  # stat_ellipse(data = taxon_subadult, aes(x = hu_subadult, y = b_subadult), level = 0.95, alpha = 0.3) +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = species), size = 4, seed = 135) +
+  theme_minimal() +
+  theme(legend.position="none") +
+  theme(text=element_text(size=16)) +
+  scale_color_manual(values = rep("#660099", 19)) +
+  geom_abline(slope=1, intercept=0)
+
+ggplot(param_long_hu, aes(x = species, y = hu, color = life_stage)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggplot(param_long_b, aes(x = species, y = b, color = life_stage)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+```
+
+## Phylogenetic tree
+```{r}
+#| eval: true
+#| echo: false
+#| warning: false
+
+# build tree from 
+species_list = sort(get_species_name(bd_model_env_select_stats$taxon_capture))
+tnrs_resolved = tnrs_match_names(species_list)
+tnrs_info = taxonomy_taxon_info(ott_ids = ott_id(tnrs_resolved))
+src = tax_sources(tnrs_info)
+tr = tol_induced_subtree(ott_ids = ott_id(tnrs_resolved),
+                         label_format = "name")
+
+# source_studies <- map_dfr(tnrs_resolved$unique_name, function(species) {
+#   result <- studies_find_trees(
+#     property = "ot:ottTaxonName", 
+#     value = species,
+#     detailed = TRUE
+#   )
+#   
+#   tibble(
+#     species = species,
+#     study_id = result$study_ids,
+#     n_matched_trees = result$n_matched_trees,
+#     study_year = result$study_year,
+#     title = result$title
+#   )
+# })
+
+# source_studies_wide = source_studies %>%
+#   select(species, study_id) %>%
+#   mutate(value = 1) %>%
+#   pivot_wider(names_from = species,
+#               values_from = value,
+#               values_fill = 0) %>%
+#   arrange(study_id)
+# 
+# source_studies_unique = source_studies %>%
+#   select(-species) %>%
+#   distinct() %>%
+#   arrange(study_id)
+
+tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
+tr_reordered$tip.label = get_species_name(tr_reordered$tip.label)
+
+# plot tree
+# ggtree(tr, layout = "rectangular") +
+#   geom_tiplab(size = 3, align = TRUE) +
+#   theme_tree2() +
+#   scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
+#                      breaks = c(1, 3, 5, 7))
+
+p_phylo_tree = ggtree(tr_reordered, layout = "rectangular") +
+  geom_tiplab(size = 4, align = TRUE) +
+  theme_tree2() +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.8)),
+                     breaks = c(1, 3, 5, 7))
+
+ggsave(here("clh", "phologeny_tree.png"), plot = p_phylo_tree, width = 5, height = 6, units = "in")
+
+p_phylo_tree
+
+
+# correlate phylogeny with trends
+cophen_dist = cophenetic(tr_reordered)
+cophen_sorted = cophen_dist[sort(rownames(cophen_dist)), sort(colnames(cophen_dist))]
+cophen_upper = cophen_sorted[upper.tri(cophen_sorted, diag = FALSE)]
+
+hu_dist = dist(hu_taxon_subadult_rope$hu_median)
+b_dist = dist(b_taxon_subadult_rope$b_median)
+
+hu_rho = cor.test(hu_dist, cophen_upper, method = "spearman")
+hu_rho
+b_rho = cor.test(b_dist, cophen_upper, method = "spearman")
+b_rho
+```
+
+## Collective results
+```{r}
+#| eval: true
+#| echo: true
+#| output: false
+#| code-fold: true
+#| code-summary: Show code
+
+# m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
+
+choice_model = m5g_zln
+
+model_data = brms_data
+
+draws_all = collect_draws(choice_model) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+density_mat_all = density_mat(log(0.5), 20, 100, draws_all) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+sim_load_all = simulate_bd_load(draws_all, 10, 1000) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+obs_stats_all = sample_stats(model_data) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+```
+
+::: {.panel-tabset}
+### Observed Prevalence
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# observed prevalence
+ggplot(obs_stats_all, aes(y = bd_prevalence, x = species, color = life_stage_simple)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  labs(color = "Life stage") +
+  geom_text(aes(label = paste0("n=", n),  y = label_y),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Modeled Prevalence 
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# model prevalence
+ggplot(draws_all, aes(prevalence, x = species, color = life_stage_simple)) +
+  geom_boxplot(coef = NULL) + 
+  theme_minimal() +
+  ggtitle("Modeled prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n") +
+  labs(color = "Life stage") +
+  ylim(0, 1) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Observed Bd load
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# obsevation bd load
+ggplot(model_data %>%
+         mutate(species = get_species_name(taxon_capture, newline = TRUE)) %>%
+         filter(bd_load_co > 0), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load density) [-]") +
+  labs(color = "Life stage") +
+  geom_text(
+    data = obs_stats_all,
+    aes(
+      x = species,
+      y = max(model_data$log_bd_load_co_density) * label_y * 1.05,
+      label = paste0("n=", n_pos),
+      group = life_stage_simple
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.5), 19) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Modeled Bd load
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# modeled bd load
+ggplot(sim_load_all %>%
+         filter(log_bd_load_co_density > 0.5), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Modeled Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load density) [-]") +
+  labs(color = "Life stage") +
+  ylim(log(0.5), 20) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Modeled Bd load PDF
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 12
+#| fig-height: 6
+# PDF -- facet by species
+ggplot(density_mat_all, aes(x = density,
+                            y = pdf_median,
+                            color = life_stage_simple, 
+                            fill = life_stage_simple)) +
+  geom_ribbon(aes(ymin = pdf_lower,
+                  ymax = pdf_upper), 
+              alpha = 0.15,
+              color = NA) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled PDF of Bd-positive load") +
+  labs(color = "Life stage",
+       fill = "Life stage") +
+  xlab("log(Bd load) [-]") +
+  ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+  scale_x_continuous(limits = c(log(0.5), 20), expand = c(0, 0)) +
+  facet_grid(. ~ gsub(" ", "\n", species))
+
+# # PDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = pdf_median,
+#                             color = taxon_capture, 
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = pdf_lower,
+#                   ymax = pdf_upper), 
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled PDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median probability density [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   facet_grid(life_stage_simple ~ season)
+```
+
+### Moded Bd load CCDF
+```{r}
+#| echo: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 8
+# CCDF -- facet by species
+ggplot(density_mat_all, aes(x = density,
+                            y = ccdf_median,
+                            color = life_stage_simple, 
+                            fill = life_stage_simple)) +
+  geom_ribbon(aes(ymin = ccdf_lower,
+                  ymax = ccdf_upper), 
+              alpha = 0.15,
+              color = NA) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("Modeled CCDF of Bd-positive load") +
+  labs(color = "Life stage",
+       fill = "Life stage") +
+  xlab("log(Bd load) [-]") +
+  ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+  scale_x_continuous(limits = c(log(0.5), 12), expand = c(0, 0)) +
+  ylim(0, 0.75) +
+  # facet_grid(. ~ gsub(" ", "\n", species))
+  facet_wrap("species")
+
+# CCDF -- facet by life_stage & season
+# ggplot(density_mat_all, aes(x = density,
+#                             y = ccdf_median,
+#                             color = taxon_capture,
+#                             fill = taxon_capture)) +
+#   geom_ribbon(aes(ymin = ccdf_lower,
+#                   ymax = ccdf_upper),
+#               alpha = 0.15,
+#               color = NA) +
+#   geom_line() +
+#   theme_minimal() +
+#   ggtitle("Modeled CCDF of Bd-positive load") +
+#   labs(color = "Species",
+#        fill = "Species") +
+#   xlab("log(Bd load) [-]") +
+#   ylab("Median complementary cumulative density (1 - CDF) [-]\n(with 25th to 75th percentiles)") +
+#   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+#   ylim(0, 1) +
+#   facet_grid(. ~ life_stage_simple)
+```
+
+# Environmental conditions
+
+## Distributions
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Environmental conditions distributions code"
+#| fig-height: 6
+#| fig-width: 8
+
+# 15-day
+# ggplot(brms_data, aes(x = temp_c_15_day_mean, y = precip_mm_15_day_sum, color = life_stage_simple)) +
+#   geom_point(alpha = 0.1) +
+#   stat_ellipse() +
+#   facet_wrap(. ~ taxon_capture) +
+#   xlim(-5, 40) +
+#   ylim(0, 200) +
+#   labs(x = "15-day temperature mean (degC)", 
+#        y = "15-day precipitation total (mm)",
+#        title = "Temperature v. precipitation") +
+#   theme_minimal()
+
+# 30-day by species
+ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = life_stage_simple)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  facet_wrap(. ~ taxon_capture) +
+  xlim(-5, 40) +
+  ylim(0, 400) +
+  labs(x = "30-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+# 30 day collective
+ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = taxon_capture)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  labs(x = "30-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+# 30 day collective, scaled to climate by species
+ggplot(brms_data, aes(x = temp_c_30_sp_z, y = precip_mm_30_sp_z, color = taxon_capture)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  labs(x = "30-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+
+# ggplot(brms_data, aes(x = temp_c_30_sp_z2, y = precip_mm_30_sp_z2, color = life_stage_simple)) +
+#   geom_point(alpha = 0.1) +
+#   stat_ellipse() +
+#   facet_wrap(. ~ taxon_capture) +
+#   labs(x = "30-day temperature mean (degC)", 
+#        y = "30-day precipitation total (mm)",
+#        title = "Temperature v. precipitation") +
+#   theme_minimal()
+```
+
+## Tempurature effects
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show temperature effects code"
+#| fig-height: 6
+#| fig-width: 8
+
+select_model = m5f_zln
+# select_model = m6_zln
+
+climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
+
+# Temperature dependence
+temp_range = seq(-5, 45, length.out = 100)
+
+temp_grid = expand_grid(temp_c_15_day_mean = temp_range, .draw = 1:nrow(climate_draws)) %>%
+  mutate(temp_c_30_day_mean = temp_c_15_day_mean) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    temp_c_15_z = (temp_c_15_day_mean - brms_scales$temp_c_15_day_mean_mean) / brms_scales$temp_c_15_day_mean_sd,
+    temp_c_15_z2 = (temp_c_15_day_mean^2 - brms_scales$temp_c_15_day_mean2_mean) / brms_scales$temp_c_15_day_mean2_sd,
+    temp_c_30_z = (temp_c_30_day_mean - brms_scales$temp_c_30_day_mean_mean) / brms_scales$temp_c_30_day_mean_sd,
+    temp_c_30_z2 = (temp_c_30_day_mean^2 - brms_scales$temp_c_30_day_mean2_mean) / brms_scales$temp_c_30_day_mean2_sd,
+    b_pred = b_temp_c_30_z * temp_c_30_z + b_temp_c_30_z2 * temp_c_30_z2 + b_Intercept,
+    hu_pred = b_hu_temp_c_15_z * temp_c_15_z + b_hu_temp_c_15_z2 * temp_c_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(temp_c_15_day_mean) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  ) %>%
+  rename(temp_c = temp_c_15_day_mean)
+
+# prevalence
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day mean temperature (degC)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. temperature") +
+  theme_minimal()
+
+# load
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day mean temperature (degC)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. temperature") +
+  theme_minimal()
+```
+
+## Precipitation effects
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show precipitation effects code"
+#| fig-height: 6
+#| fig-width: 8
+# precipitation depencence
+
+daily_precip_range = seq(0, 20, length.out = 100)
+
+precip_grid = expand_grid(daily_precip = daily_precip_range, .draw = 1:nrow(climate_draws)) %>%
+  mutate(precip_mm_15_day_sum = daily_precip * 15,
+         precip_mm_30_day_sum = daily_precip * 30) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    precip_mm_15_z = (precip_mm_15_day_sum - brms_scales$precip_mm_15_day_sum_mean) / brms_scales$precip_mm_15_day_sum_sd,
+    precip_mm_15_z2 = (precip_mm_15_day_sum^2 - brms_scales$precip_mm_15_day_sum2_mean) / brms_scales$precip_mm_15_day_sum2_sd,
+    precip_mm_30_z = (precip_mm_30_day_sum - brms_scales$precip_mm_30_day_sum_mean) / brms_scales$precip_mm_30_day_sum_sd,
+    precip_mm_30_z2 = (precip_mm_30_day_sum^2 - brms_scales$precip_mm_30_day_sum2_mean) / brms_scales$precip_mm_30_day_sum2_sd,
+    b_pred = b_precip_mm_30_z * precip_mm_30_z + b_precip_mm_30_z2 * precip_mm_30_z2 + b_Intercept,
+    hu_pred = b_hu_precip_mm_15_z * precip_mm_15_z + b_hu_precip_mm_15_z2 * precip_mm_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(daily_precip,
+           precip_mm_15_day_sum,
+           precip_mm_30_day_sum) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  )
+
+# prevalence
+ggplot(precip_grid, aes(x = precip_mm_15_day_sum)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day total precipitation (mm)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. precipitation") +
+  theme_minimal()
+
+# load
+ggplot(precip_grid, aes(x = precip_mm_30_day_sum)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day total precipitation (mm)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. precipitation") +
+  theme_minimal()
+
+```
+
+## Tempurature effects (scaled by species climate)
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show temperature effects code"
+#| fig-height: 6
+#| fig-width: 8
+
+
+select_model = m6_zln
+
+# fixed effects
+climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
+
+# Temperature dependence
+temp_range = seq(-3, 3, length.out = 100)
+
+# taxa = brms_data %>%
+#   select(taxon_capture) %>%
+#   distinct() %>%
+#   pull(taxon_capture) %>%
+#   sort()
+
+## Stumped by how to back-calculate the temp_z2 values from the temp_z values... I think this has to be done on a species-by-species basis...
+
+temp_grid = expand_grid(temp_z_15_mean = temp_range,
+                        .draw = 1:nrow(climate_draws)) %>%
+  mutate(temp_z_30_mean = temp_z_15_mean) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    temp_c_15_z = (temp_c_15_day_mean - brms_scales$temp_c_15_day_mean_mean) / brms_scales$temp_c_15_day_mean_sd,
+    temp_c_15_z2 = (temp_c_15_day_mean^2 - brms_scales$temp_c_15_day_mean2_mean) / brms_scales$temp_c_15_day_mean2_sd,
+    temp_c_30_z = (temp_c_30_day_mean - brms_scales$temp_c_30_day_mean_mean) / brms_scales$temp_c_30_day_mean_sd,
+    temp_c_30_z2 = (temp_c_30_day_mean^2 - brms_scales$temp_c_30_day_mean2_mean) / brms_scales$temp_c_30_day_mean2_sd,
+    b_pred = b_temp_c_30_sp_z * temp_c_30_z + b_temp_c_30_sp_z2 * temp_c_30_z2 + b_Intercept,
+    hu_pred = b_hu_temp_c_15_sp_z * temp_c_15_z + b_hu_temp_c_15_sp_z2 * temp_c_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(temp_c_15_day_mean) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  ) %>%
+  rename(temp_c = temp_c_15_day_mean)
+
+# prevalence
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day mean temperature (degC)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. temperature") +
+  theme_minimal()
+
+# load
+ggplot(temp_grid, aes(x = temp_c)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day mean temperature (degC)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. temperature") +
+  theme_minimal()
+```
+
+## Precipitation effects (scaled by species climate)
+```{r}
+#| eval: true
+#| code-fold: true
+#| code-summary: "Show precipitation effects code"
+#| fig-height: 6
+#| fig-width: 8
+# precipitation depencence
+
+daily_precip_range = seq(0, 20, length.out = 100)
+
+precip_grid = expand_grid(daily_precip = daily_precip_range, .draw = 1:nrow(climate_draws)) %>%
+  mutate(precip_mm_15_day_sum = daily_precip * 15,
+         precip_mm_30_day_sum = daily_precip * 30) %>%
+  left_join(climate_draws, by = ".draw") %>%
+  mutate(
+    precip_mm_15_z = (precip_mm_15_day_sum - brms_scales$precip_mm_15_day_sum_mean) / brms_scales$precip_mm_15_day_sum_sd,
+    precip_mm_15_z2 = (precip_mm_15_day_sum^2 - brms_scales$precip_mm_15_day_sum2_mean) / brms_scales$precip_mm_15_day_sum2_sd,
+    precip_mm_30_z = (precip_mm_30_day_sum - brms_scales$precip_mm_30_day_sum_mean) / brms_scales$precip_mm_30_day_sum_sd,
+    precip_mm_30_z2 = (precip_mm_30_day_sum^2 - brms_scales$precip_mm_30_day_sum2_mean) / brms_scales$precip_mm_30_day_sum2_sd,
+    b_pred = b_precip_mm_30_z * precip_mm_30_z + b_precip_mm_30_z2 * precip_mm_30_z2 + b_Intercept,
+    hu_pred = b_hu_precip_mm_15_z * precip_mm_15_z + b_hu_precip_mm_15_z2 * precip_mm_15_z2 + b_hu_Intercept
+  ) %>%
+  group_by(daily_precip,
+           precip_mm_15_day_sum,
+           precip_mm_30_day_sum) %>%
+  summarise(
+    b_mean = mean(b_pred),
+    b_med = median(b_pred),
+    b_lower_95 = quantile(b_pred, 0.025),
+    b_upper_95 = quantile(b_pred, 0.975),
+    b_lower_89 = quantile(b_pred, 0.055),
+    b_upper_89 = quantile(b_pred, 0.945),
+    hu_mean = mean(hu_pred),
+    hu_med = median(hu_pred),
+    hu_lower_95 = quantile(hu_pred, 0.025),
+    hu_upper_95 = quantile(hu_pred, 0.975),
+    hu_lower_89 = quantile(hu_pred, 0.055),
+    hu_upper_89 = quantile(hu_pred, 0.945),
+    p_mean = plogis(mean(hu_pred)),
+    p_med = plogis(median(hu_pred)),
+    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
+    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
+    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
+    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
+    .groups = "drop"
+  )
+
+# prevalence
+ggplot(precip_grid, aes(x = precip_mm_15_day_sum)) +
+  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = p_mean), linewidth = 1) +
+  labs(x = "15-day total precipitation (mm)", 
+       y = "Probability of Bd detection",
+       title = "Bd prevalence v. precipitation") +
+  theme_minimal()
+
+# load
+ggplot(precip_grid, aes(x = precip_mm_30_day_sum)) +
+  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
+              fill = "steelblue", alpha = 0.3) +
+  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = b_mean), linewidth = 1) +
+  labs(x = "30-day total precipitation (mm)", 
+       y = "log(+ Bd load)",
+       title = "Bd load v. precipitation") +
+  theme_minimal()
+
+```
