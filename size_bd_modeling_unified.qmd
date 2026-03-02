@@ -60,7 +60,7 @@ I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd densi
 #| code-summary: "Show data collection code"
 
 ## Connect to DB
-dbcon = hopToDB("ribbitr_ch", hopReg = FALSE)
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -1207,6 +1207,10 @@ m5f_zln <- add_criterion(m5f_zln, "loo")
 saveRDS(m5f_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
 m5f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
 
+##
+## I think I should drop the (1|population) terms and keep only the (1|population:taxon_capture:life_stage_simple) terms... maybe? Or does the fact that they are not neatly nested mean this not trully redundant?
+##
+##
 m5g_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
@@ -1392,9 +1396,10 @@ sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
                             ))
 ```
 
+
 ## Model checks
 
-### Correlation checks
+### Fitting and correlation checks
 ```{r}
 #| eval: true
 #| code-fold: true
@@ -1402,8 +1407,12 @@ sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
 #| fig-height: 6
 #| fig-width: 8
 
-m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
-VarCorr(m5g_zln)
+model_select = m5g_zln
+
+summary(model_select)
+plot((model_select), ask = FALSE)
+plot(conditional_effects(model_select), ask = FALSE)
+VarCorr(model_select)
 ```
 
 ### Posterios predictive checks
@@ -1415,49 +1424,60 @@ VarCorr(m5g_zln)
 #| fig-width: 8
 
 color_scheme_set("viridis")
+model_select = m5g_zln
 
-# mcmc_plot(m5c_zln, type = "trace")
-# mcmc_plot(m6b_zln, type = "dens")
-# mcmc_plot(m5f_zln, type = "intervals")
-# mcmc_plot(m6b_zln, type = "acf")
 
-# pp_check(null_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m1_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m2_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m2b_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m2b_zga, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m3_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m4_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m5_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m5b_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m5c_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m5d_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
-# 
-# pp_check(m5e_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
-#   scale_x_log10()
+pp_check(model_select,
+         type = "dens_overlay",
+         prefix = "ppc",
+         ndraws = 100) +
+  scale_x_log10()
 
-pp_check(m5g_zln, type = "dens_overlay", prefix = "ppc", ndraws = 100) +
+# break out by taxon
+pp_check(model_select,
+         type = "dens_overlay_grouped",
+         group = "taxon_capture",
+         ndraws = 100) +
+  scale_x_log10()
+
+# break out rona sierrae independently
+yrep = posterior_predict(model_select,
+                         ndraws = 1000)
+ind_rs = which(brms_data$taxon_capture == "rana_sierrae")
+ind_rs_not = which(brms_data$taxon_capture != "rana_sierrae")
+y_rs = brms_data$bd_load_co_density[ind_rs]
+y_rs_not = brms_data$bd_load_co_density[ind_rs_not]
+
+yrep_rs = yrep[, ind_rs]
+yrep_rs_not = yrep[, ind_rs_not]
+
+y_combined = c(y_rs, y_rs_not)
+yrep_combined = cbind(yrep_rs, yrep_rs_not)
+group_labels = c(rep("rana_sierrae", length(y_rs)),
+                 rep("rana_sierrae_not", length(y_rs_not)))
+
+ppc_dens_overlay_grouped(y_combined,
+                         yrep_combined,
+                         group = group_labels) +
+  scale_x_log10()
+
+# break our rana sierrae into life stage
+ind_adult = which(brms_data$taxon_capture == "rana_sierrae" & brms_data$life_stage_simple == "adult")
+ind_sub = which(brms_data$taxon_capture == "rana_sierrae" & brms_data$life_stage_simple == "subadult")
+y_adult = brms_data$bd_load_co_density[ind_adult]
+y_sub = brms_data$bd_load_co_density[ind_sub]
+
+yrep_adult = yrep[, ind_adult]
+yrep_sub = yrep[, ind_sub]
+
+y_combined = c(y_adult, y_sub)
+yrep_combined = cbind(yrep_adult, yrep_sub)
+group_labels = c(rep("rana_sirrae_adult", length(y_adult)),
+                 rep("rana_sierrae_subadult", length(y_sub)))
+
+ppc_dens_overlay_grouped(y_combined,
+                         yrep_combined,
+                         group = group_labels) +
   scale_x_log10()
 ```
 
