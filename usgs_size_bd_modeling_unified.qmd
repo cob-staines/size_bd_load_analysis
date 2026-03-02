@@ -85,6 +85,37 @@ usgs_data = usgs_clean %>%
   filter(taxon_capture %in% species_valid)
 ```
 
+# descriptive stats
+```{r}
+
+usgs_data_stats = usgs_data %>%
+  mutate(year = year(mdy(CollectionDate))) %>%
+  group_by(ScientificName) %>%
+  summarise(site_n = n_distinct(SiteName),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            adult_n = sum(life_stage_simple == "adult"),
+            adult_n_pos = sum(life_stage_simple == "adult" & (bd_load_co_density > 0)),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            subadult_n_pos = sum(life_stage_simple == "subadult" & (bd_load_co_density > 0)),
+            .groups = "drop")
+
+usgs_clean_stats = usgs_clean %>%
+  mutate(year = year(mdy(CollectionDate))) %>%
+  group_by(ScientificName) %>%
+  summarise(site_n = n_distinct(SiteName),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            adult_n = sum(life_stage_simple == "adult"),
+            adult_n_pos = sum(life_stage_simple == "adult" & (bd_load_co_density > 0)),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            subadult_n_pos = sum(life_stage_simple == "subadult" & (bd_load_co_density > 0)),
+            .groups = "drop")
+
+```
+
 ## Model setup
 ```{r}
 #| code-fold: true
