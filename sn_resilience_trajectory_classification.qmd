@@ -962,6 +962,9 @@ pop_year_class = pop_year_bd %>%
       # adult_bd_prevalence < 0.5 ~"1-naive",
     .default = NA))
 
+write_csv(pop_year_class, here("data", paste0("sn_resilience_trajectory_classification_", today(), ".csv")))
+write_csv(site_pop_year, here("data", paste0("sn_resilience_trajectory_classification_pop_lookup_", today(), ".csv")))
+
 
 ```
 ::: {.callout-note collapse="true"}
