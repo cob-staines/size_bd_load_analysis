@@ -454,6 +454,45 @@ get_species_name = function(taxon, newline = FALSE) {
   return(species_name)
 }
 
+wilson_ci = function(p_hat, n, conf.level = 0.95) {
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[2])
+}
+
+sample_stats_grouped = function(obs_grouped) {
+  obs_grouped %>%
+    summarise(n = n(),
+              n_pos = sum(bd_detected_co),
+              bd_prevalence = sum(bd_detected_co) / n(),
+              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+              min_load_inf = min(bd_load_co_density[bd_detected_co > 0]),
+              q_25_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.25),
+              q_50_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.50),
+              q_75_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.75),
+              max_load_inf = max(bd_load_co_density[bd_detected_co > 0]),
+              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+              .groups = "drop")
+}
+
 ```
 
 # Results
@@ -619,6 +658,7 @@ group_draws_agg = group_draws %>%
             hu_median = median(hu),
             sigma_median = median(hu),
             .groups = "drop")
+
 # visualize draws
 ggplot(group_draws, aes(x = hu, y = b, color = res_class)) +
   geom_point(alpha = 0.1) +
@@ -632,7 +672,26 @@ ggplot(group_draws_agg, aes(x = hu_median, y = b_median, color = life_stage_simp
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
-ggplot(group_draws, aes(y = hu, x = res_class, color = life_stage_simple)) +
+# observed
+obs_data = brms_data %>%
+  group_by(taxon_capture,
+           life_stage_simple,
+           res_class) %>%
+  sample_stats_grouped()
+
+ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = paste0("n=", n), y = 1),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1) +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+# modeled
+ggplot(group_draws, aes(y = 1 - plogis(hu), x = res_class, color = life_stage_simple)) +
   geom_boxplot() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
