@@ -463,7 +463,7 @@ plot_ccdf = ggplot(ccdf_extended_adult, aes(x = ccdf_x,
                           color = species)) +
   geom_line() +
   theme_minimal() +
-  ggtitle("CCDF ofobserved  Bd-positive load") +
+  ggtitle("CCDF of observed Bd-positive load") +
   labs(color = "Species",
        fill = "Species") +
   xlab("log(Bd load) [-]") +
