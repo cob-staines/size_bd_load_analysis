@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra)
 
 ```
 ## Data selection
@@ -52,54 +52,141 @@ Species were included if supported by least 14 swabbed adults and subadults (eac
 ### Bd density and Zero-cutoff
 I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd density per distance of skin swabbed, to correct for linear effects of larger swabbing area in larger frogs. I also set any Bd ITS copy numbers < (or 1/10 zoospore equivalent) equal to zero to represent uncertainty in qPCR results, and support sonsistency in zero-inflation modeling.
 
-
+### RACA
 ```{r}
-#| eval: false
-#| warning: false
-#| code-fold: true
-#| code-summary: "Show data collection code"
-
-## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
-
-# table pointers
-db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
-db_sample = tbl(dbcon, Id("survey_data", "sample"))
-db_capture = tbl(dbcon, Id("survey_data", "capture"))
-db_survey = tbl(dbcon, Id("survey_data", "survey"))
-db_visit = tbl(dbcon, Id("survey_data", "visit"))
-db_site = tbl(dbcon, Id("survey_data", "site"))
-db_region = tbl(dbcon, Id("survey_data", "region"))
-db_country = tbl(dbcon, Id("survey_data", "country"))
-
-# preliminary data
-bd_sample = db_sample %>%
-  right_join(db_capture, by = "capture_id") %>%
-  left_join(db_survey, by = "survey_id") %>%
-  left_join(db_visit, by = "visit_id") %>%
-  left_join(db_site, by = "site_id") %>%
-  left_join(db_region, by = "region_id") %>%
-  left_join(db_country, by = "country_id") %>%
-  filter(sample_type == "bd") %>%
-  inner_join(db_bd %>%
-              filter(!is.na(bd_detected)) %>%
-               # limit to one qPCR result per sample
-              group_by(sample_id) %>%
-              slice_sample(n = 1) %>%
-              ungroup() %>%
-              select(sample_id,
-                     bd_detected,
-                     bd_its1_copies_per_swab), by = "sample_id")
 
 # csv data
 ##  RACA data
-raca_data = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-02-24.csv")) %>%
+raca_data = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
   clean_names() %>%
-  group_by(life_stage) %>%
-  summarize(count = n(),
-            svl_min = min(svl_mm, na.rm = TRUE),
-            svl_max = max(svl_mm, na.rm = TRUE),
-            .groups = "drop")
+  filter(!(life_stage %in% c("L", "M"))) %>%
+  rename(site = site_name,
+         body_mass_g = weight_g,
+         site_utme = utme_site,
+         site_utmn = utmn_site,
+         bd_its_copies = bd_swab_results_its) %>%
+  mutate(life_stage_simple = case_when(
+    svl_mm >= 50 ~ "adult",
+    svl_mm < 50 ~ "subadult"),
+    date = as.Date(date),
+    site = tolower(gsub(" ", "_", site)),
+    site_utm_zone = 11,  # verify
+    population = site,
+    region = "W",
+    country = "usa",
+    project = "RACA",
+    taxon_capture = "rana_cascadae") %>%
+  filter(!is.na(bd_its_copies))
+
+raca_population_valid = raca_data %>%
+  group_by(population) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_adult > 0,
+         n_subadult > 0)
+
+raca_sites = raca_data %>%
+  select(site,
+         site_utme,
+         site_utmn) %>%
+  distinct()
+
+# convert to lat lon
+raca_points = cbind(raca_sites$site_utme,
+                    raca_sites$site_utmn)
+
+v_utm = vect(raca_points, crs="+proj=utm +zone=10 +datum=WGS84  +units=m")
+v_ll = project(v_utm, "+proj=longlat +datum=WGS84")
+lonlat = geom(v_ll)[, c("x", "y")]
+
+raca_sites_ll = raca_sites %>%
+  bind_cols(lonlat) %>%
+  rename(site_longitude = x,
+         site_latitude = y) %>%
+  select(site,
+         site_latitude,
+         site_longitude)
+
+raca_valid = raca_data %>%
+  filter(population %in% raca_population_valid$population) %>%
+  left_join(raca_sites_ll, by = "site") %>%
+  select(taxon_capture,
+         date,
+         site,
+         population,
+         bd_its_copies,
+         life_stage_simple,
+         life_stage,
+         sex,
+         svl_mm,
+         site_latitude,
+         site_longitude,
+         region,
+         country,
+         project)
+
+```
+
+### USGS
+```{r}
+
+## laod USGS data
+usgs_raw = read.csv(here("data", "USGSBsalBdDataFull.csv"))
+
+usgs_clean = usgs_raw %>%
+  clean_names() %>%
+  rename(site_latitude = latitude,
+         site_longitude = longitude,
+         svl_mm = body_length,
+         life_stage = age,
+         region = reg,
+         bd_its_copies = copy_num) %>%
+  mutate(taxon_capture = tolower(gsub(" ", "_", scientific_name)),
+         life_stage_simple = tolower(life_stage),
+         life_stage_simple = recode_values(life_stage_simple,
+                                        "juvenile" ~ "subadult",
+                                        default = life_stage_simple),
+         date = mdy(collection_date),
+         site = paste0("usgs_", site_id),
+         population = site,
+         project = "usgs",
+         country = "usa") %>%
+  filter(!is.na(taxon_capture),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("subadult", "adult"))
+
+usgs_taxon_population_valid = usgs_clean %>%
+  group_by(taxon_capture, population) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_adult > 0,
+         n_subadult > 0)
+
+usgs_valid = usgs_clean %>%
+  inner_join(usgs_taxon_population_valid %>%
+               select(taxon_capture,
+                      population), by = c("taxon_capture", "population")) %>%
+  select(taxon_capture,
+         svl_mm,
+         sex,
+         life_stage_simple,
+         life_stage,
+         date,
+         bd_its_copies,
+         m30max,
+         population,
+         site,
+         site_latitude,
+         site_longitude,
+         region,
+         country,
+         project)
+```
+
+### RIBBiTR, etc.
+```{r}
 
 ## SN populations
 sn_populations = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
@@ -116,6 +203,44 @@ population_valid_pa = c("altos_de_campana",
                         "el_valle",
                         "santa_fe")
 
+# RIBBiTR data
+
+## Connect to DB
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_project = tbl(dbcon, Id("survey_data", "project"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+
+# preliminary data
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  left_join(db_project, by = "project_id") %>%
+  filter(sample_type == "bd",
+         !is.na(taxon_capture)) %>%
+  inner_join(db_bd %>%
+              filter(!is.na(bd_detected)) %>%
+               # limit to one qPCR result per sample
+              group_by(sample_id) %>%
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     bd_detected,
+                     bd_its1_copies_per_swab), by = "sample_id")
+
 # define populations
 bd_population = bd_sample %>%
   left_join(sn_populations, by = "site", copy = TRUE) %>%
@@ -124,24 +249,25 @@ bd_population = bd_sample %>%
     region == "california" ~ population_sn,
     .default = site
   )) %>%
-  filter(country != "panama" | (country == "panama" & population %in% population_valid_pa))
+  filter(country != "panama" | (country == "panama" & population %in% population_valid_pa),
+         !is.na(site_latitude))
 
-bd_stats = bd_population %>%
-  filter(!is.na(taxon_capture),
-         life_stage %in% c("adult",
-                           "subadult",
-                           "juvenile",
-                           NA)) %>%
-  group_by(country,
-           taxon_capture,
-           life_stage) %>%
-  summarize(n = n(),
-            regions = str_flatten(distinct(region), collapse = ", "),
-            .groups = "drop") %>%
-  collect() %>%
-  arrange(country,
-          taxon_capture,
-          life_stage)
+# bd_stats = bd_population %>%
+#   filter(!is.na(taxon_capture),
+#          life_stage %in% c("adult",
+#                            "subadult",
+#                            "juvenile",
+#                            NA)) %>%
+#   group_by(country,
+#            taxon_capture,
+#            life_stage) %>%
+#   summarize(n = n(),
+#             regions = str_flatten(distinct(region), collapse = ", "),
+#             .groups = "drop") %>%
+#   collect() %>%
+#   arrange(country,
+#           taxon_capture,
+#           life_stage)
 
 # define life stage simple
 bd_life_stage = bd_population %>%
@@ -283,35 +409,19 @@ bd_life_stage = bd_population %>%
 # identify valid species & populations
 ## drop pops without both adults and juveniles
 ## drop species without 14 or more adults and juveniles each
-pop_valid = bd_life_stage %>%
+pop_taxa_valid = bd_life_stage %>%
   group_by(taxon_capture, population) %>%
-  mutate(pop_adult_present = any(life_stage_simple == "adult"),
-         pop_subadult_present = any(life_stage_simple == "subadult")) %>%
-  ungroup() %>%
-  filter(pop_adult_present & pop_subadult_present)
-
-species_valid = pop_valid %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarise(count = n(),
-            count_gt_14 = n() >= 14,
+  summarize(n_adult = sum(as.integer(life_stage_simple == "adult")),
+            n_subadult = sum(as.integer(life_stage_simple == "subadult")),
             .groups = "drop") %>%
-  group_by(taxon_capture) %>%
-  filter(sum(as.integer(count_gt_14)) == 2) %>%
-  ungroup() %>%
-  select(taxon_capture) %>%
-  distinct()
-
-pop_species_valid = pop_valid %>%
-  inner_join(species_valid, by = "taxon_capture") %>%
-  select(taxon_capture,
-         population) %>%
-  distinct()
+  filter(n_adult > 0,
+         n_subadult > 0)
 
 # identify valid samples
 bd_sample_valid = bd_life_stage %>%
   mutate(year = year(date),
-         month = month(date)) %>%
-  inner_join(pop_species_valid, by = c("taxon_capture", "population")) %>%
+         project = project_id) %>%
+  inner_join(pop_taxa_valid, by = c("taxon_capture", "population")) %>%
   # limit to 1 bd sample per capture
   group_by(capture_id) %>%
   slice_sample(n = 1) %>%
@@ -328,30 +438,20 @@ bd_sample_valid = bd_life_stage %>%
          body_mass_g,
          sex,
          date,
-         month,
          year,
          site,
-         site_id,
+         site_latitude,
+         site_longitude,
          population,
          region,
-         country) %>%
+         country,
+         project) %>%
   collect()
 
 # final data selection and cleaning for model
-bd_model = bd_sample_valid %>%
-  rename(bd_load = bd_its1_copies_per_swab) %>%
-  mutate(bd_detected_co = bd_load >= 6,
-         bd_load_co = if_else(bd_load < 6,
-                                  0,
-                                  bd_load),
-         bd_load_co_density = bd_load_co / svl_mm,
-         log_bd_load_co_density = log(bd_load_co_density),
-         log_bd_load_co = log(bd_load_co)) %>%
-  select(bd_detected_co,
-         bd_load_co,
-         log_bd_load_co,
-         bd_load_co_density,
-         log_bd_load_co_density,
+ribbitr_valid = bd_sample_valid %>%
+  rename(bd_its_copies = bd_its1_copies_per_swab) %>%
+  select(bd_its_copies,
          taxon_capture,
          life_stage,
          life_stage_simple,
@@ -359,15 +459,50 @@ bd_model = bd_sample_valid %>%
          body_mass_g,
          sex,
          date,
-         month,
          year,
          site,
-         site_id,
+         site_latitude,
+         site_longitude,
          population,
          region,
-         country)
+         country,
+         project)
+
+```
+
+### Combine datasets
+```{r}
+
+peace = compare_df_cols(raca_valid,
+                        usgs_valid,
+                        ribbitr_valid)
+
+data_combined = bind_rows(raca_valid,
+                      usgs_valid,
+                      ribbitr_valid) %>%
+  mutate(bd_detected_co = bd_its_copies >= 10,
+         bd_load_co = if_else(bd_its_copies < 10,
+                                  0,
+                                  bd_its_copies),
+         bd_load_co_density = bd_load_co / svl_mm)
+  
+
+taxa_valid = data_combined %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarise(count = n(),
+            count_gt_14 = n() >= 14,
+            .groups = "drop") %>%
+  group_by(taxon_capture) %>%
+  filter(sum(as.integer(count_gt_14)) == 2) %>%
+  ungroup() %>%
+  select(taxon_capture) %>%
+  distinct()
+
+bd_model = data_combined %>%
+  filter(taxon_capture %in% taxa_valid$taxon_capture)
 
 head(bd_model)
+
 ```
 
 ## Environmental data
@@ -406,59 +541,57 @@ temporal_report = bd_model %>%
             .groups = "drop")
 
 
-chunk_date_range <- function(start_date, end_date, max_years = 5) {
-  start <- as.Date(start_date)
-  end <- as.Date(end_date)
-  chunks <- data.frame(start_date = as.Date(character()), end_date = as.Date(character()))
-  
-  current_start <- start
-  while (current_start < end) {
-    chunk_end <- pmin(end, floor_date(current_start, "year") %m+% years(max_years) - days(1))
-    chunks <- bind_rows(chunks, data.frame(start_date = current_start, end_date = chunk_end))
-    current_start <- chunk_end + days(1)
-  }
-  
-  return(chunks)
-}
+# chunk_date_range = function(start_date, end_date, max_years) {
+#   start <- as.Date(start_date)
+#   end <- as.Date(end_date)
+#   chunks <- data.frame(start_date = as.Date(character()), end_date = as.Date(character()))
+#   
+#   current_start <- start
+#   while (current_start < end) {
+#     chunk_end <- pmin(end, floor_date(current_start, "year") %m+% years(max_years) - days(1))
+#     chunks <- bind_rows(chunks, data.frame(start_date = current_start, end_date = chunk_end))
+#     current_start <- chunk_end + days(1)
+#   }
+#   
+#   return(chunks)
+# }
 
 
 # export site list and coords
-spatial_buffer = 0.025  # decimal degrees
 temporal_buffer = 60  # days
-min_date = min(bd_model$date) - days(temporal_buffer)
-max_date = max(bd_model$date)
-year_chunk = 11
+# year_chunk = 11
 
-# all sites for full date range, chunked by year_chunk
-all_sites = bd_model %>%
-  select(site_id, population, region, country) %>%
-  distinct()
+site_coords = bd_model %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(start_date = min(date) - days(temporal_buffer),
+            end_date = max(date),
+            .groups = "drop") %>%
+  rename(site_name = site,
+         latitude = site_latitude,
+         longitude = site_longitude)
 
-date_chunks = chunk_date_range(min_date, max_date, max_years = year_chunk)
+# # all sites for full date range, chunked by year_chunk
+# sites_dates = bd_model %>%
+#   group_by(site) %>%
+#   summarize(date_1 = min(date),
+#             date_2 = max(date),
+#             .groups = "drop") %>%
+#   mutate(date_1 = date_1 - days(temporal_buffer),
+#          max_years = year_chunk)
+# 
+# sites_dates_chunks = sites_dates %>%
+#   rowwise() %>%
+#   mutate(chunks = list(chunk_date_range(date_1, date_2, max_years))) %>%
+#   unnest(chunks) %>%
+#   left_join(site_coords, by = "site") %>%
+#   rename(longitude = site_longitude,
+#          latitude = site_latitude,
+#          site_name = site)
 
-all_sites_dates = all_sites %>%
-  cross_join(date_chunks) %>%
-    left_join(db_site %>%
-              collect(), by = "site_id") %>%
-  select(site_id,
-         site,
-         site_latitude,
-         site_longitude,
-         site_elevation_m,
-         population,
-         region,
-         country,
-         start_date,
-         end_date) %>%
-  mutate(duration = as.numeric(end_date - start_date)/365.25,
-         N = site_latitude + spatial_buffer,
-         S = site_latitude - spatial_buffer,
-         W = site_longitude - spatial_buffer,
-         E = site_longitude + spatial_buffer) %>%
-  arrange(country,
-          site)
-
-# write_csv(all_sites_dates, here("python", "gee_env_pull", "data", "site_coords_dates_all_025.csv"))
+# write_csv(sites_dates_chunks, here("python", "gee_env_pull", "data", paste0("site_coords_dates_", today(), ".csv")))
+# write_csv(head(sites_dates_chunks, n = 5), here("python", "gee_env_pull", "data", paste0("site_coords_dates_", today(), "_test.csv")))
 
 ```
 
@@ -469,7 +602,22 @@ all_sites_dates = all_sites %>%
 #| code-fold: true
 #| code-summary: "Show environmental data mergin code"
 #| 
-env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
+# env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
+env_in = read_csv(here("python", "gee_env_pull", "data", "all_sites_combined.csv"))
+
+peace = env_in %>%
+  group_by(site_name) %>%
+  summarize(n_precip = sum(!is.na(chirps)),
+            n_tmin = sum(!is.na(chirts_tmin)),
+            n_tmax = sum(!is.na(chirts_tmax)),
+            n_rh = sum(!is.na(chirts_rh)),
+            .groups = "drop")
+
+meace = peace %>%
+  filter(n_precip > n_tmax)
+
+fleace = peace %>%
+  filter(n_tmax == 0)
 
 sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
   ts_sym <- sym(ts_col_name)
@@ -796,7 +944,7 @@ hope = brms_data %>%
 model_priors <- c(
   # b
   prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 2),   class = "b"),
+  prior(normal(0, 3),   class = "b"),
   
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
@@ -813,7 +961,7 @@ model_priors <- c(
 model_priors_ga <- c(
   # b
   prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 2),   class = "link"),
+  prior(normal(0, 3),   class = "link"),
   
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "link_hu"),
@@ -830,7 +978,7 @@ model_priors_ga <- c(
 model_priors_fixed <- c(
   # b
   prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 2),   class = "b"),
+  prior(normal(0, 3),   class = "b"),
   
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
