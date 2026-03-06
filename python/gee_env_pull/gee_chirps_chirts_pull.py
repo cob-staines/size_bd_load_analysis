@@ -618,8 +618,8 @@ def main():
 
 if __name__ == "__main__":
     results = extract_timeseries(
-        sites="data/site_coords_dates_2026-03-05_test.csv",
-        products=["chirps", "chirts_tmax", "chirts_tmin", "chirts_rh"],
+        sites="data/site_coords_dates_2026-03-05.csv",
+        products=["chirps"],
         combined=True,
         outdir="data/",
         project="amphibian-bd",
