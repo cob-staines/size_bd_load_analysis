@@ -5,7 +5,7 @@ from tqdm import tqdm
 import pandas as pd
 from typing import List, Tuple, Union, Dict
 
-with open('config.yml', 'r') as file:
+with open('../gee_env_pull/config.yml', 'r') as file:
     config = yaml.safe_load(file)
 
 # load site_coords
@@ -189,7 +189,7 @@ def compute_chirps_average(
 
 # Example usage
 if __name__ == "__main__":
-    with open('config.yml', 'r') as file:
+    with open('../gee_env_pull/config.yml', 'r') as file:
         config = yaml.safe_load(file)
 
     # load site_coords
