@@ -561,7 +561,7 @@ temporal_report = bd_model %>%
 temporal_buffer = 60  # days
 # year_chunk = 11
 
-site_coords = bd_model %>%
+site_space_time = bd_model %>%
   group_by(site,
            site_latitude,
            site_longitude) %>%
@@ -572,26 +572,18 @@ site_coords = bd_model %>%
          latitude = site_latitude,
          longitude = site_longitude)
 
-# # all sites for full date range, chunked by year_chunk
-# sites_dates = bd_model %>%
-#   group_by(site) %>%
-#   summarize(date_1 = min(date),
-#             date_2 = max(date),
-#             .groups = "drop") %>%
-#   mutate(date_1 = date_1 - days(temporal_buffer),
-#          max_years = year_chunk)
-# 
-# sites_dates_chunks = sites_dates %>%
-#   rowwise() %>%
-#   mutate(chunks = list(chunk_date_range(date_1, date_2, max_years))) %>%
-#   unnest(chunks) %>%
-#   left_join(site_coords, by = "site") %>%
-#   rename(longitude = site_longitude,
-#          latitude = site_latitude,
-#          site_name = site)
+site_space_time_before_2017 = site_space_time %>%
+  filter(start_date <= "2016-12-31") %>%
+  mutate(end_date = if_else(end_date > "2016-12-31", as.Date("2016-12-31"), end_date))
 
-# write_csv(sites_dates_chunks, here("python", "gee_env_pull", "data", paste0("site_coords_dates_", today(), ".csv")))
-# write_csv(head(sites_dates_chunks, n = 5), here("python", "gee_env_pull", "data", paste0("site_coords_dates_", today(), "_test.csv")))
+site_space_time_after_2017 = site_space_time %>%
+  filter(end_date >= "2017-01-01") %>%
+  mutate(start_date = if_else(start_date < "2017-01-01", as.Date("2017-01-01"), start_date))
+
+write_csv(site_space_time, here("python", "gee_env_pull", "data", paste0("site_coords_dates_all_", today(), ".csv")))
+write_csv(site_space_time_before_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_through_2016_", today(), ".csv")))
+write_csv(site_space_time_after_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), ".csv")))
+write_csv(head(site_space_time_after_2017), here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), "_test.csv")))
 
 ```
 
