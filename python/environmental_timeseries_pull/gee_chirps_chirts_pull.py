@@ -39,6 +39,7 @@ from pathlib import Path
 import ee
 import pandas as pd
 from tqdm import tqdm
+from datetime import datetime as dt
 
 # ---------------------------------------------------------------------------
 # GEE dataset configuration
@@ -520,7 +521,8 @@ def extract_timeseries(
         combined_df = pd.concat(frames).sort_values(["site_name", "date"])
 
         if outdir:
-            out_path = Path(outdir) / "all_sites_combined.csv"
+            filename = f"all_sites_combined_{dt.now().strftime('%Y%m%dT%H%M')}.csv"
+            out_path = Path(outdir) / filename
             combined_df.to_csv(out_path)
             log.info(
                 f"Combined output saved → {out_path}  ({len(combined_df)} rows)"
@@ -617,12 +619,4 @@ def main():
 
 
 if __name__ == "__main__":
-    results = extract_timeseries(
-        sites="data/site_coords_dates_2026-03-05.csv",
-        products=["chirps"],
-        combined=True,
-        outdir="data/",
-        project="amphibian-bd",
-        chunk="decade",
-        adaptive_retry=False,
-    )
+    main()
