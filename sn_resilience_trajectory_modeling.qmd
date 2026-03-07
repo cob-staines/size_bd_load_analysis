@@ -257,7 +257,7 @@ m6_zln <- brm(
 m6_zln = add_criterion(m6_zln, "loo")
 
 saveRDS(m6_zln, file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
-m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds") 
+m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
 
 ```
 
@@ -477,46 +477,14 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
   return(ws[2])
 }
 
-sample_stats_grouped = function(obs_grouped) {
-  obs_grouped %>%
-    summarise(n = n(),
-              n_pos = sum(bd_detected_co),
-              bd_prevalence = sum(bd_detected_co) / n(),
-              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
-              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
-              min_load_inf = min(bd_load_co_density[bd_detected_co > 0]),
-              q_25_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.25),
-              q_50_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.50),
-              q_75_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.75),
-              max_load_inf = max(bd_load_co_density[bd_detected_co > 0]),
-              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
-              .groups = "drop")
-}
 
 ```
 
 # Results
-Results are broken out first by species, then combined for comparison between species
 
-## Hypothesis testing
+## Extract and organize draws
 ```{r}
-#| eval: true
-#| echo: false
-#| warning: false
-
-# model_select = m3_zln
-# model_select = m5f_zln
-# model_select = m5f_zln
 model_select = m6_zln
-
-# # emmeans
-# specs = emmeans(model_select, 
-#                 ~ life_stage_simple | taxon_capture * res_class, 
-#                 resp = "hu", 
-#                 dpar = "hu")
-# 
-# # This gives you the contrasts (subadult - adult) directly
-# contrasts_hu = contrast(specs, method = "revpairwise") 
 
 # emmeans parameter distributions
 ## prevalence
@@ -530,7 +498,8 @@ hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
 
 hu_group_draws = hu_specs %>%
   gather_emmeans_draws() %>%
-  rename(hu = .value)
+  rename(hu = .value) %>%
+  mutate(prevalence = 1 - plogis(hu))
 
 hu_contrast_draws = hu_contrasts_specs %>%
   gather_emmeans_draws() %>%
@@ -654,71 +623,171 @@ group_draws_agg = group_draws %>%
   group_by(taxon_capture,
            life_stage_simple,
            res_class) %>%
-  summarize(b_median = median(b),
-            hu_median = median(hu),
+  summarize(hu_median = median(hu),
+            prevalence_median = median(prevalence),
+            b_median = median(b),
             sigma_median = median(hu),
             .groups = "drop")
 
-# visualize draws
-ggplot(group_draws, aes(x = hu, y = b, color = res_class)) +
-  geom_point(alpha = 0.1) +
-  facet_grid(life_stage_simple ~ taxon_capture)
+# epred draws
+newdata_basic = expand_grid(taxon_capture = c("rana_muscosa",
+                                              "rana_sierrae"),
+                            life_stage_simple = c("subadult",
+                                                  "adult"),
+                            res_class = c("1-naive",
+                                          "2-epizootic",
+                                          "3-post")) %>%
+  mutate(precip_mm_30_z = 0,
+         precip_mm_30_z2 = 0,
+         temp_c_30_z = 0,
+         temp_c_30_z2 = 0)
 
-ggplot(group_draws_agg, aes(x = hu_median, y = b_median, color = life_stage_simple)) +
-  geom_point() +
-  geom_path() +
-  # stat_ellipse(data = group_draws, aes(x = hu, y = b, color = life_stage_simple, shape = res_class), level = 0.95, alpha = 0.3) +
-  geom_text_repel(aes(label = res_class), seed = 123) +
-  facet_wrap("taxon_capture") +
-  scale_color_brewer(palette = "Set2")
+# way too big!
+epred_original = epred_draws(model_select,
+                             newdata = brms_data,
+                             re_formula = NA,
+                             ndraws = 50) %>%
+  rename(bd_load_density_epred = .epred)
 
-# observed
+epred_fixed = epred_draws(model_select,
+                          newdata = newdata_basic,
+                          re_formula = NA) %>%
+  rename(bd_load_density_epred = .epred)
+
+# observation data
 obs_data = brms_data %>%
   group_by(taxon_capture,
            life_stage_simple,
            res_class) %>%
-  sample_stats_grouped()
+   summarise(n = n(),
+             n_pos = sum(bd_detected_co),
+             bd_prevalence = sum(bd_detected_co) / n(),
+             bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+             bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+             min_load_inf = min(bd_load_co_density[bd_detected_co > 0]),
+             q_25_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.25),
+             q_50_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.50),
+             q_75_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.75),
+             max_load_inf = max(bd_load_co_density[bd_detected_co > 0]),
+             se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+              .groups = "drop") %>%
+  mutate(label_offset = recode_values(life_stage_simple,
+                                          "adult" ~ 0,
+                                          "subadult" ~ 1))
 
+
+```
+
+## Visualize outputs
+
+### Prevalence
+```{r}
+# observed
 ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple)) +
   geom_point(position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
                 position = position_dodge(width = 0.5)) +
-  geom_text(aes(label = paste0("n=", n), y = 1),
-          position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = paste0("n=", n), y = 1 - (1 - label_offset) * 0.05),
+          position = position_dodge(width = 0.5),
+          size = 4) +
   ylim(0, 1) +
+  theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 # modeled
-ggplot(group_draws, aes(y = 1 - plogis(hu), x = res_class, color = life_stage_simple)) +
-  geom_boxplot() +
+ggplot(group_draws, aes(y = prevalence, x = res_class, fill = life_stage_simple)) +
+  geom_violin() +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+
+```
+
+## load
+```{r}
+# observed
+ggplot(brms_data %>%
+         filter(bd_detected_co > 0), aes(y = bd_load_co_density, x = res_class, fill = life_stage_simple)) +
+  geom_violin() +
+  geom_text(data = obs_data, aes(label = paste0("n=", n), y = 10e8 - (1 - label_offset) * 7 * 10e7),
+            position = position_dodge(width = 0.5),
+            size = 4) +
+  scale_y_log10(limits = c(1, 1e10)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+# ggplot(epred_original, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
+#   geom_violin() +
+#   # geom_boxplot() +
+#   scale_y_log10(limits = c(1, 1e10)) +
+#   theme_minimal() +
+#   facet_wrap("taxon_capture") +
+#   scale_fill_brewer(palette = "Set2")
+
+ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
+  geom_violin() +
+  # geom_boxplot() +
+  scale_y_log10(limits = c(1, 1e10)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+
+
+```
+
+## Hypothesis testing
+```{r}
+#| eval: true
+#| echo: false
+#| warning: false
+
+
+# visualize draws
+ggplot(group_draws_agg, aes(x = prevalence_median, y = b_median, color = life_stage_simple)) +
+  geom_point() +
+  geom_path() +
+  theme_minimal() +
+  geom_text_repel(aes(label = res_class), seed = 123) +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+ggplot(group_draws, aes(x = prevalence, y = b, color = life_stage_simple)) +
+  geom_point(alpha = 0.1) +
+  theme_minimal() +
+  facet_grid(res_class ~ taxon_capture) +
+  scale_color_brewer(palette = "Set2")
+
+# single parameter distributions
+
+ggplot(group_draws, aes(y = prevalence, x = res_class, color = life_stage_simple)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 ggplot(group_draws, aes(y = b, x = res_class, color = life_stage_simple)) +
-  geom_boxplot() +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 ggplot(group_draws, aes(y = sigma, x = res_class, color = life_stage_simple)) +
-  geom_boxplot() +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 # visualize contrasts
 ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
-  geom_density(fill = "#66c2a5", alpha = 1) +
+  stat_halfeye(fill = "#66c2a5",
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
-  # geom_vline(xintercept=0) +
-  geom_rect(data = hu_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
-                ymin = -0.04, ymax = 0),
-            fill = "#bbb", alpha = 1) +
-  geom_rect(data = hu_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
-                ymin = -0.04, ymax = 0),
-            fill = "#666", alpha = 1) + 
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
@@ -728,17 +797,10 @@ ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
   theme(text=element_text(size=14))
 
 ggplot(b_contrast_draws, aes(x = b_subadult)) +
-  geom_density(fill = "#8da0cb", alpha = 1) +
+    stat_halfeye(fill = "#8da0cb",
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
-  # geom_vline(xintercept=0) +
-  geom_rect(data = b_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
-                ymin = -0.03, ymax = 0),
-            fill = "#bbb", alpha = 1) +
-  geom_rect(data = b_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
-                ymin = -0.03, ymax = 0),
-            fill = "#666", alpha = 1) + 
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
@@ -748,23 +810,16 @@ ggplot(b_contrast_draws, aes(x = b_subadult)) +
   theme(text=element_text(size=14))
 
 ggplot(sigma_contrast_draws, aes(x = sigma_subadult)) +
-  geom_density(fill = "#fc8d62", alpha = 1) +
+  stat_halfeye(fill = "#fc8d62",
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
-  # geom_vline(xintercept=0) +
-  geom_rect(data = sigma_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_95$CI_low, xmax = hdi_95$CI_high,
-                ymin = -0.2, ymax = 0),
-            fill = "#bbb", alpha = 1) +
-  geom_rect(data = sigma_contrast_agg, inherit.aes = FALSE,
-            aes(xmin = hdi_50$CI_low, xmax = hdi_50$CI_high,
-                ymin = -0.2, ymax = 0),
-            fill = "#666", alpha = 1) + 
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
-       # title = "Subadult Effect on Bd Prevalence",
-       x = "Bd Load Sigma Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
-       y = "Posterior Density [-]") +
+    # title = "Subadult Effect on Bd Prevalence",
+    x = "Bd Load Sigma Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+    y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
 # probability of positive effect
@@ -805,7 +860,7 @@ ggplot(contrast_agg, aes(x = hu_median, y = sigma_median, color = taxon_capture)
   theme_minimal() +
   labs(
        # title = "Subadult Effect: Fraction Above Zero (FAZ)",
-       x = "Bd Prevalence\nMedian effect [-]",
+       x = "Bd Hu\nMedian effect [-]",
        y = "Bd Load Density Dispersion\nMedian effect [-]") +
   scale_color_brewer(palette = "Set2")
 
