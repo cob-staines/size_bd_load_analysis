@@ -916,8 +916,8 @@ exceptions = tibble(population = c("10206",
                                    "10213_pop",
                                    "10315_pop",
                                    "70449_re"),
-                    end_year = c(2018,
-                                 2012,
+                    end_year = c(2018,  # augmentation
+                                 2012,  # antifungal
                                  2009,
                                  2016))
 
