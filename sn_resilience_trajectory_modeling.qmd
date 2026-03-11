@@ -433,7 +433,7 @@ ppc_dens_overlay_grouped(y_combined,
 ```
 
 
-### Prior checks
+## Prior checks
 ```{r}
 #| eval: false
 #| code-fold: true
@@ -457,7 +457,7 @@ mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept_hu", "prior
 
 ```
 
-## Processing and visualization
+## Define analysis functions
 ```{r}
 #| eval: true
 #| warning: false
@@ -724,13 +724,13 @@ ggplot(group_draws, aes(y = prevalence, x = res_class, fill = life_stage_simple)
 
 ```
 
-## load
+### Load
 ```{r}
 # observed
 ggplot(brms_data %>%
          filter(bd_detected_co > 0), aes(y = bd_load_co_density, x = res_class, fill = life_stage_simple)) +
   geom_violin() +
-  geom_text(data = obs_data, aes(label = paste0("n=", n), y = 10e8 - (1 - label_offset) * 7 * 10e7),
+  geom_text(data = obs_data, aes(label = paste0("n=", n_pos), y = 10e8 - (1 - label_offset) * 7 * 10e7),
             position = position_dodge(width = 0.5),
             size = 4) +
   scale_y_log10(limits = c(1, 1e10)) +
@@ -758,7 +758,7 @@ ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_st
 
 ```
 
-## Hypothesis testing
+### Hypothesis testing
 ```{r}
 #| eval: true
 #| echo: false
@@ -803,7 +803,7 @@ ggplot(group_draws, aes(y = sigma, x = res_class, color = life_stage_simple)) +
 # visualize contrasts
 ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
   stat_halfeye(fill = "#66c2a5",
-               .width = c(0.5, 0.89),
+               .width = c(0.5, 0.95),
                point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
   geom_vline(xintercept = 0, alpha = 1) +
@@ -816,7 +816,7 @@ ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
 
 ggplot(b_contrast_draws, aes(x = b_subadult)) +
     stat_halfeye(fill = "#8da0cb",
-               .width = c(0.5, 0.89),
+               .width = c(0.5, 0.95),
                point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
   geom_vline(xintercept = 0, alpha = 1) +
@@ -829,7 +829,7 @@ ggplot(b_contrast_draws, aes(x = b_subadult)) +
 
 ggplot(sigma_contrast_draws, aes(x = sigma_subadult)) +
   stat_halfeye(fill = "#fc8d62",
-               .width = c(0.5, 0.89),
+               .width = c(0.5, 0.95),
                point_interval = mode_hdi) +
   facet_grid(res_class ~ taxon_capture) +
   geom_vline(xintercept = 0, alpha = 1) +
