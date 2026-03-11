@@ -59,7 +59,7 @@ I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd densi
 ##  RACA data
 raca_data = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
   clean_names() %>%
-  filter(!(life_stage %in% c("L", "M"))) %>%
+  filter(!(life_stage %in% c("L", "M", "Y"))) %>%
   rename(site = site_name,
          body_mass_g = weight_g,
          site_utme = utme_site,
@@ -142,7 +142,10 @@ usgs_clean = usgs_raw %>%
          life_stage = age,
          region = reg,
          bd_its_copies = copy_num) %>%
-  mutate(taxon_capture = tolower(gsub(" ", "_", scientific_name)),
+  mutate(taxon_capture = paste0(tolower(gsub(" ", "_", scientific_name)), "_usgs"),
+         taxon_capture = recode_values(taxon_capture,
+                                       "lithobates_catesbeianus_usgs" ~ "rana_catesbeiana_usgs",
+                                       default = taxon_capture),
          life_stage_simple = tolower(life_stage),
          life_stage_simple = recode_values(life_stage_simple,
                                         "juvenile" ~ "subadult",
@@ -154,6 +157,7 @@ usgs_clean = usgs_raw %>%
          country = "usa") %>%
   filter(!is.na(taxon_capture),
          !is.na(bd_its_copies),
+         !is.na(svl_mm),
          life_stage_simple %in% c("subadult", "adult"))
 
 usgs_taxon_population_valid = usgs_clean %>%
@@ -164,10 +168,22 @@ usgs_taxon_population_valid = usgs_clean %>%
   filter(n_adult > 0,
          n_subadult > 0)
 
+usgs_taxon_valid = usgs_clean %>%
+  inner_join(usgs_taxon_population_valid %>%
+               select(taxon_capture,
+                      population), by = c("taxon_capture", "population")) %>%
+  group_by(taxon_capture) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_adult >= 14,
+         n_subadult >= 14)
+
 usgs_valid = usgs_clean %>%
   inner_join(usgs_taxon_population_valid %>%
                select(taxon_capture,
                       population), by = c("taxon_capture", "population")) %>%
+  filter(taxon_capture %in% usgs_taxon_valid$taxon_capture) %>%
   select(taxon_capture,
          svl_mm,
          sex,
@@ -251,23 +267,6 @@ bd_population = bd_sample %>%
   )) %>%
   filter(country != "panama" | (country == "panama" & population %in% population_valid_pa),
          !is.na(site_latitude))
-
-# bd_stats = bd_population %>%
-#   filter(!is.na(taxon_capture),
-#          life_stage %in% c("adult",
-#                            "subadult",
-#                            "juvenile",
-#                            NA)) %>%
-#   group_by(country,
-#            taxon_capture,
-#            life_stage) %>%
-#   summarize(n = n(),
-#             regions = str_flatten(distinct(region), collapse = ", "),
-#             .groups = "drop") %>%
-#   collect() %>%
-#   arrange(country,
-#           taxon_capture,
-#           life_stage)
 
 # define life stage simple
 bd_life_stage = bd_population %>%
@@ -404,7 +403,8 @@ bd_life_stage = bd_population %>%
     ((taxon_capture == "smilisca_sila") & (svl_mm < 31.6)) ~ "subadult",
     .default = NA_character_
   )) %>%
-  filter(!is.na(life_stage_simple))
+  filter(!is.na(life_stage_simple),
+         !is.na(svl_mm))
 
 # identify valid species & populations
 ## drop pops without both adults and juveniles
@@ -417,11 +417,23 @@ pop_taxa_valid = bd_life_stage %>%
   filter(n_adult > 0,
          n_subadult > 0)
 
+taxa_valid = bd_life_stage %>%
+  inner_join(pop_taxa_valid %>%
+               select(taxon_capture,
+                      population), by = c("taxon_capture", "population")) %>%
+  group_by(taxon_capture) %>%
+  summarize(n_adult = sum(as.integer(life_stage_simple == "adult"), na.rm = TRUE),
+            n_subadult = sum(as.integer(life_stage_simple == "subadult"), na.rm = TRUE),
+            .groups = "drop") %>%
+  filter(n_adult >= 14,
+         n_subadult >= 14)
+
 # identify valid samples
 bd_sample_valid = bd_life_stage %>%
   mutate(year = year(date),
          project = project_id) %>%
   inner_join(pop_taxa_valid, by = c("taxon_capture", "population")) %>%
+  inner_join(taxa_valid, by = "taxon_capture") %>%
   # limit to 1 bd sample per capture
   group_by(capture_id) %>%
   slice_sample(n = 1) %>%
@@ -473,11 +485,11 @@ ribbitr_valid = bd_sample_valid %>%
 ### Combine datasets
 ```{r}
 
-peace = compare_df_cols(raca_valid,
+column_check = compare_df_cols(raca_valid,
                         usgs_valid,
                         ribbitr_valid)
 
-data_combined = bind_rows(raca_valid,
+bd_model = bind_rows(raca_valid,
                       usgs_valid,
                       ribbitr_valid) %>%
   mutate(bd_detected_co = bd_its_copies >= 10,
@@ -485,23 +497,20 @@ data_combined = bind_rows(raca_valid,
                                   0,
                                   bd_its_copies),
          bd_load_co_density = bd_load_co / svl_mm)
-  
 
-taxa_valid = data_combined %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarise(count = n(),
-            count_gt_14 = n() >= 14,
+(bd_model_stats = bd_model %>%
+  group_by(taxon_capture, country) %>%
+  summarise(regions = paste(sort(unique(region)), collapse = ", "),
+            population_n = n_distinct(population),
+            site_n = n_distinct(site),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
             .groups = "drop") %>%
-  group_by(taxon_capture) %>%
-  filter(sum(as.integer(count_gt_14)) == 2) %>%
-  ungroup() %>%
-  select(taxon_capture) %>%
-  distinct()
-
-bd_model = data_combined %>%
-  filter(taxon_capture %in% taxa_valid$taxon_capture)
-
-head(bd_model)
+  arrange(country,
+          taxon_capture))
 
 ```
 
@@ -515,20 +524,6 @@ To support comparing Bd prevalence and loads between sites and species across a 
 #| code-fold: true
 #| code-summary: "Code to export spatio-temporal coverage"
 
-bd_model_stats = bd_model %>%
-  group_by(taxon_capture, country) %>%
-  summarise(regions = paste(sort(unique(region)), collapse = ", "),
-            population_n = n_distinct(population),
-            site_n = n_distinct(site),
-            year_first = year(min(date)),
-            year_last = year(max(date)),
-            year_count = n_distinct(year(date)),
-            adult_n = sum(life_stage_simple == "adult"),
-            subadult_n = sum(life_stage_simple == "subadult"),
-            .groups = "drop") %>%
-  arrange(country,
-          taxon_capture)
-
 temporal_report = bd_model %>%
   group_by(year) %>%
   summarise(n_obs = n(),
@@ -541,25 +536,9 @@ temporal_report = bd_model %>%
             .groups = "drop")
 
 
-# chunk_date_range = function(start_date, end_date, max_years) {
-#   start <- as.Date(start_date)
-#   end <- as.Date(end_date)
-#   chunks <- data.frame(start_date = as.Date(character()), end_date = as.Date(character()))
-#   
-#   current_start <- start
-#   while (current_start < end) {
-#     chunk_end <- pmin(end, floor_date(current_start, "year") %m+% years(max_years) - days(1))
-#     chunks <- bind_rows(chunks, data.frame(start_date = current_start, end_date = chunk_end))
-#     current_start <- chunk_end + days(1)
-#   }
-#   
-#   return(chunks)
-# }
-
 
 # export site list and coords
 temporal_buffer = 60  # days
-# year_chunk = 11
 
 site_space_time = bd_model %>%
   group_by(site,
@@ -580,10 +559,10 @@ site_space_time_after_2017 = site_space_time %>%
   filter(end_date >= "2017-01-01") %>%
   mutate(start_date = if_else(start_date < "2017-01-01", as.Date("2017-01-01"), start_date))
 
-write_csv(site_space_time, here("python", "gee_env_pull", "data", paste0("site_coords_dates_all_", today(), ".csv")))
-write_csv(site_space_time_before_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_through_2016_", today(), ".csv")))
-write_csv(site_space_time_after_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), ".csv")))
-write_csv(head(site_space_time_after_2017), here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), "_test.csv")))
+# write_csv(site_space_time, here("python", "gee_env_pull", "data", paste0("site_coords_dates_all_", today(), ".csv")))
+# write_csv(site_space_time_before_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_through_2016_", today(), ".csv")))
+# write_csv(site_space_time_after_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), ".csv")))
+# write_csv(head(site_space_time_after_2017), here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), "_test.csv")))
 
 ```
 
@@ -595,21 +574,10 @@ write_csv(head(site_space_time_after_2017), here("python", "gee_env_pull", "data
 #| code-summary: "Show environmental data mergin code"
 #| 
 # env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
-env_in = read_csv(here("python", "gee_env_pull", "data", "all_sites_combined.csv"))
-
-peace = env_in %>%
-  group_by(site_name) %>%
-  summarize(n_precip = sum(!is.na(chirps)),
-            n_tmin = sum(!is.na(chirts_tmin)),
-            n_tmax = sum(!is.na(chirts_tmax)),
-            n_rh = sum(!is.na(chirts_rh)),
-            .groups = "drop")
-
-meace = peace %>%
-  filter(n_precip > n_tmax)
-
-fleace = peace %>%
-  filter(n_tmax == 0)
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-08.csv")) %>%
+  rename(site = site_name,
+         precipitation_mm = precip_mm,
+         temperature_max_c = tmax_c)
 
 sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
   ts_sym <- sym(ts_col_name)
@@ -658,73 +626,20 @@ na_sum = function(x) {
 
 # env_agg = env_in %>%
 #   arrange(site, date) %>%
-#   filter(!(is.na(precipitation_mm) & is.na(temperature_c))) %>%
+#   filter(!(is.na(precipitation_mm) & is.na(temperature_max_c))) %>%
 #   group_by(site) %>%
-#   mutate(precip_mm_15_day_n = rolling_aggregate(precipitation_mm, date, 15, n_val),
-#          precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
-#          precip_mm_30_day_n = rolling_aggregate(precipitation_mm, date, 30, n_val),
+#   mutate(precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
 #          precip_mm_30_day_sum = rolling_aggregate(precipitation_mm, date, 30, na_sum),
-#          temp_c_15_day_n = rolling_aggregate(temperature_c, date, 15, n_val),
-#          temp_c_15_day_mean = rolling_aggregate(temperature_c, date, 15, na_mean),
-#          temp_c_15_day_max = rolling_aggregate(temperature_c, date, 15, na_max),
-#          temp_c_30_day_n = rolling_aggregate(temperature_c, date, 30, n_val),
-#          temp_c_30_day_mean = rolling_aggregate(temperature_c, date, 30, na_mean),
-#          temp_c_30_day_max = rolling_aggregate(temperature_c, date, 30, na_max)) %>%
+#          temp_c_15_day_mean = rolling_aggregate(temperature_max_c, date, 15, na_mean),
+#          temp_c_30_day_mean = rolling_aggregate(temperature_max_c, date, 30, na_mean)) %>%
 #   ungroup()
 # 
 # write_csv(env_agg, here("data", "unified_env_agg.csv"))
 env_agg = read_csv(here("data", "unified_env_agg.csv"))
 
-# site_climate = env_in %>%
-#   group_by(site) %>%
-#   summarize(site_temp_c_mean = mean(temperature_c, na.rm = TRUE),
-#             p_temp = sum(!is.na(temperature_c)) / n(),
-#             site_precip_mm_mean = mean(precipitation_mm, na.rm = TRUE),
-#             p_precip = sum(!is.na(precipitation_mm)) / n(),
-#             .groups = "drop") %>%
-#   mutate(site_precip_mm_annual_mean = site_precip_mm_mean * 365.25)
-# 
-# write_csv(site_climate, here("data", "site_climate.csv"))
-site_climate = read_csv(here("data", "site_climate.csv"))
-
-# ggplot(env_agg, aes(x = date)) +
-#   geom_line(aes(y = precip_mm_15_day_sum), linetype = "solid") +
-#   facet_wrap(. ~ site)
-# 
-# ggplot(env_agg, aes(x = date, y = temp_c_year_mean, color = site)) +
-#   geom_line()
-
-# taxon_climate = env_agg %>%
-#   left_join(bd_model %>%
-#              select(taxon_capture, site) %>%
-#              distinct(), by = "site") %>%
-#   group_by(taxon_capture) %>%
-#   summarize(precip_mm_15_day_sum_spmean = mean(precip_mm_15_day_sum),
-#             precip_mm_15_day_sum_spsd = sd(precip_mm_15_day_sum),
-#             precip_mm_30_day_sum_spmean = mean(precip_mm_30_day_sum),
-#             precip_mm_30_day_sum_spsd = sd(precip_mm_30_day_sum),
-#             temp_c_15_day_mean_spmean = mean(temp_c_15_day_mean, na.rm = TRUE),
-#             temp_c_15_day_mean_spsd = sd(temp_c_15_day_mean, na.rm = TRUE),
-#             temp_c_30_day_mean_spmean = mean(temp_c_30_day_mean, na.rm = TRUE),
-#             temp_c_30_day_mean_spsd = sd(temp_c_30_day_mean, na.rm = TRUE),
-#             precip_mm_15_day_sum2_spmean = mean(precip_mm_15_day_sum^2),
-#             precip_mm_15_day_sum2_spsd = sd(precip_mm_15_day_sum^2),
-#             precip_mm_30_day_sum2_spmean = mean(precip_mm_30_day_sum^2),
-#             precip_mm_30_day_sum2_spsd = sd(precip_mm_30_day_sum^2),
-#             temp_c_15_day_mean2_spmean = mean(temp_c_15_day_mean^2, na.rm = TRUE),
-#             temp_c_15_day_mean2_spsd = sd(temp_c_15_day_mean^2, na.rm = TRUE),
-#             temp_c_30_day_mean2_spmean = mean(temp_c_30_day_mean^2, na.rm = TRUE),
-#             temp_c_30_day_mean2_spsd = sd(temp_c_30_day_mean^2, na.rm = TRUE))
-# 
-# write_csv(taxon_climate, here("data", "taxon_climate.csv"))
 
 # bd_model_env = bd_model %>%
-#   left_join(env_agg, by = c("site", "date")) %>%
-#   left_join(site_climate, by = "site") %>%
-#   filter(!is.na(precip_mm_15_day_sum),
-#          !is.na(precip_mm_30_day_sum),
-#          !is.na(temp_c_15_day_mean),
-#          !is.na(temp_c_30_day_mean))
+#   left_join(env_agg, by = c("site", "date"))
 # 
 # save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
 
@@ -738,18 +653,13 @@ site_climate = read_csv(here("data", "site_climate.csv"))
 #| code-fold: true
 #| code-summary: "Show data loading code"
 
-load(here("data", "bd_model_env_unified_2026-01-23.RData"))
+# load bd_model_env
+load(here("data", "bd_model_env_unified_2026-03-09.RData")) 
 
-taxon_climate = read_csv(here("data", "taxon_climate.csv"))
-
-```
-
-# Descriptive stats
-```{r}
-#| eval: true
-#| warning: false
-#| code-fold: true
-#| code-summary: "Show descriptive stats code"
+# checks
+sum(is.na(bd_model_env$bd_load_co_density))
+sum(is.na(bd_model_env$precip_mm_30_day_sum))
+sum(is.na(bd_model_env$temperature_max_c))
 
 bd_model_env_stats = bd_model_env %>%
   group_by(taxon_capture, country) %>%
@@ -767,60 +677,6 @@ bd_model_env_stats = bd_model_env %>%
   arrange(country,
           taxon_capture)
 
-species_select = bd_model_env_stats %>%
-  filter(adult_n_pos >= 5,
-         subadult_n_pos >= 5)
-
-bd_model_env_select = bd_model_env %>%
-  filter(taxon_capture %in% species_select$taxon_capture) %>%
-  filter(!is.na(bd_load_co_density))
-
-(bd_model_env_select_stats = bd_model_env_stats %>%
-  filter(adult_n_pos >= 5,
-         subadult_n_pos >= 5))
-
-agg_species_stats = bd_model_env_select_stats %>%
-  group_by() %>%
-  summarize(med_sites = median(site_n),
-            med_years = median(year_count),
-            med_adult = median(adult_n),
-            med_sub = median(subadult_n),
-            sum_adult = sum(adult_n),
-            sum_sub = sum(subadult_n),
-            .groups = "drop")
-
-add_visit_stats = bd_model_env_select %>%
-  select(site, date) %>%
-  distinct() %>%
-  nrow()
-
-# write_csv(bd_model_env_select_stats, here("clh", "species_data_stats.csv"))
-
-# export site coords
-# all_sites = unique(bd_model_env_select$site)
-# 
-# select_sites = db_site %>%
-#               filter(site %in% all_sites) %>%
-#   select(site_id,
-#          site,
-#          site_latitude,
-#          site_longitude) %>%
-#   collect() %>%
-#   arrange(site)
-# 
-# write.csv(select_sites, here("data", paste0("bd_model_unified_select_sites", today(), ".csv")))
-
-# write.csv(bd_model_env_select_stats, here("data", paste0("bd_model_unified_select_stats", today(), ".csv")))
-
-# spp_climate_stats = bd_model_env_select %>%
-#   select(taxon_capture,
-#          site) %>%
-#   distinct() %>%
-#   left_join(site_climate, by = "site") %>%
-#   group_by(taxon_capture) %>%
-#   summarize(mean_annual_precip_mm = mean(site_precip_mm_annual_mean),
-#             mean_annual_temp_c = mean(site_temp_c_mean))
-
 ```
 
 # Modeling
@@ -832,7 +688,7 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 #| code-summary: "Show model setup code"
 
 # unified, scaled model
-brms_scales = bd_model_env_select %>%
+brms_scales = bd_model_env %>%
   group_by() %>%
   summarize(precip_mm_15_day_sum_mean = mean(precip_mm_15_day_sum),
             precip_mm_15_day_sum_sd = sd(precip_mm_15_day_sum),
@@ -849,11 +705,7 @@ brms_scales = bd_model_env_select %>%
             temp_c_15_day_mean2_mean = mean(temp_c_15_day_mean ^ 2),
             temp_c_15_day_mean2_sd = sd(temp_c_15_day_mean ^ 2),
             temp_c_30_day_mean2_mean = mean(temp_c_30_day_mean ^ 2),
-            temp_c_30_day_mean2_sd = sd(temp_c_30_day_mean ^ 2),
-            site_precip_mm_annual_mean_mean = mean(site_precip_mm_annual_mean),
-            site_precip_mm_annual_mean_sd = sd(site_precip_mm_annual_mean),
-            site_temp_c_mean_mean = mean(site_temp_c_mean),
-            site_temp_c_mean_sd = sd(site_temp_c_mean))
+            temp_c_30_day_mean2_sd = sd(temp_c_30_day_mean ^ 2))
 
 brms_rescale = function(df, scales) {
   df_out = df %>%
@@ -868,8 +720,7 @@ brms_rescale = function(df, scales) {
            )
 }
 
-brms_data <- bd_model_env_select %>%
-  left_join(taxon_climate, by = "taxon_capture") %>%
+brms_data = bd_model_env %>%
   mutate(
     precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
     temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
@@ -879,20 +730,17 @@ brms_data <- bd_model_env_select %>%
     temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
     precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
     temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE)),
-    site_precip_mm_annual_mean_z = as.numeric(scale(site_precip_mm_annual_mean, center = TRUE, scale = TRUE)),
-    site_temp_c_mean_z = as.numeric(scale(site_temp_c_mean, center = TRUE, scale = TRUE)),
-    ##
-    precip_mm_30_sp_z = (precip_mm_30_day_sum - precip_mm_30_day_sum_spmean) / precip_mm_30_day_sum_spsd,
-    temp_c_30_sp_z = (temp_c_30_day_mean - temp_c_30_day_mean_spmean) / temp_c_30_day_mean_spsd,
-    precip_mm_15_sp_z = (precip_mm_15_day_sum - precip_mm_15_day_sum_spmean) / precip_mm_15_day_sum_spsd,
-    temp_c_15_sp_z = (temp_c_15_day_mean - temp_c_15_day_mean_spmean) / temp_c_15_day_mean_spsd,
-    precip_mm_30_sp_z2 = (precip_mm_30_day_sum ^ 2 - precip_mm_30_day_sum2_spmean) / precip_mm_30_day_sum2_spsd,
-    temp_c_30_sp_z2 = (temp_c_30_day_mean ^ 2 - temp_c_30_day_mean2_spmean) / temp_c_30_day_mean2_spsd,
-    precip_mm_15_sp_z2 = (precip_mm_15_day_sum ^ 2 - precip_mm_15_day_sum2_spmean) / precip_mm_15_day_sum2_spsd,
-    temp_c_15_sp_z2 = (temp_c_15_day_mean ^ 2 - temp_c_15_day_mean2_spmean) / temp_c_15_day_mean2_spsd
+  #   ##
+  #   precip_mm_30_sp_z = (precip_mm_30_day_sum - precip_mm_30_day_sum_spmean) / precip_mm_30_day_sum_spsd,
+  #   temp_c_30_sp_z = (temp_c_30_day_mean - temp_c_30_day_mean_spmean) / temp_c_30_day_mean_spsd,
+  #   precip_mm_15_sp_z = (precip_mm_15_day_sum - precip_mm_15_day_sum_spmean) / precip_mm_15_day_sum_spsd,
+  #   temp_c_15_sp_z = (temp_c_15_day_mean - temp_c_15_day_mean_spmean) / temp_c_15_day_mean_spsd,
+  #   precip_mm_30_sp_z2 = (precip_mm_30_day_sum ^ 2 - precip_mm_30_day_sum2_spmean) / precip_mm_30_day_sum2_spsd,
+  #   temp_c_30_sp_z2 = (temp_c_30_day_mean ^ 2 - temp_c_30_day_mean2_spmean) / temp_c_30_day_mean2_spsd,
+  #   precip_mm_15_sp_z2 = (precip_mm_15_day_sum ^ 2 - precip_mm_15_day_sum2_spmean) / precip_mm_15_day_sum2_spsd,
+  #   temp_c_15_sp_z2 = (temp_c_15_day_mean ^ 2 - temp_c_15_day_mean2_spmean) / temp_c_15_day_mean2_spsd
   ) %>%
   select(taxon_capture,
-         -any_of(colnames(taxon_climate)),
          everything())
 
 # check z-scored means and sds
@@ -914,24 +762,24 @@ peace = brms_data %>%
             p2_30_mean = mean(precip_mm_30_z2),
             p2_30_sd = sd(precip_mm_30_z2))
 
-hope = brms_data %>%
-  group_by(taxon_capture) %>%
-  summarize(t_15_sp_mean = mean(temp_c_15_sp_z),
-            t_15_sp_sd = sd(temp_c_15_sp_z),
-            t_30_sp_mean = mean(temp_c_30_sp_z),
-            t_30_sp_sd = sd(temp_c_30_sp_z),
-            p_15_sp_mean = mean(precip_mm_15_sp_z),
-            p_15_sp_sd = sd(precip_mm_15_sp_z),
-            p_30_sp_mean = mean(precip_mm_30_sp_z),
-            p_30_sp_sd = sd(precip_mm_30_sp_z),
-            t2_15_sp_mean = mean(temp_c_15_sp_z2),
-            t2_15_sp_sd = sd(temp_c_15_sp_z2),
-            t2_30_sp_mean = mean(temp_c_30_sp_z2),
-            t2_30_sp_sd = sd(temp_c_30_sp_z2),
-            p2_15_sp_mean = mean(precip_mm_15_sp_z2),
-            p2_15_sp_sd = sd(precip_mm_15_sp_z2),
-            p2_30_sp_mean = mean(precip_mm_30_sp_z2),
-            p2_30_sp_sd = sd(precip_mm_30_sp_z2))
+# hope = brms_data %>%
+#   group_by(taxon_capture) %>%
+#   summarize(t_15_sp_mean = mean(temp_c_15_sp_z),
+#             t_15_sp_sd = sd(temp_c_15_sp_z),
+#             t_30_sp_mean = mean(temp_c_30_sp_z),
+#             t_30_sp_sd = sd(temp_c_30_sp_z),
+#             p_15_sp_mean = mean(precip_mm_15_sp_z),
+#             p_15_sp_sd = sd(precip_mm_15_sp_z),
+#             p_30_sp_mean = mean(precip_mm_30_sp_z),
+#             p_30_sp_sd = sd(precip_mm_30_sp_z),
+#             t2_15_sp_mean = mean(temp_c_15_sp_z2),
+#             t2_15_sp_sd = sd(temp_c_15_sp_z2),
+#             t2_30_sp_mean = mean(temp_c_30_sp_z2),
+#             t2_30_sp_sd = sd(temp_c_30_sp_z2),
+#             p2_15_sp_mean = mean(precip_mm_15_sp_z2),
+#             p2_15_sp_sd = sd(precip_mm_15_sp_z2),
+#             p2_30_sp_mean = mean(precip_mm_30_sp_z2),
+#             p2_30_sp_sd = sd(precip_mm_30_sp_z2))
 
 model_priors <- c(
   # b
@@ -980,14 +828,6 @@ model_priors_fixed <- c(
   prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
   prior(normal(0, 0.3), class = "b", dpar = "sigma")
 )
-
-model_report = function(model_m){
-  summary(model_m)
-  plot((model_m), ask = FALSE)
-  plot(conditional_effects(model_m), ask = FALSE)
-  pp_check(model_m) +
-    scale_x_log10()
-}
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
