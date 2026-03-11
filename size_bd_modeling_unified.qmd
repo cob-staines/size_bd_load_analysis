@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra, emmeans)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra, emmeans, rio)
 
 ```
 ## Data selection
@@ -57,7 +57,7 @@ I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd densi
 
 # csv data
 ##  RACA data
-raca_data = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
+raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
   clean_names() %>%
   filter(!(life_stage %in% c("L", "M", "Y"))) %>%
   rename(site = site_name,
@@ -78,7 +78,7 @@ raca_data = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv"
     taxon_capture = "rana_cascadae") %>%
   filter(!is.na(bd_its_copies))
 
-raca_population_valid = raca_data %>%
+raca_population_valid = raca_clean %>%
   group_by(population) %>%
   summarize(n_adult = sum(life_stage_simple == "adult"),
             n_subadult = sum(life_stage_simple == "subadult"),
@@ -86,7 +86,7 @@ raca_population_valid = raca_data %>%
   filter(n_adult > 0,
          n_subadult > 0)
 
-raca_sites = raca_data %>%
+raca_sites = raca_clean %>%
   select(site,
          site_utme,
          site_utmn) %>%
@@ -98,17 +98,17 @@ raca_points = cbind(raca_sites$site_utme,
 
 v_utm = vect(raca_points, crs="+proj=utm +zone=10 +datum=WGS84  +units=m")
 v_ll = project(v_utm, "+proj=longlat +datum=WGS84")
-lonlat = geom(v_ll)[, c("x", "y")]
+v_lonlat = geom(v_ll)[, c("x", "y")]
 
 raca_sites_ll = raca_sites %>%
-  bind_cols(lonlat) %>%
+  bind_cols(v_lonlat) %>%
   rename(site_longitude = x,
          site_latitude = y) %>%
   select(site,
          site_latitude,
          site_longitude)
 
-raca_valid = raca_data %>%
+raca_valid = raca_clean %>%
   filter(population %in% raca_population_valid$population) %>%
   left_join(raca_sites_ll, by = "site") %>%
   select(taxon_capture,
@@ -126,6 +126,78 @@ raca_valid = raca_data %>%
          country,
          project)
 
+```
+
+### RALU
+```{r}
+ralu_raw = import_list(here("data", "Data Russell et al 2010 DAO.xlsx"))
+
+# site coordinates
+ralu_sites = ralu_raw[[2]] %>%
+  clean_names() %>%
+  mutate(site = tolower(pond_name))
+
+ralu_points = cbind(ralu_sites$x_nad83_zone11n,
+                    ralu_sites$y_nad83_zone11n)
+
+w_utm = vect(ralu_points, crs="+proj=utm +zone=11 +datum=WGS84  +units=m")
+w_ll = project(w_utm, "+proj=longlat +datum=WGS84")
+w_lonlat = geom(w_ll)[, c("x", "y")]
+
+ralu_sites_ll = ralu_sites %>%
+  bind_cols(w_lonlat) %>%
+  rename(site_longitude = x,
+         site_latitude = y) %>%
+  select(site,
+         site_latitude,
+         site_longitude)
+
+ralu_clean = ralu_raw[[4]] %>%
+  clean_names() %>%
+  rename(life_stage = age_class) %>%
+  mutate(taxon_capture = "rana_luteiventris",
+         date = as.Date(bd_sample_date),
+         site = tolower(pond_name),
+         population = site,
+         region = "NW",
+         country = "usa",
+         life_stage_simple = recode_values(life_stage,
+                                           "ADULT" ~ "adult",
+                                           "JUVENILE" ~ "subadult",
+                                           "METAMORPH" ~ "metamorph"),
+         bd_its_copies = actual_bd_load * 60,
+         sex = tolower(sex),
+         project = "RALU",
+         svl_mm = 25  # using smallest age glass SVL, as researchers used standardized swab lengths.
+         ) %>%
+  left_join(ralu_sites_ll, by = "site") %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"))
+
+ralu_population_valid = ralu_clean %>%
+  group_by(population) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(n_adult > 0,
+         n_subadult > 0)
+
+ralu_valid = ralu_clean %>%
+  select(taxon_capture,
+         date,
+         site,
+         population,
+         bd_its_copies,
+         life_stage_simple,
+         life_stage,
+         sex,
+         svl_mm,
+         site_latitude,
+         site_longitude,
+         region,
+         country,
+         project)
 ```
 
 ### USGS
@@ -191,7 +263,6 @@ usgs_valid = usgs_clean %>%
          life_stage,
          date,
          bd_its_copies,
-         m30max,
          population,
          site,
          site_latitude,
@@ -199,6 +270,7 @@ usgs_valid = usgs_clean %>%
          region,
          country,
          project)
+
 ```
 
 ### RIBBiTR, etc.
@@ -486,16 +558,18 @@ ribbitr_valid = bd_sample_valid %>%
 ```{r}
 
 column_check = compare_df_cols(raca_valid,
-                        usgs_valid,
-                        ribbitr_valid)
+                               ralu_valid,
+                               usgs_valid,
+                               ribbitr_valid)
 
 bd_model = bind_rows(raca_valid,
-                      usgs_valid,
-                      ribbitr_valid) %>%
+                     ralu_valid,
+                     usgs_valid,
+                     ribbitr_valid) %>%
   mutate(bd_detected_co = bd_its_copies >= 10,
          bd_load_co = if_else(bd_its_copies < 10,
-                                  0,
-                                  bd_its_copies),
+                              0,
+                              bd_its_copies),
          bd_load_co_density = bd_load_co / svl_mm)
 
 (bd_model_stats = bd_model %>%
@@ -543,13 +617,17 @@ temporal_buffer = 60  # days
 site_space_time = bd_model %>%
   group_by(site,
            site_latitude,
-           site_longitude) %>%
+           site_longitude,
+           project) %>%
   summarize(start_date = min(date) - days(temporal_buffer),
             end_date = max(date),
             .groups = "drop") %>%
   rename(site_name = site,
          latitude = site_latitude,
          longitude = site_longitude)
+
+site_space_time_ralu = site_space_time %>%
+  filter(project == "RALU")
 
 site_space_time_before_2017 = site_space_time %>%
   filter(start_date <= "2016-12-31") %>%
@@ -559,10 +637,11 @@ site_space_time_after_2017 = site_space_time %>%
   filter(end_date >= "2017-01-01") %>%
   mutate(start_date = if_else(start_date < "2017-01-01", as.Date("2017-01-01"), start_date))
 
-# write_csv(site_space_time, here("python", "gee_env_pull", "data", paste0("site_coords_dates_all_", today(), ".csv")))
-# write_csv(site_space_time_before_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_through_2016_", today(), ".csv")))
-# write_csv(site_space_time_after_2017, here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), ".csv")))
-# write_csv(head(site_space_time_after_2017), here("python", "gee_env_pull", "data", paste0("site_coords_dates_2017_beyond_", today(), "_test.csv")))
+# write_csv(site_space_time, here("python", "environmental_timeseries_pull", "inputs", paste0("site_coords_dates_all_", today(), ".csv")))
+# write_csv(site_space_time_ralu, here("python", "environmental_timeseries_pull", "inputs", paste0("site_coords_dates_ralu_", today(), ".csv")))
+# write_csv(site_space_time_before_2017, here("python", "environmental_timeseries_pull", "inputs", paste0("site_coords_dates_through_2016_", today(), ".csv")))
+# write_csv(site_space_time_after_2017, here("python", "environmental_timeseries_pull", "inputs", paste0("site_coords_dates_2017_beyond_", today(), ".csv")))
+# write_csv(head(site_space_time_after_2017), here("python", "environmental_timeseries_pull", "inputs", paste0("site_coords_dates_2017_beyond_", today(), "_test.csv")))
 
 ```
 
@@ -574,7 +653,7 @@ site_space_time_after_2017 = site_space_time %>%
 #| code-summary: "Show environmental data mergin code"
 #| 
 # env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
-env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-08.csv")) %>%
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-11.csv")) %>%
   rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
