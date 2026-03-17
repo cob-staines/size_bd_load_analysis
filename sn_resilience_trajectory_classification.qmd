@@ -369,7 +369,9 @@ bd_population_valid = bd_population %>%
 # all valid individuals
 bd_capture_valid = bd_population %>%
   # filter to valid populations
-  filter(population %in% bd_population_valid$population) %>%
+  filter(population %in% bd_population_valid$population,
+         taxon_capture %in% c("rana_muscosa",
+                              "rana_sierrae")) %>%
   # drop reintroduced individuals
   # anti_join(reintro_pits, by = c("local_cmr_id" = "pit_tag_ref"), copy = TRUE) %>%
   # drop any individuals after treatments we want to mask
@@ -409,7 +411,8 @@ treatment_events_valid = treatment_events %>%
   inner_join(site_pop_year %>%
                select(population,
                       pop_id) %>%
-               distinct(), by = "pop_id")
+               distinct(), by = "pop_id") %>%
+  left_join(pop_species_map, by = "population")
 
 # all population - year combinations
 pop_year = site_pop_year %>%
@@ -422,6 +425,12 @@ pop_year = site_pop_year %>%
 pop_year_tx = pop_year %>%
   # left_join(first_release_events, by = c("population")) %>%
   arrange(population, year)
+
+pop_species_map = bd_capture_valid %>%
+  select(taxon_capture,
+         population) %>%
+  distinct() %>%
+  collect()
 
 ```
 
@@ -744,7 +753,8 @@ bd_stats = bd_capture_valid %>%
 # join with pop_year_ab
 pop_year_bd = pop_year_ab %>%
   left_join(bd_stats, by = c("population", "year")) %>%
-  arrange(population, year)
+  arrange(population, year) %>%
+  left_join(pop_species_map, by = "population")
 
 head(bd_stats)
 
@@ -898,7 +908,8 @@ For each population:
 # calculate swab counts
 pop_adult_swab_counts = pop_year_bd %>%
   group_by(population) %>%
-  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE))
+  summarize(adult_swab_n = sum(adult_swab_n, na.rm = TRUE)) %>%
+  left_join(pop_species_map, by = "population")
 
 # claculate epizootic classification criteria
 epi_thresholds = pop_year_bd %>%
@@ -948,7 +959,7 @@ epi_events = epi_thresholds %>%
 
 pop_year_class = pop_year_bd %>%
   left_join(epi_events, by = "population") %>%
-  group_by(population) %>%
+  group_by(population, taxon_capture) %>%
   mutate(median_prev = median(adult_bd_prevalence, na.rm = TRUE)) %>%
   ungroup() %>%
   mutate(
@@ -990,7 +1001,7 @@ knitr::kable(pop_year_class %>%
 #| warning: false
 #| code-fold: true
 #| code-summary: "Show visualization code"
-#| fig-height: 15
+#| fig-height: 10
 #| fig-width: 10
 
 psize = 1.5
@@ -1002,7 +1013,8 @@ manual_legend_df = data.frame(
   event = c("✱  Release event", "†  Antifungal treatment")
 )
 
-ggplot(pop_year_bd, aes(x = year)) +
+ggplot(pop_year_bd %>%
+         filter(taxon_capture == "rana_muscosa"), aes(x = year)) +
   # timeseries
   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
   # geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
@@ -1011,15 +1023,21 @@ ggplot(pop_year_bd, aes(x = year)) +
   geom_point(aes(y = log10(adult_count_cmr + 1), color = "CMR count"), size = psize, shape = "triangle") +
   geom_point(aes(y = log10(adult_count_visual + 1), color = "Visual count"), size = psize, shape = "triangle") +
   # swab counts
-  geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3,
+  geom_text(data = pop_adult_swab_counts %>%
+         filter(taxon_capture == "rana_muscosa"), x = 2010, y = prev_coef, size = 3,
             aes(label = paste0("n = ", adult_swab_n))) +
   # interventions
-  geom_text(data = treatment_events_valid %>% filter(grepl("release", treatment_type)),
+  geom_text(data = treatment_events_valid %>%
+              filter(grepl("release", treatment_type),
+                     taxon_capture == "rana_muscosa"),
             aes(x = year), y = 8, size = 5, label = "*") +
-  geom_text(data = treatment_events_valid %>% filter(grepl("antifungal", treatment_type)),
+  geom_text(data = treatment_events_valid %>%
+              filter(grepl("antifungal", treatment_type),
+                     taxon_capture == "rana_muscosa"),
             aes(x = year), y = 8, size = 2.5, label = "†") +
   # classifications
-  geom_tile(data = pop_year_class, aes(y = -1, fill = res_class), height = 1) +
+  geom_tile(data = pop_year_class %>%
+         filter(taxon_capture == "rana_muscosa"), aes(y = -1, fill = res_class), height = 1) +
   # thresholds
   geom_hline(yintercept = log10(135000 + 1), linetype = "dashed", color = "#d01c8b") +
   # aesthetics
@@ -1052,7 +1070,67 @@ ggplot(pop_year_bd, aes(x = year)) +
   ) +
   facet_wrap(population ~ .) +
   theme_minimal() +
-  ggtitle("Time series and resilience trajectory classification (adults only)") +
+  ggtitle("Rana muscosa resilience trajectory classification (adults only)") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+ggplot(pop_year_bd %>%
+         filter(taxon_capture == "rana_sierrae"), aes(x = year)) +
+  # timeseries
+  geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
+  # geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
+  # geom_point(aes(y = log10(adult_bd_load_max + 1), color = "max load"), size = psize) +
+  geom_point(aes(y = log10(adult_positive_bd_load_median + 1), color = "median load"), size = psize) +
+  geom_point(aes(y = log10(adult_count_cmr + 1), color = "CMR count"), size = psize, shape = "triangle") +
+  geom_point(aes(y = log10(adult_count_visual + 1), color = "Visual count"), size = psize, shape = "triangle") +
+  # swab counts
+  geom_text(data = pop_adult_swab_counts %>%
+         filter(taxon_capture == "rana_sierrae"), x = 2010, y = prev_coef, size = 3,
+            aes(label = paste0("n = ", adult_swab_n))) +
+  # interventions
+  geom_text(data = treatment_events_valid %>%
+              filter(grepl("release", treatment_type),
+                     taxon_capture == "rana_sierrae"),
+            aes(x = year), y = 8, size = 5, label = "*") +
+  geom_text(data = treatment_events_valid %>%
+              filter(grepl("antifungal", treatment_type),
+                     taxon_capture == "rana_sierrae"),
+            aes(x = year), y = 8, size = 2.5, label = "†") +
+  # classifications
+  geom_tile(data = pop_year_class %>%
+         filter(taxon_capture == "rana_sierrae"), aes(y = -1, fill = res_class), height = 1) +
+  # thresholds
+  geom_hline(yintercept = log10(135000 + 1), linetype = "dashed", color = "#d01c8b") +
+  # aesthetics
+  scale_color_manual(
+    name = "Timeseries",
+    values = c(
+    "CMR count" = "#0571b0",
+    "Visual count" = "#92c5de",
+    "Bd prevalence" = "#f1b6da",
+    # "geom-mean(+Bd load)" = "#d01c8b",
+    # "max load" = "#901cfb",
+    "median load" = "#d01c8b"
+  )) +
+  scale_fill_manual(
+    name = "Resillience classification",
+    values = c(
+    "1-naive" = "#b8e186",
+    "2-epizootic" = "#d01c8b",
+    "3-post" = "#0571b0"
+  )) +
+  scale_y_continuous(
+    name = "Adult abundance & Geometric mean Bd load",
+    breaks = c(0, 3, 6, 9),
+    labels = function(x) {
+      labs = scales::math_format(10^.x+1)(x)
+      labs[x == 0] = "0"
+      labs
+    },
+    sec.axis = sec_axis(~./prev_coef, name="Bd Prevalence")
+  ) +
+  facet_wrap(population ~ .) +
+  theme_minimal() +
+  ggtitle("Rana sierrae resilience trajectory classification (adults only)") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
 # ggplot(pop_year_class, aes(x = year)) +
