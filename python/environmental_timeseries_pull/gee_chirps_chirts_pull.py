@@ -39,7 +39,7 @@ from pathlib import Path
 import ee
 import pandas as pd
 from tqdm import tqdm
-from datetime import datetime as dt
+import datetime as dtm
 
 # ---------------------------------------------------------------------------
 # GEE dataset configuration
@@ -155,7 +155,7 @@ def _date_chunks(
     from dateutil.relativedelta import relativedelta
 
     start = pd.Timestamp(start_date)
-    end   = pd.Timestamp(end_date)
+    end   = pd.Timestamp(end_date) + dtm.timedelta(days=1)
 
     # "none" = no chunking; pass the full range as a single request
     if chunk == "none":
@@ -521,7 +521,7 @@ def extract_timeseries(
         combined_df = pd.concat(frames).sort_values(["site_name", "date"])
 
         if outdir:
-            filename = f"all_sites_combined_{dt.now().strftime('%Y%m%dT%H%M')}.csv"
+            filename = f"all_sites_combined_{dtm.datetime.now().strftime('%Y%m%dT%H%M')}.csv"
             out_path = Path(outdir) / filename
             combined_df.to_csv(out_path)
             log.info(
