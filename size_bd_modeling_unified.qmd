@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra, emmeans, rio)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra, emmeans, rio, rentrez, DECIPHER, phangorn, phytools)
 
 ```
 ## Data selection
@@ -767,7 +767,6 @@ bd_model_env_stats = bd_model_env %>%
             .groups = "drop") %>%
   arrange(country,
           taxon_capture)
-
 ```
 
 # Modeling
@@ -1600,7 +1599,8 @@ model_select = m5g_zln
 ## prevalence
 hu_specs = emmeans(model_select, 
                    ~ life_stage_simple | taxon_capture, 
-                   dpar = "hu")
+                   dpar = "hu",
+                 ndraws = 500)
 
 contrast(hu_specs, method = "revpairwise") 
 
@@ -1638,9 +1638,12 @@ hu_contrast_agg = hu_contrast_draws %>%
     ))
 
 ## b (mu)
+gc()
 b_specs = emmeans(model_select, 
                  ~ life_stage_simple | taxon_capture, 
-                 dpar = "mu")
+                 dpar = "mu",
+                 ndraws = 500)
+gc()
 
 contrast(b_specs, method = "revpairwise") 
 
@@ -1678,7 +1681,10 @@ b_contrast_agg = b_contrast_draws %>%
 
 # combine
 contrast_agg = hu_contrast_agg %>%
-  left_join(b_contrast_agg, by = c("taxon_capture"), suffix = c("_hu", "_b"))
+  left_join(b_contrast_agg, by = c("taxon_capture"), suffix = c("_hu", "_b")) %>%
+  mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
+         net_effect_b = ratio_positive_b * 2 - 1,
+         species = get_species_name(taxon_capture))
 
 group_draws = b_group_draws %>%
   left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
@@ -1860,19 +1866,19 @@ ggplot(b_contrast_draws, aes(x = b_subadult)) +
   theme(text=element_text(size=14))
 
 # probability of positive effect
-ggplot(contrast_agg, aes(x = 1-ratio_positive_hu, y = ratio_positive_b)) +
-  geom_vline(xintercept = 0.5, color = "#aaa") +
-  geom_hline(yintercept = 0.5, color = "#aaa") + 
+ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effect_b)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
   geom_text_repel(aes(label = taxon_capture),
                   color = "#888") +
-  xlim(0, 1) +
-  ylim(0, 1) +
+  xlim(-1, 1) +
+  ylim(-1, 1) +
   theme_minimal() +
   labs(
-       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
-       x = "Bd Prevalence\nProbability of positive effect [-]",
-       y = "Bd Load Density\nProbability of positive effect [-]") +
+       title = "Net Subadult Effect (Subadult - Adult)",
+       x = "Bd Prevalence (log scale) [-]",
+       y = "Bd Load Density (logit scale) [-]") +
   scale_color_brewer(palette = "Set2")
 
 ggplot(contrast_agg, aes(x = -hu_median, y = b_median)) +
@@ -1883,89 +1889,120 @@ ggplot(contrast_agg, aes(x = -hu_median, y = b_median)) +
                   color = "#888") +
   theme_minimal() +
   labs(
-       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
-       x = "Bd Prevalence\nMedian effect [-]",
-       y = "Bd Load Density\nMedian effect [-]") +
+       title = "Median Subadult Effect (Subadult - Adult)",
+       x = "Bd Prevalence (log scale) [-]",
+       y = "Bd Load Density (logit scale) [-]") +
   scale_color_brewer(palette = "Set2")
 
 ```
 
 ## Phylogenetic tree
 ```{r}
-#| eval: true
-#| echo: false
-#| warning: false
 
-# build tree from 
-species_list = sort(get_species_name(bd_model_stats$taxon_capture))
-tnrs_resolved = tnrs_match_names(species_list)
-tnrs_info = taxonomy_taxon_info(ott_ids = ott_id(tnrs_resolved))
-src = tax_sources(tnrs_info)
-tr = tol_induced_subtree(ott_ids = ott_id(tnrs_resolved),
-                         label_format = "name")
+gene_marker <- "16S"
 
-# source_studies <- map_dfr(tnrs_resolved$unique_name, function(species) {
-#   result <- studies_find_trees(
-#     property = "ot:ottTaxonName", 
-#     value = species,
-#     detailed = TRUE
-#   )
-#   
-#   tibble(
-#     species = species,
-#     study_id = result$study_ids,
-#     n_matched_trees = result$n_matched_trees,
-#     study_year = result$study_year,
-#     title = result$title
-#   )
-# })
+# --- 1. FETCH SEQUENCES ---
+fetch_sequence <- function(species, marker, max_seqs, min_length = 100) {
+  query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ", marker, "[All Fields])")
+  search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs)
+  
+  if (length(search$ids) == 0) {
+    message("No sequence found for: ", species)
+    return(NULL)
+  }
+  
+  seqs <- entrez_fetch(db = "nucleotide", id = search$ids, rettype = "fasta")
+  
+  tmp <- tempfile(fileext = ".fasta")
+  writeLines(seqs, tmp)
+  
+  dna <- tryCatch(
+    read.dna(tmp, format = "fasta"),
+    error = function(e) { message("Failed to parse FASTA for: ", species); return(NULL) }
+  )
+  
+  if (is.null(dna)) return(NULL)
+  if (is.matrix(dna)) dna <- as.list(dna)
+  
+  lengths <- sapply(dna, length)
+  dna <- dna[lengths >= min_length]
+  
+  if (length(dna) == 0) {
+    message("No sequences above min_length for: ", species)
+    return(NULL)
+  }
+  
+  lengths <- sapply(dna, length)
+  return(dna[which.max(lengths)])
+}
 
-# source_studies_wide = source_studies %>%
-#   select(species, study_id) %>%
-#   mutate(value = 1) %>%
-#   pivot_wider(names_from = species,
-#               values_from = value,
-#               values_fill = 0) %>%
-#   arrange(study_id)
-# 
-# source_studies_unique = source_studies %>%
-#   select(-species) %>%
-#   distinct() %>%
-#   arrange(study_id)
+raw_seqs <- lapply(species_list, function(sp) {
+  Sys.sleep(0.4)
+  fetch_sequence(sp, marker = gene_marker, max_seqs = 10)
+})
+names(raw_seqs) <- species_list
+raw_seqs <- Filter(Negate(is.null), raw_seqs)
+message(length(raw_seqs), " / ", length(species_list), " species retrieved")
 
-tr_reordered = rotateConstr(tr, gsub(" ", "_", species_list))
-tr_reordered$tip.label = get_species_name(tr_reordered$tip.label)
+# --- 2. COMBINE + ALIGN ---
+combined_seqs <- do.call(c, raw_seqs)  # fix: was missing from your script
 
-# plot tree
-# ggtree(tr, layout = "rectangular") +
-#   geom_tiplab(size = 3, align = TRUE) +
-#   theme_tree2() +
-#   scale_x_continuous(expand = expansion(mult = c(0, 0.3)),
-#                      breaks = c(1, 3, 5, 7))
+combined_char <- sapply(as.character(combined_seqs), function(seq) {
+  paste(seq, collapse = "")
+})
 
-p_phylo_tree = ggtree(tr_reordered, layout = "rectangular") +
-  geom_tiplab(size = 4, align = TRUE) +
+# Clean sequence names to species names only (GenBank headers are long)
+names(combined_char) <- names(raw_seqs)
+
+aligned <- AlignSeqs(DNAStringSet(combined_char))
+
+# --- 3. BUILD TREE ---
+phydat <- as.phyDat(aligned)
+
+dist_mat <- dist.ml(phydat, model = "JC69")
+
+nj_tree <- NJ(dist_mat)
+
+fit <- pml(nj_tree, phydat)
+fit_opt <- optim.pml(fit,
+                     model         = "GTR",
+                     optInv        = TRUE,
+                     optGamma      = TRUE,
+                     rearrangement = "NNI")
+
+tr_phylo <- fit_opt$tree
+
+# --- 4. ROOT ---
+tr_rooted <- midpoint(tr_phylo)
+
+# --- 5. QUICK SANITY CHECKS ---
+summary(tr_rooted$edge.length)
+is.ultrametric(tr_rooted)  # expected FALSE for ML tree
+plot(tr_rooted, cex = 0.6)
+
+# Optional: compare topology to your original OTL tree
+ggtree(tr_rooted, layout = "rectangular") +
+  geom_tiplab(size = 3, align = FALSE) +
   theme_tree2() +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.8)),
-                     breaks = c(1, 3, 5, 7))
+  scale_x_continuous(expand = expansion(mult = c(0, 0.3)))
 
-# ggsave(here("clh", "phologeny_tree.png"), plot = p_phylo_tree, width = 5, height = 6, units = "in")
+# Now has real branch lengths!
+summary(tr_rooted$edge.length)
+is.ultrametric(tr_rooted)
 
-p_phylo_tree
+hu_named <- setNames(-contrast_agg$net_effect_hu, contrast_agg$species)
+b_named  <- setNames(contrast_agg$net_effect_b,  contrast_agg$species)
 
+blomberg_k_hu = phylosig(tr_rooted, hu_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_b = phylosig(tr_rooted, b_named, method = "K", test = TRUE, nsim = 1000)
 
-# correlate phylogeny with trends
-cophen_dist = cophenetic(tr_reordered)
-cophen_sorted = cophen_dist[sort(rownames(cophen_dist)), sort(colnames(cophen_dist))]
-cophen_upper = cophen_sorted[upper.tri(cophen_sorted, diag = FALSE)]
+tr_rooted$tip.label
 
-hu_dist = dist(hu_contrast_agg$hu_median, upper = TRUE)
-b_dist = dist(b_contrast_agg$b_median, upper = TRUE)
+# plot
+par(mfrow = c(1, 2))
+contMap(tr_rooted, hu_named,  title = "HU median", fsize = 0.75)
+contMap(tr_rooted, b_named,   title = "B median", fsize = 0.75)
 
-hu_rho = cor.test(hu_dist, cophen_upper, method = "spearman")
-hu_rho
-b_rho = cor.test(b_dist, cophen_upper, method = "spearman")
-b_rho
 ```
 
 ## Collective results
