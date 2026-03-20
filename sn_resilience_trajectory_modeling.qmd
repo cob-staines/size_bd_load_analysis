@@ -23,7 +23,7 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 
 ```
 
-## Data selection
+# Data selection
 
 ```{r}
 #| eval: false
@@ -500,8 +500,6 @@ hu_specs = emmeans(model_select,
                    ~ life_stage_simple | taxon_capture * res_class, 
                    dpar = "hu")
 
-contrast(hu_specs, method = "revpairwise") 
-
 hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
 
 hu_group_draws = hu_specs %>%
@@ -516,7 +514,7 @@ hu_contrast_draws = hu_contrasts_specs %>%
 hu_contrast_agg = hu_contrast_draws %>%
   group_by(taxon_capture,
            res_class,
-           contrast,) %>%
+           contrast) %>%
   summarize(hdi_50 = hdi(hu_subadult, ci = 0.50),
             hdi_89 = hdi(hu_subadult, ci = 0.89),
             hdi_95 = hdi(hu_subadult, ci = 0.95),
@@ -541,8 +539,6 @@ hu_contrast_agg = hu_contrast_draws %>%
 b_specs = emmeans(model_select, 
                  ~ life_stage_simple | taxon_capture * res_class, 
                  dpar = "mu")
-
-contrast(b_specs, method = "revpairwise") 
 
 b_contrasts_specs = contrast(b_specs, method = "revpairwise")
 
@@ -582,8 +578,6 @@ b_contrast_agg = b_contrast_draws %>%
 sigma_specs = emmeans(model_select, 
                  ~ life_stage_simple | taxon_capture * res_class, 
                  dpar = "sigma")
-
-contrast(sigma_specs, method = "revpairwise") 
 
 sigma_contrasts_specs = contrast(sigma_specs, method = "revpairwise")
 
@@ -807,11 +801,12 @@ ggplot(group_draws, aes(y = sigma, x = res_class, color = life_stage_simple)) +
 
 # visualize contrasts
 ggplot(hu_contrast_draws %>%
-         filter(contrast != "subadult - metamorph"), aes(x = hu_subadult, fill = contrast)) +
+         filter(taxon_capture == "rana_sierrae",
+                contrast != "subadult - metamorph"), aes(x = -hu_subadult, fill = contrast)) +
   stat_halfeye(alpha = 0.75,
                .width = c(0.5, 0.89),
                point_interval = mode_hdi) +
-  facet_grid(res_class ~ taxon_capture) +
+  facet_grid(res_class ~ contrast) +
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
@@ -899,5 +894,57 @@ ggplot(contrast_agg %>%
   scale_color_brewer(palette = "Set2") +
   facet_wrap("taxon_capture")
 
+
+```
+# Interaction contrasts
+```{r}
+hu_inter_specs = emmeans(
+  model_select,
+  ~ life_stage_simple * res_class | taxon_capture,
+  dpar = "hu"
+)
+
+hu_inter_contrasts = contrast(
+  hu_inter_specs,
+  interaction = "revpairwise"   # pairs life_stage AND res_class simultaneously
+)
+
+hu_inter_draws = hu_inter_contrasts %>%   # or hu_interaction_contrasts
+  gather_emmeans_draws() %>%
+  rename(hu_coc = .value)
+
+hu_inter_agg = hu_inter_draws %>%
+  group_by(taxon_capture,
+           life_stage_simple_revpairwise,
+           res_class_revpairwise) %>%
+  summarize(
+    hdi_50     = hdi(hu_coc, ci = 0.50),
+    hdi_89     = hdi(hu_coc, ci = 0.89),
+    hu_median  = median(hu_coc),
+    ratio_positive = sum(hu_coc > 0) / n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    hdi_zero_50 = hdi_50$CI_low > 0 | hdi_50$CI_high < 0,
+    hdi_zero_89 = hdi_89$CI_low > 0 | hdi_89$CI_high < 0
+  )
+
+ggplot(hu_inter_draws %>%
+         filter(life_stage_simple_revpairwise == "metamorph - adult",
+                res_class_revpairwise == "(3-post) - (2-epizootic)"), aes(x = -hu_coc, fill = life_stage_simple_revpairwise)) +
+  stat_halfeye(
+    alpha          = 0.75,
+    .width         = c(0.5, 0.89),
+    point_interval = mode_hdi
+  ) +
+  facet_grid(res_class_revpairwise ~ taxon_capture) +       # no res_class facet — it's now IN the contrast
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  labs(
+    x = "Difference in life-stage effect between res_classes\n(logit scale) with 50% & 89% HDI",
+    y = "Posterior Density [-]"
+  ) +
+  theme(text = element_text(size = 14)) +
+  scale_fill_brewer(palette = "Set2")
 
 ```
