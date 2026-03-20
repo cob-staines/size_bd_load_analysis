@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ropensci/rotl, ggtree, ape, patchwork, viridis, terra, emmeans, rio, rentrez, DECIPHER, phangorn, phytools)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, ggrepel, bayesplot, runner, cmdstanr, bayestestR, ape, patchwork, viridis, terra, emmeans, rio, rentrez, DECIPHER, phangorn, phytools)
 
 ```
 ## Data selection
@@ -60,7 +60,7 @@ I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd densi
 raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
   clean_names() %>%
   filter(life_stage %in% c("A", "S", "Y")) %>%
-  rename(site = site_name,
+  dplyr::rename(site = site_name,
          body_mass_g = weight_g,
          site_utme = utme_site,
          site_utmn = utmn_site,
@@ -103,7 +103,7 @@ v_lonlat = geom(v_ll)[, c("x", "y")]
 
 raca_sites_ll = raca_sites %>%
   bind_cols(v_lonlat) %>%
-  rename(site_longitude = x,
+  dplyr::rename(site_longitude = x,
          site_latitude = y) %>%
   select(site,
          site_latitude,
@@ -147,7 +147,7 @@ w_lonlat = geom(w_ll)[, c("x", "y")]
 
 ralu_sites_ll = ralu_sites %>%
   bind_cols(w_lonlat) %>%
-  rename(site_longitude = x,
+  dplyr::rename(site_longitude = x,
          site_latitude = y) %>%
   select(site,
          site_latitude,
@@ -155,7 +155,7 @@ ralu_sites_ll = ralu_sites %>%
 
 ralu_clean = ralu_raw[[4]] %>%
   clean_names() %>%
-  rename(life_stage = age_class) %>%
+  dplyr::rename(life_stage = age_class) %>%
   mutate(taxon_capture = "rana_luteiventris",
          date = as.Date(bd_sample_date),
          site = tolower(pond_name),
@@ -210,7 +210,7 @@ usgs_raw = read.csv(here("data", "USGSBsalBdDataFull.csv"))
 
 usgs_clean = usgs_raw %>%
   clean_names() %>%
-  rename(site_latitude = latitude,
+  dplyr::rename(site_latitude = latitude,
          site_longitude = longitude,
          svl_mm = body_length,
          life_stage = age,
@@ -284,7 +284,7 @@ usgs_spp = usgs_valid %>%
 
 ## SN populations
 sn_populations = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
-  rename(population = pop_id) %>%
+  dplyr::rename(population = pop_id) %>%
   mutate(population_sn = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
          site = as.character(site)) %>%
   select(site,
@@ -547,7 +547,7 @@ bd_sample_valid = bd_life_stage %>%
 
 # final data selection and cleaning for model
 ribbitr_valid = bd_sample_valid %>%
-  rename(bd_its_copies = bd_its1_copies_per_swab) %>%
+  dplyr::rename(bd_its_copies = bd_its1_copies_per_swab) %>%
   select(bd_its_copies,
          taxon_capture,
          life_stage,
@@ -636,7 +636,7 @@ site_space_time = bd_model %>%
   summarize(start_date = min(date) - days(temporal_buffer),
             end_date = max(date),
             .groups = "drop") %>%
-  rename(site_name = site,
+  dplyr::rename(site_name = site,
          latitude = site_latitude,
          longitude = site_longitude)
 
@@ -666,7 +666,7 @@ site_space_time_after_2017 = site_space_time %>%
 #| 
 # env_in = read_csv(here("python", "gee_env_pull", "data", "gee_chirps_modis_data_all.csv"))
 env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-17.csv")) %>%
-  rename(site = site_name,
+  dplyr::rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
 
@@ -1597,26 +1597,31 @@ model_select = m5g_zln
 
 # emmeans parameter distributions
 ## prevalence
+# hu_intercept_specs = emmeans(model_select, 
+#                              ~ taxon_capture, 
+#                              dpar = "hu",
+#                              weights = "equal",
+#                              re_formula = NA)
+
 hu_specs = emmeans(model_select, 
                    ~ life_stage_simple | taxon_capture, 
                    dpar = "hu",
-                 ndraws = 500)
-
-contrast(hu_specs, method = "revpairwise") 
+                   re_formula = NA,
+                   ndraws = 500)
 
 hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
 
 hu_group_draws = hu_specs %>%
   gather_emmeans_draws() %>%
-  rename(hu = .value) %>%
+  dplyr::rename(hu = .value) %>%
   mutate(prevalence = 1 - plogis(hu))
 
 hu_contrast_draws = hu_contrasts_specs %>%
   gather_emmeans_draws() %>%
-  rename(hu_subadult = .value)
+  dplyr::rename(hu_subadult = .value)
 
 hu_contrast_agg = hu_contrast_draws %>%
-    group_by(taxon_capture) %>%
+    group_by(taxon_capture) %>%  # check!
   summarize(hdi_50 = hdi(hu_subadult, ci = 0.50),
          hdi_89 = hdi(hu_subadult, ci = 0.89),
          hdi_95 = hdi(hu_subadult, ci = 0.95),
@@ -1638,12 +1643,25 @@ hu_contrast_agg = hu_contrast_draws %>%
     ))
 
 ## b (mu)
+# gc()
+# b_intercept_specs = emmeans(model_select, 
+#                             ~ taxon_capture, 
+#                             dpar = "mu",
+#                             re_formula = NA,
+#                             weights = "equal")
+
 gc()
-b_specs = emmeans(model_select, 
-                 ~ life_stage_simple | taxon_capture, 
-                 dpar = "mu",
-                 ndraws = 500)
+# b_specs = emmeans(model_select,
+#                   ~ life_stage_simple | taxon_capture,
+#                   dpar = "mu",
+#                   re_formula = NA,
+#                   ndraws = 500)
+# save(b_specs, file = here("data", paste0("bd_model_unified_bspecs", today(), ".RData")))
 gc()
+
+load(here("data", "bd_model_unified_bspecs2026-03-20.RData")) 
+
+
 
 contrast(b_specs, method = "revpairwise") 
 
@@ -1651,11 +1669,11 @@ b_contrasts_specs = contrast(b_specs, method = "revpairwise")
 
 b_group_draws = b_specs %>%
   gather_emmeans_draws() %>%
-  rename(b = .value)
+  dplyr::rename(b = .value)
 
 b_contrast_draws = b_contrasts_specs %>%
   gather_emmeans_draws() %>%
-  rename(b_subadult = .value)
+  dplyr::rename(b_subadult = .value)
 
 b_contrast_agg = b_contrast_draws %>%
     group_by(taxon_capture) %>%
@@ -1712,12 +1730,12 @@ epred_original = epred_draws(model_select,
                              newdata = brms_data,
                              re_formula = NA,
                              ndraws = 200) %>%
-  rename(bd_load_density_epred = .epred)
+  dplyr::rename(bd_load_density_epred = .epred)
 
 epred_fixed = epred_draws(model_select,
                           newdata = newdata_basic,
                           re_formula = NA) %>%
-  rename(bd_load_density_epred = .epred)
+  dplyr::rename(bd_load_density_epred = .epred)
 
 # observation data
 obs_data = brms_data %>%
@@ -1852,6 +1870,19 @@ ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
+ggplot(hu_contrast_draws_fixed, aes(x = hu_subadult)) +
+  stat_halfeye(fill = "#66c2a5",
+               .width = c(0.5, 0.95),
+               point_interval = mode_hdi) +
+  facet_wrap("taxon_capture") +
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14))
+
 ggplot(b_contrast_draws, aes(x = b_subadult)) +
     stat_halfeye(fill = "#8da0cb",
                .width = c(0.5, 0.95),
@@ -1900,10 +1931,13 @@ ggplot(contrast_agg, aes(x = -hu_median, y = b_median)) +
 ```{r}
 
 gene_marker <- "16S"
+species_list = bd_model_env_stats %>%
+  mutate(species = get_species_name(taxon_capture)) %>%
+  pull(species)
 
 # --- 1. FETCH SEQUENCES ---
 fetch_sequence <- function(species, marker, max_seqs, min_length = 100) {
-  query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ", marker, "[All Fields])")
+  query <- paste0(species, "[Organism] AND ", marker, "[Title]")
   search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs)
   
   if (length(search$ids) == 0) {
@@ -1981,9 +2015,9 @@ is.ultrametric(tr_rooted)  # expected FALSE for ML tree
 plot(tr_rooted, cex = 0.6)
 
 # Optional: compare topology to your original OTL tree
-ggtree(tr_rooted, layout = "rectangular") +
-  geom_tiplab(size = 3, align = FALSE) +
-  theme_tree2() +
+ggtree::ggtree(tr_rooted, layout = "rectangular") +
+  ggtree::geom_tiplab(size = 3, align = FALSE) +
+  ggtree::theme_tree2() +
   scale_x_continuous(expand = expansion(mult = c(0, 0.3)))
 
 # Now has real branch lengths!
@@ -2331,7 +2365,7 @@ temp_grid = expand_grid(temp_c_15_day_mean = temp_range, .draw = 1:nrow(climate_
     p_upper_89 = plogis(quantile(hu_pred, 0.945)),
     .groups = "drop"
   ) %>%
-  rename(temp_c = temp_c_15_day_mean)
+  dplyr::rename(temp_c = temp_c_15_day_mean)
 
 # prevalence
 ggplot(temp_grid, aes(x = temp_c)) +
@@ -2491,7 +2525,7 @@ temp_grid = expand_grid(temp_z_15_mean = temp_range,
     p_upper_89 = plogis(quantile(hu_pred, 0.945)),
     .groups = "drop"
   ) %>%
-  rename(temp_c = temp_c_15_day_mean)
+  dplyr::rename(temp_c = temp_c_15_day_mean)
 
 # prevalence
 ggplot(temp_grid, aes(x = temp_c)) +
