@@ -1,6 +1,0 @@
----
-site_coords_path: 'site_coords_example.csv'
-output_path: 'data/gee_chirps_modis_data.csv'
-start_date: '2020-01-01'
-end_date: '2024-12-31'
-gee_project: "my-gee-project-name"
