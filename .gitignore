@@ -9,7 +9,8 @@ papers/
 *.html
 *.zip
 *.png
-*.txt
 *.csv
+*.txt
 *_files/
+/data/*
 !python/gee_env_pull/site_coords_example.csv
