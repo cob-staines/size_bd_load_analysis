@@ -11,6 +11,8 @@ papers/
 *.png
 *.csv
 *.txt
+*.idea
+*.RDataTmp*
 *_files/
 /data/*
 python/environmental_timeseries_pull/chirts_era5/
