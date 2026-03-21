@@ -1,0 +1,1798 @@
+---
+title: "size_bd_population_modeling"
+format: html
+---
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, data.table, brms, loo, bayesplot, tidybayes)
+
+## Connect to DB
+dbcon <- hopToDB("ribbitr")
+
+# load populations
+data_pop = read.csv(here("data", "sn_site_pop_2025-05-15.csv")) %>%
+  rename(population = pop_id) %>%
+  mutate(population = ifelse(!is.na(population), paste0(as.character(population), "_pop"), NA_character_))
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+# microclimate tables
+db_ts_temp = tbl(dbcon, Id("microclimate_data", "ts_temperature"))
+db_sensor = tbl(dbcon, Id("microclimate_data", "sensor"))
+db_logger = tbl(dbcon, Id("microclimate_data", "logger"))
+
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+```
+
+# RIBBiTR data inventory
+
+#### Preliminary selection criteria:
+
+- Bd swab + body size (SVL or weight) data for at least 60 individuals in a given population
+- populations sampled over at least 3 years
+- species found in at least valid 2 populations
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
+
+# identify populations
+bd_population = bd_sample %>%
+  # filter(!is.na(svl_mm) | !is.na(body_mass_g)) %>%
+  filter(!is.na(svl_mm),
+         life_stage %in% c("adult", "juvenile", "subadult", "metamorph", "metamorphosed")) %>%
+  left_join(data_pop, by = "site", copy = TRUE) %>%
+  mutate(population = ifelse(is.na(population), site, population),
+         population = ifelse(country %in% c("brazil", "panama"), region, population),
+         tax_pop = paste0(taxon_capture, "_", population),
+         year = year(date),
+         life_stage_simple = case_match(life_stage,
+                                        "adult" ~ "adult",
+                                        "juvenile" ~ "subadult",
+                                        "metamorph" ~ "subadult",
+                                        "metamorphosed" ~ "subadult",
+                                        "subadult" ~ "subadult",
+                                        .default = NA_character_))
+
+# selection criteria
+## - 60 samples per pupulation
+## - 3 years of sampleing
+## - 2 populations per species
+## - at least 15 each adult and subadult per population
+
+# determine populations which meet criteria
+bd_population_valid = bd_population %>%
+  group_by(population, taxon_capture, life_stage_simple) %>%
+  summarise(ls_gt_15 = n() > 15,
+            .groups = "drop") %>%
+  group_by(population, taxon_capture) %>%
+  filter(sum(as.integer(ls_gt_15)) == 2) %>%
+  left_join(bd_population, by = c("taxon_capture", "population")) %>%
+  group_by(population, region, country, taxon_capture) %>%
+  summarise(count = n(),
+            sample_count = n(),
+            year_first = min(year),
+            year_last = max(year),
+            year_count = n_distinct(year),
+            .groups = "drop") %>%
+  filter(sample_count >= 60,
+         year_count >= 3) %>%
+  group_by(taxon_capture) %>%
+  mutate(population_count = n()) %>%
+  ungroup() %>%
+  filter(population_count >= 2) %>%
+  arrange(desc(sample_count), taxon_capture) %>%
+  collect()
+# 
+# bd_population_valid = bd_population %>%
+#   group_by(population, region, country, taxon_capture, life_stage_simple) %>%
+#   summarise(life_stage_count = n(), .groups = "drop") %>%
+#   # Check that each population has at least 15 individuals of each life stage
+#   group_by(population, region, country, taxon_capture) %>%
+#   filter(all(life_stage_simple %in% c("adult", "subadult")) & 
+#          all(life_stage_count >= 15)) %>%
+#   # Now get the overall population statistics
+#   summarise(sample_count = sum(life_stage_count),
+#             .groups = "drop") %>%
+#   # Add back the year information
+#   left_join(
+#     bd_population %>%
+#       group_by(population, region, country, taxon_capture) %>%
+#       summarise(year_first = min(year),
+#                 year_last = max(year),
+#                 year_count = n_distinct(year),
+#                 .groups = "drop"),
+#     by = c("population", "region", "country", "taxon_capture")
+#   ) %>%
+#   # Apply your existing filters
+#   filter(sample_count >= 60,
+#          year_count >= 3) %>%
+#   group_by(taxon_capture) %>%
+#   mutate(population_count = n()) %>%
+#   ungroup() %>%
+#   filter(population_count >= 2) %>%
+#   arrange(desc(sample_count), taxon_capture) %>%
+#   collect()
+
+# join with bd data, select
+bd_sample_valid = bd_population %>%
+  filter(population %in% bd_population_valid$population &
+           taxon_capture %in% bd_population_valid$taxon_capture) %>%
+  left_join(db_bd %>%
+              group_by(sample_id) %>%
+              summarise(bd_swab_count = n(),
+                        bd_detected = any(detected),
+                        bd_mean_its1_copies_per_swab = mean(bd_its1_copies_per_swab),
+                        .groups = "drop"),
+            by = "sample_id") %>%
+  mutate(svl_mm_noise = svl_mm + runif(1) -.5) %>%
+  select(sample_id,
+         bd_swab_count,
+         bd_detected,
+         bd_mean_its1_copies_per_swab,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         tax_pop,
+         region,
+         country) %>%
+  collect() %>%
+  mutate(svl_mm_noise = svl_mm + runif(n(), min = -0.5, max = 0.5)) %>%
+  filter(!(taxon_capture == "silverstoneia_flotator" & svl_mm > 100))
+
+(bd_population_agg = bd_sample_valid %>%
+    group_by(taxon_capture,
+             country) %>%
+    summarise(regions = str_flatten(sort(unique(region)), collapse = ", "),
+              sample_count = n(),
+              year_first = year(min(date)),
+              year_last = year(max(date)),
+              year_count = n_distinct(year(date)),
+              pop_count = n_distinct(population)) %>%
+    arrange(country, taxon_capture))
+
+bd_model = bd_sample_valid %>%
+  filter(!is.na(bd_mean_its1_copies_per_swab),
+         !is.na(svl_mm)) %>%
+  mutate(bd_load = bd_mean_its1_copies_per_swab,
+         bd_load_int = as.integer(bd_load)) %>%
+  select(bd_load,
+         bd_load_int,
+         bd_detected,
+         svl_mm,
+         svl_mm_noise,
+         population,
+         taxon_capture,
+         tax_pop,
+         life_stage,
+         life_stage_simple,
+         date,
+         population,
+         region)
+
+bd_model_sn = bd_model %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))
+
+bd_model_not_sn = bd_model %>%
+  filter(!(taxon_capture %in% c("rana_muscosa", "rana_sierrae")))
+
+taxa = sort(unique(bd_model$taxon_capture))
+
+```
+
+# descriptive stats and plots
+
+## histogram of bd load for each species
+```{r}
+# hist of all samples
+ggplot(bd_model, aes(x = log(bd_load + 1))) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
+
+# Q-Q plot of all samples
+ggplot(bd_model, aes(sample = log(bd_load + 1))) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_wrap(~ taxon_capture)
+
+# hist of positives
+ggplot(bd_model %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
+
+# hist of positives by life stage
+ggplot( bd_model %>%
+          filter(bd_detected), aes(x = log(bd_load + 1), col = life_stage_simple, fill = life_stage_simple)) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
+
+# Q-Q plot of positives
+ggplot(bd_model %>%
+         filter(bd_detected), aes(sample = log(bd_load + 1))) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_wrap(~ taxon_capture)
+```
+
+
+
+## bd load positive distributions by population
+```{r}
+#| fig-width: 15
+#| fig-height: 30
+
+# positives
+ggplot(bd_model %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
+  geom_histogram() +
+  facet_wrap(~ tax_pop, scales = "free_y", ncol = 6)
+
+# SN positives
+ggplot(bd_model_sn %>%
+         filter(bd_detected), aes(x = log(bd_load + 1))) +
+  geom_histogram() +
+  facet_wrap(~ tax_pop, scales = "free_y", ncol = 6)
+
+
+```
+
+## prevalence binning
+```{r}
+# prevalence binning
+prev_bin = bd_model %>%
+  mutate(svl_mm_bin = cut(svl_mm, breaks = seq(0, 100, by = 5), include.lowest = TRUE)) %>%
+  group_by(svl_mm_bin, taxon_capture) %>%
+  summarise(n = n(),
+            prevalence = sum(bd_detected) / n,
+            median_bd_load_positive = median(bd_load[bd_detected]),
+            .groups = "drop")
+
+ggplot(prev_bin, aes(x = svl_mm_bin, y = prevalence)) +
+  geom_point() +
+  labs(x = "SVL Bin (mm)",
+       y = "Prevalence",
+       title = "Bd Prevalence by SVL Bin") +
+  scale_x_discrete(breaks = seq(0, 100, by = 5)) +
+  facet_wrap(~ taxon_capture, scales = "free_x")
+
+ggplot(prev_bin, aes(x = svl_mm_bin, y = log(median_bd_load_positive))) +
+  geom_point() +
+  labs(x = "SVL Bin (mm)",
+       y = "log(Median Bd Load positive)",
+       title = "Bd Prevalence by SVL Bin") +
+  scale_x_discrete(breaks = seq(0, 100, by = 5)) +
+  facet_wrap(~ taxon_capture, scales = "free_x")
+  
+  
+```
+## histogram of size classes for each species
+```{r}
+
+ggplot(bd_model, aes(x = svl_mm, color = life_stage_simple, fill = life_stage_simple)) +
+  geom_histogram() +
+  facet_wrap(~ taxon_capture, scales = "free")
+
+peace = bd_model %>%
+  filter(taxon_capture == "rana_pipiens") %>%
+  arrange(life_stage, svl_mm)
+
+```
+
+# sierra nevada modeling
+
+# mlog -- logistic load (positive bd load only)
+
+Notes
+- poor convergence between chains
+- xoffset and xscale are showing a large spread of values spanning zero, suggesting that model in inconclusive or does not describe the data well (H1 would show xscale negative)
+- xoffset shows a subset of surprisingly high values (100), suggesting model is being fit with x far outside the range of svl_mm. Consider rerunning limiting xoffset to the range of svl, forcing the model to use xscale to indicate if no breakpoint is present.
+```{r}
+model_data = bd_model_sn %>%
+  filter(bd_load > 0)
+
+
+nl_formula <- bf(
+  bd_load ~ yoffset + yscale / (1 + exp(-(svl_mm - xoffset) / xscale)),
+  # Random effect on y_offset (or other parameters) by population
+  yoffset ~ 1,
+  yscale ~ 1 + (1 | population),
+  xoffset ~ 1,
+  xscale ~ 1,
+  nl = TRUE
+)
+
+svl_mm_mean = mean(model_data$svl_mm)
+bd_load_log_median = median(log(model_data$bd_load))
+
+priors <- c(
+  prior(normal(9, 9), nlpar = "yoffset"),
+  prior(normal(1, 1), nlpar = "yscale", lb = 0),
+  prior(normal(50, 50), nlpar = "xoffset"),
+  prior(normal(-1, 1), nlpar = "xscale"),
+  prior(exponential(1), class = "sigma")  # sigma positive, constant
+)
+
+m_logistic_load <- brm(
+  formula = nl_formula,
+  data = model_data,
+  family = lognormal(),
+  prior = priors,
+  control = list(adapt_delta = 0.95),  # increase if divergent transitions occur
+  chains = 4,
+  iter = 1000,
+  warmup = 500,
+  cores = 4
+)
+
+saveRDS(m_logistic_load, file = "model_results_logistic_load.rds")
+m_logistic_load = readRDS("model_results_logistic_load.rds")
+
+summary(m_logistic_load)
+plot(m_logistic_load)
+plot(conditional_effects(m_logistic_load), ask = FALSE)
+
+```
+
+# negative binomial -- zero inflationand population effects
+## m0 -- negative binomial
+```{r}
+
+bd_size_temp_sn = bd_size_temp %>%
+  filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa"),
+         !is.na(bd_mean_its1_copies_per_swab)) %>%
+  mutate(bd_load_int = as.integer(bd_mean_its1_copies_per_swab),
+         infected = case_match(bd_detected,
+                               TRUE ~ 1,
+                              FALSE ~ 0))
+
+peace = bd_size_temp_sn %>%
+  filter(is.na(bd_load_int))
+
+m0 <- brm(
+  formula = bd_load_int ~ svl_mm,
+  data = bd_size_temp_sn,
+  family = negbinomial()
+)
+
+# model summary
+summary(m0)
+# list vars
+get_variables(m0)
+# collect draws
+peace = tidy_draws(m0)
+# posterio predictive check
+pp_check(m0, ndraws = 30)
+
+# Extract posterior predictions
+yrep_m0 <- posterior_predict(m0)
+# Extract observed response vector
+y <- bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int)
+
+yrep_log <- log(1 + yrep)
+y_log <- log(1 + y)
+ppc_dens_overlay(y = y_log, yrep = yrep_log[1:100, ])
+
+
+plot((m0), ask = FALSE)
+plot(conditional_effects(m0), ask = FALSE)
+
+loo_m0 <- loo(m0, save_psis = TRUE)
+yrep <- posterior_predict(m0)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep,
+  lw = weights(loo_m0$psis_object))
+
+posterior = as.matrix(m0)
+mcmc_areas(posterior,
+           pars = c("bd_load_int"),
+           prob = 0.8)
+saveRDS(m0, file = "model_results_m0.rds")
+m0 = readRDS("model_results_m0.rds")
+
+ppc_dens_overlay(y = m0$y,
+                 yrep = posterior_predict(m0, draws = 50))
+
+
+```
+## m0p -- zero inflated negative binomial
+```{r}
+# prior_summary(m0)
+# summary(m0)
+# plot(m0)
+# plot(conditional_effects(m0), ask = FALSE)
+
+m0p <- brm(
+  formula = bd_load_int ~ svl_mm,
+  data = bd_size_temp_sn,
+  family = zero_inflated_negbinomial()
+)
+
+summary(m0p)
+plot((m0p), ask = FALSE)
+plot(conditional_effects(m0p), ask = FALSE)
+
+loo_m0p <- loo(m0p, save_psis = TRUE)
+yrep <- posterior_predict(m0p)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep,
+  lw = weights(loo_m0p$psis_object))
+
+saveRDS(m0p, file = "model_results_m0p.rds")
+m0p = readRDS("model_results_m0p.rds")
+
+
+prep_summary <- function(fit, model) {
+  tidybayes::summarise_draws(fit) |> 
+    mutate(model = model) |> 
+    select(model, variable, q5, mean, q95) |> 
+    filter(grepl(variable, pattern = '^b'))  
+}
+
+# posterior inference comparison
+peace = rbind(prep_summary(m0, "nb"), prep_summary(m0p, "nb_zi"))
+
+
+```
+
+## m1 -- negative binomial with population random effects
+```{r}
+
+m1 <- brm(
+  formula = bd_load_int ~ svl_mm + (1 | population),
+  data = bd_size_temp_sn,
+  family = negbinomial()
+)
+
+summary(m1)
+plot((m1), ask = FALSE)
+plot(conditional_effects(m1), ask = FALSE)
+
+saveRDS(m1, file = "model_results_m1.rds")
+m1 = readRDS("model_results_m1.rds")
+```
+
+## m1p -- zero inflated negative binomial with population random effects
+```{r}
+m1p <- brm(
+  formula = bd_load_int ~ svl_mm + (1 | population),
+  data = bd_size_temp_sn,
+  family = zero_inflated_negbinomial()
+)
+
+summary(m1p)
+plot((m1p), ask = FALSE)
+plot(conditional_effects(m1p), ask = FALSE)
+
+loo_m1p <- loo(m1p, save_psis = TRUE)
+yrep_m1p <- posterior_predict(m1p)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1p,
+  lw = weights(loo_m1p$psis_object))
+
+saveRDS(m1p, file = "model_results_m1p.rds")
+m1p = readRDS("model_results_m1p.rds")
+
+bd_size_temp_sn %>%
+  data_grid(population) %>%
+  add_epred_draws(m1p) %>%
+  ggplot(aes(x = .epred, y = population)) +
+  stat_halfeye() +
+  geom_point(data = bd_size_temp_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+
+ 
+# m2 <- brm(
+#   formula = bd_load_int ~ svl_mm + (svl_mm | population) + (1 | site),
+#   data = bd_size_temp_sn,
+#   family = negbinomial()
+# )
+# 
+# m2p <- brm(
+#   formula = bd_load_int ~ svl_mm + (svl_mm | population)  + (1 | site),
+#   data = bd_size_temp_sn,
+#   family = zero_inflated_negbinomial()
+# )
+
+```
+
+## m0 m0p m1 m1p --  model comparison
+```{r}
+
+peace = rbind(prep_summary(m0, "nb"),
+              prep_summary(m0p, "nb_zi"),
+              prep_summary(m1, "nb_pop"),
+              prep_summary(m1p, "nb_zi_pop"))
+
+loo_comp <- loo_compare(list(nb = loo(m0),
+                             nb_zi = loo(m0p),
+                             nb_pop = loo(m1),
+                             nb_zi_pop = loo(m1p)))
+loo_comp
+
+1 - pnorm(-loo_comp[2,1], loo_comp[2,2])
+
+```
+
+Notes:
+- m1p shows best performance (loo_comp)
+- zero-inflated models are better than not, and random effects from population are better than not.
+
+# negative binomial zero inflated lifestage & population
+
+## SN
+
+```{r}
+m1lp <- brm(
+  formula = bf(
+    bd_load_int ~ 1 + life_stage + (1 | population),
+    zi ~ 1 + life_stage,
+    shape ~ 1 + life_stage
+  ),
+  data = bd_model_sn,
+  family = zero_inflated_negbinomial(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
+)
+
+
+saveRDS(m1lp, file = "model_results_znb_life_pop.rds")
+m1lp = readRDS("model_results_znb_life_pop.rds")
+
+summary(m1lp)
+plot((m1lp), ask = FALSE)
+plot(conditional_effects(m1lp), ask = FALSE)
+
+loo_m1lp <- loo(m1lp, save_psis = TRUE)
+yrep_m1lp <- posterior_predict(m1lp)
+ppc_loo_pit_overlay(
+  y = bd_model_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1lp,
+  lw = weights(loo_m1lp$psis_object))
+
+bd_model_sn %>%
+  data_grid(population) %>%
+  add_epred_draws(m1lp) %>%
+  ggplot(aes(x = .epred, y = population)) +
+  stat_halfeye() +
+  geom_point(data = bd_model_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+
+```
+## all
+```{r}
+
+run_m1_ltp = function(taxon){
+  # colostethus_panamansis
+  m1_ltp_copa <- brm(
+    formula = bf(
+      bd_load_int ~ 1 + life_stage_simple + (1 | population),
+      zi ~ 1 + life_stage_simple,
+      shape ~ 1 + life_stage_simple
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = zero_inflated_negbinomial(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+
+taxon_m = "colostethus_panamansis"
+m1_ltp_copa = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_copa, file = "model_results_znb_life_tax_pop_copa.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_copa.rds")
+
+taxon_m = "lithobates_sphenocephalus"
+m1_ltp_lisp = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_lisp, file = "model_results_znb_life_tax_pop_lisp.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_lisp.rds")
+
+taxon_m = "lithobates_warszewitschii"
+m1_ltp_liwa = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_liwa, file = "model_results_znb_life_tax_pop_liwa.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_liwa.rds")
+
+taxon_m = "plethodon_glutinosus"
+m1_ltp_plgl = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_plgl, file = "model_results_znb_life_tax_pop_plgl.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_plgl.rds")
+
+taxon_m = "pseudacris_crucifer"
+m1_ltp_pscr = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_pscr, file = "model_results_znb_life_tax_pop_pscr.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_pscr.rds")
+
+taxon_m = "rana_catesbeiana"
+m1_ltp_raca = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_raca, file = "model_results_znb_life_tax_pop_raca.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_raca.rds")
+
+taxon_m = "rana_clamitans"
+m1_ltp_racl = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_racl, file = "model_results_znb_life_tax_pop_racl.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_racl.rds")
+
+taxon_m = "rana_muscosa"
+m1_ltp_ramu = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_ramu, file = "model_results_znb_life_tax_pop_ramu.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_ramu.rds")
+
+taxon_m = "rana_pipiens"
+m1_ltp_rapi = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rapi, file = "model_results_znb_life_tax_pop_rapi.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rapi.rds")
+
+taxon_m = "rana_sierrae"
+m1_ltp_rasi = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rasi, file = "model_results_znb_life_tax_pop_rasi.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rasi.rds")
+
+taxon_m = "rhaebo_haematiticus"
+m1_ltp_rhha = run_m1_ltp(taxon_m)
+saveRDS(m1_ltp_rhha, file = "model_results_znb_life_tax_pop_rhha.rds")
+m1_ltp = readRDS("model_results_znb_life_tax_pop_rhha.rds")
+
+# evaluation
+summary(m1_ltp)
+plot((m1_ltp), ask = FALSE)
+plot(conditional_effects(m1_ltp), ask = FALSE)
+
+pp_check(m1_ltp) +
+  scale_x_log10()
+
+loo_m1_ltp <- loo(m1_ltp, save_psis = TRUE)
+yrep_m1_ltp <- posterior_predict(m1_ltp)
+ppc_loo_pit_overlay(
+  y = bd_model %>%
+    filter(
+      !is.na(bd_load_int),
+      taxon_capture == taxon_m) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1_ltp,
+  lw = weights(loo_m1_ltp$psis_object))
+
+```
+
+# lognormal zero inflated lifestage & population
+```{r}
+run_m2_ltp = function(taxon){
+  # colostethus_panamansis
+  m2_ltp <- brm(
+    formula = bf(
+      bd_load_int ~ 1 + life_stage_simple + (1 | population),
+      hu ~ 1 + life_stage_simple,
+      sigma ~ 1 + life_stage_simple
+    ),
+    data = bd_model %>%
+      filter(taxon_capture == taxon),
+    family = hurdle_lognormal(),
+    chains = 4,
+    iter = 4000,
+    warmup = 1000,
+    cores = 4,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    seed = 123
+  )
+}
+
+
+taxon_m = "colostethus_panamansis"
+m2_ltp_copa = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_copa, file = "model_results_zln_life_tax_pop_copa.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_copa.rds")
+
+taxon_m = "lithobates_sphenocephalus"
+m2_ltp_lisp = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_lisp, file = "model_results_zln_life_tax_pop_lisp.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_lisp.rds")
+
+taxon_m = "lithobates_warszewitschii"
+m2_ltp_liwa = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_liwa, file = "model_results_zln_life_tax_pop_liwa.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_liwa.rds")
+
+taxon_m = "plethodon_glutinosus"
+m2_ltp_plgl = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_plgl, file = "model_results_zln_life_tax_pop_plgl.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_plgl.rds")
+
+taxon_m = "pseudacris_crucifer"
+m2_ltp_pscr = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_pscr, file = "model_results_zln_life_tax_pop_pscr.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_pscr.rds")
+
+taxon_m = "rana_catesbeiana"
+m2_ltp_raca = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_raca, file = "model_results_zln_life_tax_pop_raca.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_raca.rds")
+
+taxon_m = "rana_clamitans"
+m2_ltp_racl = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_racl, file = "model_results_zln_life_tax_pop_racl.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_racl.rds")
+
+taxon_m = "rana_muscosa"
+m2_ltp_ramu = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_ramu, file = "model_results_zln_life_tax_pop_ramu.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_ramu.rds")
+
+taxon_m = "rana_pipiens"
+m2_ltp_rapi = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rapi, file = "model_results_zln_life_tax_pop_rapi.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rapi.rds")
+
+taxon_m = "rana_sierrae"
+m2_ltp_rasi = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rasi, file = "model_results_zln_life_tax_pop_rasi.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rasi.rds")
+
+taxon_m = "rhaebo_haematiticus"
+m2_ltp_rhha = run_m2_ltp(taxon_m)
+saveRDS(m2_ltp_rhha, file = "model_results_zln_life_tax_pop_rhha.rds")
+m2_ltp = readRDS("model_results_zln_life_tax_pop_rhha.rds")
+
+# evaluation
+summary(m2_ltp)
+plot((m2_ltp), ask = FALSE)
+plot(conditional_effects(m2_ltp), ask = FALSE)
+
+pp_check(m2_ltp) +
+  scale_x_log10()
+
+loo_m2_ltp <- loo(m2_ltp, save_psis = TRUE)
+yrep_m2_ltp <- posterior_predict(m2_ltp)
+ppc_loo_pit_overlay(
+  y = bd_model %>%
+    filter(
+      !is.na(bd_load_int),
+      taxon_capture == taxon_m) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m2_ltp,
+  lw = weights(loo_m2_ltp$psis_object))
+
+ loo_compare(list(loo_m1_ltp,
+                  loo_m2_ltp))
+
+```
+
+## plot comparison of posterior predictive
+```{r}
+prefix_list = c("copa",
+                "lisp",
+                "liwa",
+                "plgl",
+                "pscr",
+                "raca",
+                "racl",
+                "ramu",
+                "rapi",
+                "rasi",
+                "rhha")
+
+
+prefix = prefix_list[11]
+print(prefix)
+m2_ltp = readRDS(paste0("model_results_zln_life_tax_pop_", prefix, ".rds"))
+summary(m2_ltp)
+plot((m2_ltp), ask = FALSE)
+plot(conditional_effects(m2_ltp), ask = FALSE)
+pp_check(m2_ltp) +
+  scale_x_log10()
+
+```
+
+# negative binomial zero inflated svl_mm lifestage & population
+
+```{r}
+brmsf = bf(bd_load_int ~ svl_mm + life_stage + (1 | population))
+
+peace = get_prior(brmsf,
+                  data = bd_model_sn)
+
+m1lsp <- brm(
+  formula = bd_load_int ~ svl_mm + life_stage + (1 | population),
+  data = bd_model_sn,
+  family = zero_inflated_negbinomial(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
+)
+
+
+saveRDS(m1lsp, file = "model_results_znb_svl_life_pop.rds")
+m1lsp = readRDS("model_results_znb_svl_life_pop.rds")
+
+summary(m1lsp)
+plot((m1lsp), ask = FALSE)
+plot(conditional_effects(m1lsp), ask = FALSE)
+
+loo_m1p <- loo(m1p, save_psis = TRUE)
+yrep_m1p <- posterior_predict(m1p)
+ppc_loo_pit_overlay(
+  y = bd_size_temp_sn %>%
+    filter(!is.na(bd_load_int)) %>%
+    pull(bd_load_int), 
+  yrep = yrep_m1p,
+  lw = weights(loo_m1p$psis_object))
+
+bd_size_temp_sn %>%
+  data_grid(population) %>%
+  add_epred_draws(m1p) %>%
+  ggplot(aes(x = .epred, y = population)) +
+  stat_halfeye() +
+  geom_point(data = bd_size_temp_sn, aes(x = bd_load_int, y = population), color = "blue", alpha = 0.5)
+
+```
+
+# zero inflated lognormal with continuous breakpoint model
+```{r}
+# Load required libraries
+library(rstan)
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(bayesplot)
+library(loo)
+
+# Set up Stan options
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+# # Example data generation (replace with your actual data)
+# set.seed(123)
+# n <- 200
+# populations <- c("Pop1", "Pop2", "Pop3", "Pop4")
+# 
+# # Generate example data
+# data <- data.frame(
+#   svl_mm = runif(n, 20, 80),
+#   population = sample(populations, n, replace = TRUE)
+# )
+# 
+# # Add population indices for Stan
+# data$pop_id <- as.numeric(as.factor(data$population))
+# n_pop <- length(unique(data$pop_id))
+# 
+# # Simulate bd_load with zero-inflation and unknown breakpoint (for testing)
+# true_breakpoint <- 45  # This is what we want to recover
+# data$bd_load <- ifelse(
+#   runif(n) < plogis(-1.5 + 0.03 * pmin(data$svl_mm, true_breakpoint) + 
+#                     0.08 * pmax(data$svl_mm - true_breakpoint, 0)), # infection probability
+#   exp(rnorm(n, 0.5 + 0.02 * pmin(data$svl_mm, true_breakpoint) + 
+#             0.06 * pmax(data$svl_mm - true_breakpoint, 0), 0.4)), # load if infected
+#   0
+# )
+
+data = bd_model %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))
+
+data$pop_id <- as.numeric(as.factor(data$population))
+n_pop <- length(unique(data$pop_id))
+
+print("Data summary:")
+print(summary(data))
+print(paste("True breakpoint used in simulation:", true_breakpoint))
+print(paste("Infection rate:", mean(data$bd_load > 0)))
+
+# Custom Stan model with estimated breakpoint
+stan_model_code <- "
+data {
+  int<lower=0> N;                    // number of observations
+  vector[N] bd_load;                 // response variable
+  vector[N] svl_mm;                  // predictor variable
+  int<lower=1> J;                    // number of populations
+  int<lower=1,upper=J> pop_id[N];    // population indicators
+  real svl_min;                      // minimum svl value (for breakpoint bounds)
+  real svl_max;                      // maximum svl value (for breakpoint bounds)
+}
+
+parameters {
+  // Breakpoint parameter (common to both infection and load models)
+  real<lower=svl_min,upper=svl_max> c;
+  
+  // Infection model parameters (logit scale)
+  real alpha_infection;              // intercept for infection probability
+  real beta1_infection;              // slope before breakpoint
+  real beta2_infection;              // slope after breakpoint
+  vector[J] u_infection;             // population random effects for infection
+  real<lower=0> sigma_u_infection;   // SD of population effects for infection
+  
+  // Load model parameters (log scale)
+  real alpha_load;                   // intercept for log(bd_load)
+  real beta1_load;                   // slope before breakpoint
+  real beta2_load;                   // slope after breakpoint
+  vector[J] u_load;                  // population random effects for load
+  real<lower=0> sigma_u_load;        // SD of population effects for load
+  real<lower=0> sigma_load;          // residual SD for log(bd_load)
+}
+
+transformed parameters {
+  vector[N] mu_infection;            // linear predictor for infection
+  vector[N] mu_load;                 // linear predictor for log(bd_load)
+  
+  for (n in 1:N) {
+    // Piecewise linear model for infection probability (logit scale)
+    if (svl_mm[n] <= c) {
+      mu_infection[n] = alpha_infection + beta1_infection * svl_mm[n] + u_infection[pop_id[n]];
+    } else {
+      mu_infection[n] = alpha_infection + beta1_infection * c + beta2_infection * (svl_mm[n] - c) + u_infection[pop_id[n]];
+    }
+    
+    // Piecewise linear model for log(bd_load) (log scale)
+    if (svl_mm[n] <= c) {
+      mu_load[n] = alpha_load + beta1_load * svl_mm[n] + u_load[pop_id[n]];
+    } else {
+      mu_load[n] = alpha_load + beta1_load * c + beta2_load * (svl_mm[n] - c) + u_load[pop_id[n]];
+    }
+  }
+}
+
+model {
+  // Priors
+  c ~ uniform(svl_min, svl_max);     // uniform prior on breakpoint
+  
+  // Infection model priors
+  alpha_infection ~ normal(-1, 2);
+  beta1_infection ~ normal(0, 1);
+  beta2_infection ~ normal(0, 1);
+  sigma_u_infection ~ exponential(1);
+  u_infection ~ normal(0, sigma_u_infection);
+  
+  // Load model priors
+  alpha_load ~ normal(0, 2);
+  beta1_load ~ normal(0, 1);
+  beta2_load ~ normal(0, 1);
+  sigma_load ~ exponential(1);
+  sigma_u_load ~ exponential(1);
+  u_load ~ normal(0, sigma_u_load);
+  
+  // Likelihood
+  for (n in 1:N) {
+    if (bd_load[n] == 0) {
+      // Zero-inflation: probability of no infection
+      target += log_inv_logit(mu_infection[n]);
+    } else {
+      // Non-zero: infected and observed load
+      target += log1m_inv_logit(mu_infection[n]) + 
+                lognormal_lpdf(bd_load[n] | mu_load[n], sigma_load);
+    }
+  }
+}
+
+generated quantities {
+  vector[N] log_lik;                 // for model comparison
+  vector[N] y_rep;                   // posterior predictive samples
+  
+  for (n in 1:N) {
+    // Log-likelihood for LOO-CV
+    if (bd_load[n] == 0) {
+      log_lik[n] = log_inv_logit(mu_infection[n]);
+    } else {
+      log_lik[n] = log1m_inv_logit(mu_infection[n]) + 
+                   lognormal_lpdf(bd_load[n] | mu_load[n], sigma_load);
+    }
+    
+    // Posterior predictive samples
+    if (bernoulli_logit_rng(mu_infection[n]) == 1) {
+      y_rep[n] = 0;
+    } else {
+      y_rep[n] = lognormal_rng(mu_load[n], sigma_load);
+    }
+  }
+}
+"
+
+# Prepare data for Stan
+stan_data <- list(
+  N = nrow(data),
+  bd_load = data$bd_load,
+  svl_mm = data$svl_mm,
+  J = n_pop,
+  pop_id = data$pop_id,
+  svl_min = min(data$svl_mm) + 5,  # reasonable bounds for breakpoint
+  svl_max = max(data$svl_mm) - 5
+)
+
+print("Compiling Stan model...")
+model <- stan_model(model_code = stan_model_code)
+
+print("Fitting model... This may take several minutes...")
+fit <- sampling(
+  model,
+  data = stan_data,
+  chains = 1,
+  iter = 1100,
+  warmup = 1000,
+  cores = 3,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
+)
+
+saveRDS(fit, file = "model_results_fit_lognormalpiecewise.rds")
+fit = readRDS("model_results_fit_lognormalpiecewise.rds")
+
+
+# Model summary
+print("Model Summary:")
+print(fit, pars = c("c", "alpha_infection", "beta1_infection", "beta2_infection",
+                   "alpha_load", "beta1_load", "beta2_load", 
+                   "sigma_load", "sigma_u_infection", "sigma_u_load"))
+
+# Extract samples
+samples <- extract(fit)
+
+# Check convergence (greater than 1 signifies poor convergence)
+print("R-hat diagnostics:")
+print(summary(fit)$summary[c("c", "alpha_infection", "beta1_infection", "beta2_infection",
+                            "alpha_load", "beta1_load", "beta2_load"), "Rhat"])
+
+# Plot breakpoint posterior
+breakpoint_samples <- samples$c
+cat("\nBreakpoint estimation results:\n")
+# cat("True breakpoint:", true_breakpoint, "\n")
+cat("Estimated breakpoint (median):", median(breakpoint_samples), "\n")
+cat("95% credible interval:", quantile(breakpoint_samples, c(0.025, 0.975)), "\n")
+
+# Create diagnostic plots
+par(mfrow = c(2, 2))
+
+# Breakpoint posterior
+hist(breakpoint_samples, breaks = 30, main = "Posterior Distribution of Breakpoint c",
+     xlab = "SVL (mm)", col = "lightblue", border = "white")
+# abline(v = true_breakpoint, col = "red", lwd = 2, lty = 2)
+abline(v = median(breakpoint_samples), col = "blue", lwd = 2)
+legend("topright", c("True value", "Estimated median"), 
+       col = c("red", "blue"), lty = c(2, 1), lwd = 2)
+
+# Trace plot for breakpoint
+plot(breakpoint_samples[1:100], type = "l", main = "Trace Plot: Breakpoint c",
+     xlab = "Iteration", ylab = "c", col = "blue")
+
+# Posterior predictive check
+y_rep <- log( 1 + samples$y_rep)
+ppc_dens_overlay(log( 1 + data$bd_load), y_rep[1:50, ]) + 
+  ggtitle("Posterior Predictive Check")
+
+# Model predictions
+svl_pred <- seq(min(data$svl_mm), max(data$svl_mm), length.out = 100)
+c_median <- median(breakpoint_samples)
+
+# Calculate predicted infection probabilities
+pred_infection <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    plogis(median(samples$alpha_infection) + median(samples$beta1_infection) * x)
+  } else {
+    plogis(median(samples$alpha_infection) + median(samples$beta1_infection) * c_median + 
+           median(samples$beta2_infection) * (x - c_median))
+  }
+})
+
+# Calculate predicted loads (for infected individuals)
+pred_load <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    exp(median(samples$alpha_load) + median(samples$beta1_load) * x)
+  } else {
+    exp(median(samples$alpha_load) + median(samples$beta1_load) * c_median + 
+        median(samples$beta2_load) * (x - c_median))
+  }
+})
+
+# Plot results
+par(mfrow = c(1, 2))
+
+# Infection probability
+plot(data$svl_mm, as.numeric(data$bd_load > 0), 
+     xlab = "SVL (mm)", ylab = "Infection Probability",
+     main = "Infection Probability vs SVL", pch = 16, col = "gray70")
+lines(svl_pred, pred_infection, col = "blue", lwd = 2)
+abline(v = c_median, col = "red", lty = 2, lwd = 2)
+legend("topleft", c("Data", "Model fit", "Breakpoint"), 
+       col = c("gray70", "blue", "red"), lty = c(NA, 1, 2), pch = c(16, NA, NA))
+
+# Load values (log scale)
+infected_data <- data[data$bd_load > 0, ]
+plot(infected_data$svl_mm, log(infected_data$bd_load), 
+     xlab = "SVL (mm)", ylab = "log(BD Load)",
+     main = "BD Load vs SVL (Infected Only)", pch = 16, col = "gray70")
+lines(svl_pred, log(pred_load), col = "blue", lwd = 2)
+abline(v = c_median, col = "red", lty = 2, lwd = 2)
+
+# Model comparison using LOO
+print("Calculating LOO for model comparison...")
+log_lik <- extract_log_lik(fit)
+loo_result <- loo(log_lik)
+print(loo_result)
+
+# Summary of key results
+cat("\n=== MODEL RESULTS SUMMARY ===\n")
+cat("Breakpoint estimate:", round(median(breakpoint_samples), 2), 
+    "mm (95% CI:", round(quantile(breakpoint_samples, 0.025), 2), "-", 
+    round(quantile(breakpoint_samples, 0.975), 2), ")\n")
+cat("Infection model slopes: before =", round(median(samples$beta1_infection), 3),
+    ", after =", round(median(samples$beta2_infection), 3), "\n")
+cat("Load model slopes: before =", round(median(samples$beta1_load), 3),
+    ", after =", round(median(samples$beta2_load), 3), "\n")
+cat("Population-level variation: infection SD =", round(median(samples$sigma_u_infection), 3),
+    ", load SD =", round(median(samples$sigma_u_load), 3), "\n")
+
+print("Model fitting complete!")
+```
+
+Notes
+- continuous may be a good assumption, but then may also be forcing unrealistic slopes both before and after breakpoint. Better to allow this to be continuous to describe the data, and then let discontinuity (and linearity in general) be a limitation of the model
+# binomial infection model with breakpoint
+```{r}
+# Load required libraries
+library(rstan)
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(bayesplot)
+library(loo)
+
+# Set up Stan options
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+# # Example data generation (replace with your actual data)
+# set.seed(123)
+# n <- 200
+# populations <- c("Pop1", "Pop2", "Pop3", "Pop4")
+# 
+# # Generate example data
+# data <- data.frame(
+#   svl_mm = runif(n, 20, 80),
+#   population = sample(populations, n, replace = TRUE)
+# )
+# 
+# # Add population indices for Stan
+# data$pop_id <- as.numeric(as.factor(data$population))
+# n_pop <- length(unique(data$pop_id))
+# 
+# # Simulate bd_load with zero-inflation and unknown breakpoint (for testing)
+# true_breakpoint <- 45  # This is what we want to recover
+# data$bd_load <- ifelse(
+#   runif(n) < plogis(-1.5 + 0.03 * pmin(data$svl_mm, true_breakpoint) +
+#                     0.08 * pmax(data$svl_mm - true_breakpoint, 0)), # infection probability
+#   exp(rnorm(n, 0.5 + 0.02 * pmin(data$svl_mm, true_breakpoint) +
+#             0.06 * pmax(data$svl_mm - true_breakpoint, 0), 0.4)), # load if infected
+#   0
+# )
+# data$infected = as.integer(data$bd_load > 0)
+
+data = bd_model %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+  mutate(infected = as.integer(bd_load > 0))
+
+data$pop_id <- as.numeric(as.factor(data$population))
+n_pop <- length(unique(data$pop_id))
+
+print("Data summary:")
+print(summary(data))
+print(paste("Infection rate:", mean(data$bd_load > 0)))
+
+# Custom Stan model with estimated breakpoint
+stan_infection_model_code <- "
+// Stan model for infection probability with estimated breakpoint
+// Separate intercepts before and after breakpoint (no continuity constraint)
+
+data {
+  int<lower=0> N;                    // number of observations
+  int<lower=0,upper=1> infection[N]; // binary infection status (0/1)
+  vector[N] svl_mm;                  // predictor variable
+  int<lower=1> J;                    // number of populations
+  int<lower=1,upper=J> pop_id[N];    // population indicators
+  real svl_min;                      // minimum svl value (for breakpoint bounds)
+  real svl_max;                      // maximum svl value (for breakpoint bounds)
+}
+
+parameters {
+  // Breakpoint parameter
+  real<lower=svl_min,upper=svl_max> c;
+  
+  // Infection model parameters (logit scale)
+  real alpha1_infection;             // intercept before breakpoint
+  real alpha2_infection;             // intercept after breakpoint
+  real beta1_infection;              // slope before breakpoint
+  real beta2_infection;              // slope after breakpoint
+  vector[J] u_infection;             // population random effects
+  real<lower=0> sigma_u_infection;   // SD of population effects
+}
+
+transformed parameters {
+  vector[N] mu_infection;            // linear predictor for infection
+  
+  for (n in 1:N) {
+    // Piecewise linear model with separate intercepts
+    if (svl_mm[n] <= c) {
+      mu_infection[n] = alpha1_infection + beta1_infection * svl_mm[n] + u_infection[pop_id[n]];
+    } else {
+      mu_infection[n] = alpha2_infection + beta2_infection * svl_mm[n] + u_infection[pop_id[n]];
+    }
+  }
+}
+
+model {
+  // Priors
+  c ~ uniform(svl_min, svl_max);     // uniform prior on breakpoint
+  
+  // Infection model priors
+  alpha1_infection ~ normal(0, 2);
+  alpha2_infection ~ normal(0, 2);
+  beta1_infection ~ normal(0, 1);
+  beta2_infection ~ normal(0, 1);
+  sigma_u_infection ~ exponential(1);
+  u_infection ~ normal(0, sigma_u_infection);
+  
+  // Likelihood
+  infection ~ bernoulli_logit(mu_infection);
+}
+
+generated quantities {
+  vector[N] log_lik;                 // for model comparison
+  vector[N] y_rep;                   // posterior predictive samples
+  
+  for (n in 1:N) {
+    // Log-likelihood for LOO-CV
+    log_lik[n] = bernoulli_logit_lpmf(infection[n] | mu_infection[n]);
+    
+    // Posterior predictive samples
+    y_rep[n] = bernoulli_logit_rng(mu_infection[n]);
+  }
+}
+"
+# Prepare data for Stan
+stan_data <- list(
+  N = nrow(data),
+  infection = data$infected,
+  svl_mm = data$svl_mm,
+  J = n_pop,
+  pop_id = data$pop_id,
+  svl_min = min(data$svl_mm) + 5,  # reasonable bounds for breakpoint
+  svl_max = max(data$svl_mm) - 5
+)
+
+print("Compiling Stan model...")
+model <- stan_model(model_code = stan_infection_model_code)
+
+print("Fitting model... This may take several minutes...")
+m_inf1 <- sampling(
+  model,
+  data = stan_data,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
+)
+
+saveRDS(m_inf1, file = "model_results_infection_piecewise.rds")
+m_inf1 = readRDS("model_results_infection_piecewise.rds")
+
+
+# Model summary
+print("Model Summary:")
+print(m_inf1, pars = c("c", "alpha1_infection", "alpha2_infection", "beta1_infection", "beta2_infection", "sigma_u_infection"))
+
+# Extract samples
+samples <- extract(m_inf1)
+
+# Check convergence (greater than 1 signifies poor convergence)
+print("R-hat diagnostics:")
+print(summary(m_inf1)$summary[c("c", "alpha1_infection", "alpha2_infection", "beta1_infection", "beta2_infection"), "Rhat"])
+
+# Plot breakpoint posterior
+breakpoint_samples <- samples$c
+cat("\nBreakpoint estimation results:\n")
+# cat("True breakpoint:", true_breakpoint, "\n")
+cat("Estimated breakpoint (median):", median(breakpoint_samples), "\n")
+cat("95% credible interval:", quantile(breakpoint_samples, c(0.025, 0.975)), "\n")
+
+# Create diagnostic plots
+par(mfrow = c(2, 2))
+
+# Breakpoint posterior
+hist(breakpoint_samples, breaks = 200, main = "Posterior Distribution of Breakpoint c",
+     xlab = "SVL (mm)", col = "lightblue", border = "white")
+# abline(v = true_breakpoint, col = "red", lwd = 2, lty = 2)
+abline(v = median(breakpoint_samples), col = "blue", lwd = 2)
+legend("topright", c("True value", "Estimated median"), 
+       col = c("red", "blue"), lty = c(2, 1), lwd = 2)
+
+# Trace plot for breakpoint
+plot(breakpoint_samples, type = "l", main = "Trace Plot: Breakpoint c",
+     xlab = "Iteration", ylab = "c", col = "blue")
+
+# Posterior predictive check
+y_rep <- log( 1 + samples$y_rep)
+ppc_dens_overlay(log( 1 + data$bd_load), y_rep[1:50, ]) + 
+  ggtitle("Posterior Predictive Check")
+
+# Model predictions
+svl_pred <- seq(min(data$svl_mm), max(data$svl_mm), length.out = 100)
+c_median <- median(breakpoint_samples)
+
+# Calculate predicted infection probabilities
+pred_infection <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    plogis(median(samples$alpha1_infection) + median(samples$beta1_infection) * x)
+  } else {
+    plogis(median(samples$alpha2_infection) + median(samples$beta2_infection) * x)
+  }
+})
+
+# Calculate predicted loads (for infected individuals)
+pred_load <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    exp(median(samples$alpha_load) + median(samples$beta1_load) * x)
+  } else {
+    exp(median(samples$alpha_load) + median(samples$beta1_load) * c_median + 
+        median(samples$beta2_load) * (x - c_median))
+  }
+})
+
+# Plot results
+par(mfrow = c(1, 2))
+
+# Infection probability
+plot(data$svl_mm, as.numeric(data$bd_load > 0), 
+     xlab = "SVL (mm)", ylab = "Infection Probability",
+     main = "Infection Probability vs SVL", pch = 16, col = "gray70")
+lines(svl_pred, pred_infection, col = "blue", lwd = 2)
+abline(v = c_median, col = "red", lty = 2, lwd = 2)
+legend("topleft", c("Data", "Model fit", "Breakpoint"), 
+       col = c("gray70", "blue", "red"), lty = c(NA, 1, 2), pch = c(16, NA, NA))
+
+# Load values (log scale)
+infected_data <- data[data$bd_load > 0, ]
+plot(infected_data$svl_mm, log(infected_data$bd_load), 
+     xlab = "SVL (mm)", ylab = "log(BD Load)",
+     main = "BD Load vs SVL (Infected Only)", pch = 16, col = "gray70")
+lines(svl_pred, log(pred_load), col = "blue", lwd = 2)
+abline(v = c_median, col = "red", lty = 2, lwd = 2)
+
+# Model comparison using LOO
+print("Calculating LOO for model comparison...")
+log_lik <- extract_log_lik(fit)
+loo_result <- loo(log_lik)
+print(loo_result)
+
+# Summary of key results
+cat("\n=== MODEL RESULTS SUMMARY ===\n")
+cat("Breakpoint estimate:", round(median(breakpoint_samples), 2), 
+    "mm (95% CI:", round(quantile(breakpoint_samples, 0.025), 2), "-", 
+    round(quantile(breakpoint_samples, 0.975), 2), ")\n")
+cat("Infection model slopes: before =", round(median(samples$beta1_infection), 3),
+    ", after =", round(median(samples$beta2_infection), 3), "\n")
+cat("Load model slopes: before =", round(median(samples$beta1_load), 3),
+    ", after =", round(median(samples$beta2_load), 3), "\n")
+cat("Population-level variation: infection SD =", round(median(samples$sigma_u_infection), 3),
+    ", load SD =", round(median(samples$sigma_u_load), 3), "\n")
+
+print("Model fitting complete!")
+```
+
+# lognormal load model with breakpoint
+```{r}
+# Load required libraries
+library(rstan)
+library(brms)
+library(dplyr)
+library(ggplot2)
+library(bayesplot)
+library(loo)
+
+# Set up Stan options
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+# # Example data generation (replace with your actual data)
+# set.seed(123)
+# n <- 200
+# populations <- c("Pop1", "Pop2", "Pop3", "Pop4")
+# 
+# # Generate example data
+# data <- data.frame(
+#   svl_mm = runif(n, 20, 80),
+#   population = sample(populations, n, replace = TRUE)
+# )
+# 
+# # Add population indices for Stan
+# data$pop_id <- as.numeric(as.factor(data$population))
+# n_pop <- length(unique(data$pop_id))
+# 
+# # Simulate bd_load with zero-inflation and unknown breakpoint (for testing)
+# true_breakpoint <- 45  # This is what we want to recover
+# data$bd_load <- ifelse(
+#   runif(n) < plogis(-1.5 + 0.03 * pmin(data$svl_mm, true_breakpoint) +
+#                     0.08 * pmax(data$svl_mm - true_breakpoint, 0)), # infection probability
+#   exp(rnorm(n, 0.5 + 0.02 * pmin(data$svl_mm, true_breakpoint) +
+#             0.06 * pmax(data$svl_mm - true_breakpoint, 0), 0.4)), # load if infected
+#   0
+# )
+# data$infected = as.integer(data$bd_load > 0)
+
+data = bd_model %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
+         bd_load > 0)
+
+data$pop_id <- as.numeric(as.factor(data$population))
+n_pop <- length(unique(data$pop_id))
+
+print("Data summary:")
+print(summary(data))
+print(paste("Infection rate:", mean(data$bd_load > 0)))
+
+# Custom Stan model with estimated breakpoint
+stan_load_model_code <- "
+// Stan model for pathogen load with estimated breakpoint
+// Only for infected individuals (bd_load > 0)
+// Separate intercepts before and after breakpoint (no continuity constraint)
+
+data {
+  int<lower=0> N;                    // number of observations (infected only)
+  vector<lower=0>[N] bd_load;        // response variable (bd_load > 0 only)
+  vector[N] svl_mm;                  // predictor variable
+  int<lower=1> J;                    // number of populations
+  int<lower=1,upper=J> pop_id[N];    // population indicators
+  real svl_min;                      // minimum svl value (for breakpoint bounds)
+  real svl_max;                      // maximum svl value (for breakpoint bounds)
+}
+
+parameters {
+  // Breakpoint parameter
+  real<lower=svl_min,upper=svl_max> c;
+  
+  // Load model parameters (log scale)
+  real alpha1_load;                  // intercept before breakpoint
+  real alpha2_load;                  // intercept after breakpoint
+  real beta1_load;                   // slope before breakpoint
+  real beta2_load;                   // slope after breakpoint
+  vector[J] u_load;                  // population random effects
+  real<lower=0> sigma_u_load;        // SD of population effects
+  real<lower=0> sigma_load;          // residual SD for log(bd_load)
+}
+
+transformed parameters {
+  vector[N] mu_load;                 // linear predictor for log(bd_load)
+  
+  for (n in 1:N) {
+    // Piecewise linear model with separate intercepts
+    if (svl_mm[n] <= c) {
+      mu_load[n] = alpha1_load + beta1_load * svl_mm[n] + u_load[pop_id[n]];
+    } else {
+      mu_load[n] = alpha2_load + beta2_load * svl_mm[n] + u_load[pop_id[n]];
+    }
+  }
+}
+
+model {
+  // Priors
+  c ~ uniform(svl_min, svl_max);     // uniform prior on breakpoint
+  
+  // Load model priors
+  alpha1_load ~ normal(0, 2);
+  alpha2_load ~ normal(0, 2);
+  beta1_load ~ normal(0, 1);
+  beta2_load ~ normal(0, 1);
+  sigma_load ~ exponential(1);
+  sigma_u_load ~ exponential(1);
+  u_load ~ normal(0, sigma_u_load);
+  
+  // Likelihood
+  bd_load ~ lognormal(mu_load, sigma_load);
+}
+
+generated quantities {
+  vector[N] log_lik;                 // for model comparison
+  vector[N] y_rep;                   // posterior predictive samples
+  
+  for (n in 1:N) {
+    // Log-likelihood for LOO-CV
+    log_lik[n] = lognormal_lpdf(bd_load[n] | mu_load[n], sigma_load);
+    
+    // Posterior predictive samples
+    y_rep[n] = lognormal_rng(mu_load[n], sigma_load);
+  }
+}
+"
+# Prepare data for Stan
+stan_data <- list(
+  N = nrow(data),
+  bd_load = data$bd_load,
+  svl_mm = data$svl_mm,
+  J = n_pop,
+  pop_id = data$pop_id,
+  svl_min = min(data$svl_mm) + 5,  # reasonable bounds for breakpoint
+  svl_max = max(data$svl_mm) - 5
+)
+
+print("Compiling Stan model...")
+model <- stan_model(model_code = stan_load_model_code)
+
+print("Fitting model...")
+m_lod1 <- sampling(
+  model,
+  data = stan_data,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  seed = 123
+)
+
+saveRDS(m_lod1, file = "model_results_load_piecewise.rds")
+m_lod1 = readRDS("model_results_load_piecewise.rds")
+
+
+# Model summary
+print("Model Summary:")
+print(m_lod1, pars = c("c", "alpha1_load", "alpha2_load", "beta1_load", "beta2_load", "sigma_u_load"))
+
+# Extract samples
+samples <- extract(m_lod1)
+
+# Check convergence (greater than 1 signifies poor convergence)
+print("R-hat diagnostics:")
+print(summary(m_lod1)$summary[c("c", "alpha1_load", "alpha2_load", "beta1_load", "beta2_load"), "Rhat"])
+
+# Plot breakpoint posterior
+breakpoint_samples <- samples$c
+cat("\nBreakpoint estimation results:\n")
+# cat("True breakpoint:", true_breakpoint, "\n")
+cat("Estimated breakpoint (median):", median(breakpoint_samples), "\n")
+cat("95% credible interval:", quantile(breakpoint_samples, c(0.025, 0.975)), "\n")
+
+# Create diagnostic plots
+par(mfrow = c(2, 2))
+
+# Breakpoint posterior
+hist(breakpoint_samples, breaks = 30, main = "Posterior Distribution of Breakpoint c",
+     xlab = "SVL (mm)", col = "lightblue", border = "white")
+# abline(v = true_breakpoint, col = "red", lwd = 2, lty = 2)
+abline(v = median(breakpoint_samples), col = "blue", lwd = 2)
+legend("topright", c("True value", "Estimated median"), 
+       col = c("red", "blue"), lty = c(2, 1), lwd = 2)
+
+# Trace plot for breakpoint
+plot(breakpoint_samples, type = "l", main = "Trace Plot: Breakpoint c",
+     xlab = "Iteration", ylab = "c", col = "blue")
+
+# Trace plot for breakpoint
+plot(samples$alpha2_load, type = "l", main = "Trace Plot: Breakpoint c",
+     xlab = "Iteration", ylab = "c", col = "blue")
+
+# Posterior predictive check
+y_rep <- log( 1 + samples$y_rep)
+ppc_dens_overlay(log( 1 + data$bd_load), y_rep[1:50, ]) + 
+  ggtitle("Posterior Predictive Check")
+
+# Model predictions
+svl_pred <- seq(min(data$svl_mm), max(data$svl_mm), length.out = 100)
+c_median <- median(breakpoint_samples)
+
+# Calculate predicted infection probabilities
+pred_infection <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    plogis(median(samples$alpha1_infection) + median(samples$beta1_infection) * x)
+  } else {
+    plogis(median(samples$alpha2_infection) + median(samples$beta2_infection) * x)
+  }
+})
+
+# Calculate predicted loads (for infected individuals)
+pred_load <- sapply(svl_pred, function(x) {
+  if (x <= c_median) {
+    exp(median(samples$alpha1_load) + median(samples$beta1_load) * x)
+  } else {
+    exp(median(samples$alpha2_load) + median(samples$beta2_load) * x)
+  }
+})
+
+# Plot results
+par(mfrow = c(1, 2))
+
+# bd_load
+plot(data$svl_mm, log(as.numeric(data$bd_load)), 
+     xlab = "SVL (mm)", ylab = "Infection Probability",
+     main = "Infection Probability vs SVL", pch = 16, col = "gray70")
+lines(svl_pred, log(pred_load), col = "blue", lwd = 2)
+abline(v = c_median, col = "red", lty = 2, lwd = 2)
+legend("topleft", c("Data", "Model fit", "Breakpoint"), 
+       col = c("gray70", "blue", "red"), lty = c(NA, 1, 2), pch = c(16, NA, NA))
+
+# Model comparison using LOO
+print("Calculating LOO for model comparison...")
+log_lik <- extract_log_lik(m_lod1)
+loo_result <- loo(log_lik)
+print(loo_result)
+
+# Summary of key results
+cat("\n=== MODEL RESULTS SUMMARY ===\n")
+cat("Breakpoint estimate:", round(median(breakpoint_samples), 2), 
+    "mm (95% CI:", round(quantile(breakpoint_samples, 0.025), 2), "-", 
+    round(quantile(breakpoint_samples, 0.975), 2), ")\n")
+cat("Infection model slopes: before =", round(median(samples$beta1_infection), 3),
+    ", after =", round(median(samples$beta2_infection), 3), "\n")
+cat("Load model slopes: before =", round(median(samples$beta1_load), 3),
+    ", after =", round(median(samples$beta2_load), 3), "\n")
+cat("Population-level variation: infection SD =", round(median(samples$sigma_u_infection), 3),
+    ", load SD =", round(median(samples$sigma_u_load), 3), "\n")
+
+print("Model fitting complete!")
+
+```
+
+
+# add climate variables
+```{r}
+surveys_valid = bd_sample_valid %>%
+  select(population, site, site_id, survey_id, start_timestamp_utc, date) %>%
+  distinct()
+
+water_temperature = db_ts_temp %>%
+  left_join(db_sensor, by = "sensor_id") %>%
+  left_join(db_logger, by = "logger_id") %>%
+  filter(microhabitat == "water",
+         sensor_type == "temperature",
+         site_id %in% surveys_valid$site_id) %>%
+  pivot_wider(id_cols = c("site_id", "timestamp_utc"),
+              names_from = c("microhabitat", "height_cm"),
+              values_from = temperature_c_01_raw) %>%
+  collect()
+
+# convert data_temperature to data.table
+water_temp = as.data.table(water_temperature)
+
+# include "sensor_time" column for nearest joins
+water_temp_st = water_temp %>%
+  mutate(sensor_time = timestamp_utc)
+
+# NEAREST in time
+# align with site & nearest temp measurements in time
+bd_size_temp_nearest = water_temp_st[bd_sample_valid, on = .(site_id, timestamp_utc = start_timestamp_utc), roll = "nearest"] %>%
+  rename(start_timestamp_utc = timestamp_utc) %>%
+  select(capture_id,
+         any_of(colnames(db_capture)),
+         everything())
+
+
+# 15-day MEDIAN
+# align with site & 15-day rolling median temp measurements in time
+bd_sample_dt = as.data.table(bd_sample_valid %>%
+                               select(capture_id,
+                                      site_id,
+                                      date)) %>%
+  mutate(date_time = force_tz(as_datetime(paste0(date, " 17:00:00"))), tzone = "UTC")
+
+bd_size_temp_15dmm = bd_sample_dt[water_temp, on = .(site_id, date_time = timestamp_utc), roll = days(-15), nomatch = NULL] %>%
+  group_by(capture_id, date) %>%
+  summarise(across(starts_with("water_"), ~ max(.x, na.rm = TRUE), .names = "{.col}")) %>%
+  group_by(capture_id) %>%
+  summarise(across(starts_with("water_"), ~ mean(.x, na.rm = TRUE), .names = "{.col}_15d_max_mean")) %>%
+  right_join(bd_sample_valid, by = "capture_id") %>%
+  select(capture_id,
+         any_of(colnames(db_capture)),
+         everything()) %>%
+  mutate(across(starts_with("water_"), ~ ifelse(!is.finite(.x), NA_real_, .x)))
+
+```
+
+## plot bd vs temp
+```{r}
+
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture == "rana_sierrae"), aes(x = svl_mm_noise, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+# bd load vs 5cm water 15d
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_5_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point()
+
+#bd load vs 35cm water 15d
+ggplot(bd_size_temp_15dmm %>% filter(taxon_capture %in% c("rana_sierrae", "rana_muscosa")), aes(x = water_35_15d_max_mean, y = log( 1 + bd_mean_its1_copies_per_swab))) +
+  geom_point()
+
+```
+
+# mlog -- all species logistic load
+```{r}
+
+bd_size_temp = bd_size_temp_15dmm %>%
+  mutate(water_temp = coalesce(water_5_15d_max_mean,
+                               water_10_15d_max_mean,
+                               water_35_15d_max_mean))
+
+m1 <- brm(
+  formula = bd_detected ~ svl_mm * taxon_capture,
+  data = bd_size_temp,
+  family = bernoulli(link = "logit"),
+  chains = 4,
+  iter = 4000,
+  warmup = 1000,
+  cores = 4
+)
+
+summary(m1)
+plot(m1)
+plot(conditional_effects(m1), ask = FALSE)
+
+ce <- conditional_effects(m1, effects = "svl_mm:taxon_capture")
+
+df <- ce$`svl_mm:taxon_capture`
+
+# Plot with ggplot2
+ggplot(df, aes(x = svl_mm, y = estimate__, color = taxon_capture)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = lower__, ymax = upper__, fill = taxon_capture), alpha = 0.2, color = NA) +
+  labs(
+    x = "Snout-Vent Length (mm)",
+    y = "Estimated Probability of Infection",
+    color = "Species",
+    fill = "Species",
+    title = "Effect of Size on Infection Probability by Species"
+  ) +
+  theme_minimal() +
+  facet_wrap(~ taxon_capture)
+
+```
+
