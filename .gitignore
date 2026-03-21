@@ -13,4 +13,4 @@ papers/
 *.txt
 *_files/
 /data/*
-!python/gee_env_pull/site_coords_example.csv
+python/environmental_timeseries_pull/chirts_era5/
