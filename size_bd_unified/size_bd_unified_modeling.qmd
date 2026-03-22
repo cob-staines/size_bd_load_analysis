@@ -732,7 +732,20 @@ env_agg = read_csv(here("data", "unified_env_agg.csv"))
 bd_model_env = bd_model %>%
   left_join(env_agg, by = c("site", "date"))
 
-save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
+brms_data = bd_model_env %>%
+  mutate(
+    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
+    precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE))) %>%
+  select(taxon_capture,
+         everything())
+
+save(brms_data, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
 
 ```
 
@@ -745,14 +758,14 @@ save(bd_model_env, file = here("data", paste0("bd_model_env_unified_", today(), 
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("data", "bd_model_env_unified_2026-03-17.RData")) 
+load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
 
 # checks
-sum(is.na(bd_model_env$bd_load_co_density))
-sum(is.na(bd_model_env$precip_mm_30_day_sum))
-sum(is.na(bd_model_env$temperature_max_c))
+sum(is.na(brms_data$bd_load_co_density))
+sum(is.na(brms_data$precip_mm_30_day_sum))
+sum(is.na(brms_data$temperature_max_c))
 
-bd_model_env_stats = bd_model_env %>%
+bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
   summarise(regions = paste(sort(unique(region)), collapse = ", "),
             population_n = n_distinct(population),
@@ -778,7 +791,7 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 #| code-summary: "Show model setup code"
 
 # unified, scaled model
-brms_scales = bd_model_env %>%
+brms_scales = brms_data %>%
   group_by() %>%
   summarize(precip_mm_15_day_sum_mean = mean(precip_mm_15_day_sum),
             precip_mm_15_day_sum_sd = sd(precip_mm_15_day_sum),
@@ -809,67 +822,6 @@ brms_rescale = function(df, scales) {
            temp_c_30_z2 = (temp_c_30_day_mean^2 - scales$temp_c_30_day_mean2_mean)/scales$temp_c_30_day_mean2_sd
            )
 }
-
-brms_data = bd_model_env %>%
-  mutate(
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
-    precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE)),
-  #   ##
-  #   precip_mm_30_sp_z = (precip_mm_30_day_sum - precip_mm_30_day_sum_spmean) / precip_mm_30_day_sum_spsd,
-  #   temp_c_30_sp_z = (temp_c_30_day_mean - temp_c_30_day_mean_spmean) / temp_c_30_day_mean_spsd,
-  #   precip_mm_15_sp_z = (precip_mm_15_day_sum - precip_mm_15_day_sum_spmean) / precip_mm_15_day_sum_spsd,
-  #   temp_c_15_sp_z = (temp_c_15_day_mean - temp_c_15_day_mean_spmean) / temp_c_15_day_mean_spsd,
-  #   precip_mm_30_sp_z2 = (precip_mm_30_day_sum ^ 2 - precip_mm_30_day_sum2_spmean) / precip_mm_30_day_sum2_spsd,
-  #   temp_c_30_sp_z2 = (temp_c_30_day_mean ^ 2 - temp_c_30_day_mean2_spmean) / temp_c_30_day_mean2_spsd,
-  #   precip_mm_15_sp_z2 = (precip_mm_15_day_sum ^ 2 - precip_mm_15_day_sum2_spmean) / precip_mm_15_day_sum2_spsd,
-  #   temp_c_15_sp_z2 = (temp_c_15_day_mean ^ 2 - temp_c_15_day_mean2_spmean) / temp_c_15_day_mean2_spsd
-  ) %>%
-  select(taxon_capture,
-         everything())
-
-# check z-scored means and sds
-peace = brms_data %>%
-  summarize(t_15_mean = mean(temp_c_15_z),
-            t_15_sd = sd(temp_c_15_z),
-            t_30_mean = mean(temp_c_30_z),
-            t_30_sd = sd(temp_c_30_z),
-            p_15_mean = mean(precip_mm_15_z),
-            p_15_sd = sd(precip_mm_15_z),
-            p_30_mean = mean(precip_mm_30_z),
-            p_30_sd = sd(precip_mm_30_z),
-            t2_15_mean = mean(temp_c_15_z2),
-            t2_15_sd = sd(temp_c_15_z2),
-            t2_30_mean = mean(temp_c_30_z2),
-            t2_30_sd = sd(temp_c_30_z2),
-            p2_15_mean = mean(precip_mm_15_z2),
-            p2_15_sd = sd(precip_mm_15_z2),
-            p2_30_mean = mean(precip_mm_30_z2),
-            p2_30_sd = sd(precip_mm_30_z2))
-
-# hope = brms_data %>%
-#   group_by(taxon_capture) %>%
-#   summarize(t_15_sp_mean = mean(temp_c_15_sp_z),
-#             t_15_sp_sd = sd(temp_c_15_sp_z),
-#             t_30_sp_mean = mean(temp_c_30_sp_z),
-#             t_30_sp_sd = sd(temp_c_30_sp_z),
-#             p_15_sp_mean = mean(precip_mm_15_sp_z),
-#             p_15_sp_sd = sd(precip_mm_15_sp_z),
-#             p_30_sp_mean = mean(precip_mm_30_sp_z),
-#             p_30_sp_sd = sd(precip_mm_30_sp_z),
-#             t2_15_sp_mean = mean(temp_c_15_sp_z2),
-#             t2_15_sp_sd = sd(temp_c_15_sp_z2),
-#             t2_30_sp_mean = mean(temp_c_30_sp_z2),
-#             t2_30_sp_sd = sd(temp_c_30_sp_z2),
-#             p2_15_sp_mean = mean(precip_mm_15_sp_z2),
-#             p2_15_sp_sd = sd(precip_mm_15_sp_z2),
-#             p2_30_sp_mean = mean(precip_mm_30_sp_z2),
-#             p2_30_sp_sd = sd(precip_mm_30_sp_z2))
 
 model_priors <- c(
   # b
