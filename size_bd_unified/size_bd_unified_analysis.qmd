@@ -5,23 +5,10 @@ format: html
 
 # Load data & models
 ```{r}
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggplot2, ggrepel, emmeans, rstatix)
 
 # load bd_model_env
-load(here("data", "bd_model_env_unified_2026-03-17.RData")) 
-
-brms_data = bd_model_env %>%
-  mutate(
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
-    precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE))
-  ) %>%
-  select(taxon_capture,
-         everything())
+load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
 
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
@@ -42,6 +29,8 @@ bd_model_env_stats = brms_data %>%
 # load models
 null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
 m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+
+model_select = m5g_zln
 ```
 
 ## Define analysis functions
@@ -87,27 +76,77 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
 
 # Results
 
-## Extract and organize draws
+## Extract draws
 ```{r}
-model_select = m5g_zln
+#| eval: false
+#| include: false
+# 
+# # b intercept
+# b_specs = emmeans(model_select,
+#                   ~ taxon_capture,
+#                   dpar = "mu",
+#                   re_formula = NA,
+#                   weights = "equal",
+#                   ndraws = 500)
+# save(b_specs, file = here("size_bd_unified", "intermediates", paste0("bd_model_unified_bspecs", today(), ".RData")))
+# 
+# # b life stage
+# gc()
+# b_specs_ls = emmeans(model_select,
+#                   ~ life_stage_simple | taxon_capture,
+#                   dpar = "mu",
+#                   re_formula = NA,
+#                   ndraws = 500)
+# save(b_specs_ls, file = here("size_bd_unified", "intermediates", paste0("bd_model_unified_bspecs_ls", today(), ".RData")))
+# gc()
+# 
+# # hu intercept
+# hu_specs = emmeans(model_select, 
+#                    ~ taxon_capture, 
+#                    dpar = "hu",
+#                    re_formula = NA,
+#                    weights = "equal",
+#                    ndraws = 500)
+# save(hu_specs, file = here("size_bd_unified", "intermediates", paste0("bd_model_unified_huspecs", today(), ".RData")))
+# 
+# # hu life stage
+# hu_specs_ls = emmeans(model_select, 
+#                    ~ life_stage_simple | taxon_capture, 
+#                    dpar = "hu",
+#                    re_formula = NA,
+#                    ndraws = 500)
+# save(hu_specs_ls, file = here("size_bd_unified", "intermediates", paste0("bd_model_unified_huspecs_ls", today(), ".RData")))
+# 
+# # sigma intercept
+# sigma_specs = emmeans(model_select, 
+#                    ~ taxon_capture, 
+#                    dpar = "sigma",
+#                    re_formula = NA,
+#                    weights = "equal",
+#                    ndraws = 500)
+# save(sigma_specs, file = here("size_bd_unified", "intermediates", paste0("bd_model_unified_sigmaspecs", today(), ".RData")))
 
-# emmeans parameter distributions
-## prevalence
-# hu_intercept_specs = emmeans(model_select, 
-#                              ~ taxon_capture, 
-#                              dpar = "hu",
-#                              weights = "equal",
-#                              re_formula = NA)
+```
 
-hu_specs = emmeans(model_select, 
-                   ~ life_stage_simple | taxon_capture, 
-                   dpar = "hu",
-                   re_formula = NA,
-                   ndraws = 500)
 
-hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
+## Organize draws
+```{r}
+# load specs
+load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_2026-03-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_ls_2026-03-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_2026-03-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_ls_2026-03-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_unified_sigmaspecs_2026-03-22.RData"))
 
-hu_group_draws = hu_specs %>%
+# hu
+hu_contrasts_specs = contrast(hu_specs_ls, method = "revpairwise")
+
+hu_draws = hu_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(hu = .value) %>%
+  mutate(prevalence = 1 - plogis(hu))
+
+hu_group_draws = hu_specs_ls %>%
   gather_emmeans_draws() %>%
   dplyr::rename(hu = .value) %>%
   mutate(prevalence = 1 - plogis(hu))
@@ -117,53 +156,36 @@ hu_contrast_draws = hu_contrasts_specs %>%
   dplyr::rename(hu_subadult = .value)
 
 hu_contrast_agg = hu_contrast_draws %>%
-    group_by(taxon_capture) %>%  # check!
+  group_by(taxon_capture, contrast) %>%  # check!
   summarize(hdi_50 = hdi(hu_subadult, ci = 0.50),
-         hdi_89 = hdi(hu_subadult, ci = 0.89),
-         hdi_95 = hdi(hu_subadult, ci = 0.95),
-         ratio_positive = sum(hu_subadult > 0) / n(),
-         hu_median = median(hu_subadult),
-         .groups = "drop") %>%
+            hdi_89 = hdi(hu_subadult, ci = 0.89),
+            hdi_95 = hdi(hu_subadult, ci = 0.95),
+            ratio_positive = sum(hu_subadult > 0) / n(),
+            hu_subadult_median = median(hu_subadult),
+            .groups = "drop") %>%
   mutate(
     hdi_zero_50 = case_when(
-      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_89 = case_when(
-      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_95 = case_when(
-      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
       .default = FALSE
     ))
 
-## b (mu)
-# gc()
-# b_intercept_specs = emmeans(model_select, 
-#                             ~ taxon_capture, 
-#                             dpar = "mu",
-#                             re_formula = NA,
-#                             weights = "equal")
 
-gc()
-# b_specs = emmeans(model_select,
-#                   ~ life_stage_simple | taxon_capture,
-#                   dpar = "mu",
-#                   re_formula = NA,
-#                   ndraws = 500)
-# save(b_specs, file = here("data", paste0("bd_model_unified_bspecs", today(), ".RData")))
-gc()
+# b
+b_contrasts_specs = contrast(b_specs_ls, method = "revpairwise")
 
-load(here("data", "bd_model_unified_bspecs2026-03-20.RData")) 
+b_draws = b_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(b = .value)
 
-
-
-contrast(b_specs, method = "revpairwise") 
-
-b_contrasts_specs = contrast(b_specs, method = "revpairwise")
-
-b_group_draws = b_specs %>%
+b_group_draws = b_specs_ls %>%
   gather_emmeans_draws() %>%
   dplyr::rename(b = .value)
 
@@ -172,26 +194,31 @@ b_contrast_draws = b_contrasts_specs %>%
   dplyr::rename(b_subadult = .value)
 
 b_contrast_agg = b_contrast_draws %>%
-    group_by(taxon_capture) %>%
+  group_by(taxon_capture) %>%
   summarize(hdi_50 = hdi(b_subadult, ci = 0.50),
-         hdi_89 = hdi(b_subadult, ci = 0.89),
-         hdi_95 = hdi(b_subadult, ci = 0.95),
-         ratio_positive = sum(b_subadult > 0) / n(),
-         b_median = median(b_subadult),
-         .groups = "drop") %>%
+            hdi_89 = hdi(b_subadult, ci = 0.89),
+            hdi_95 = hdi(b_subadult, ci = 0.95),
+            ratio_positive = sum(b_subadult > 0) / n(),
+            b_subadult_median = median(b_subadult),
+            .groups = "drop") %>%
   mutate(
     hdi_zero_50 = case_when(
-      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_89 = case_when(
-      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_95 = case_when(
-      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
       .default = FALSE
     ))
+
+# sigma
+sigma_draws = sigma_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(sigma = .value)
 
 # combine
 contrast_agg = hu_contrast_agg %>%
@@ -199,6 +226,24 @@ contrast_agg = hu_contrast_agg %>%
   mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
          net_effect_b = ratio_positive_b * 2 - 1,
          species = get_species_name(taxon_capture))
+
+intercept_draws = hu_draws %>%
+  left_join(b_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture")) %>%
+  left_join(sigma_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture"))
+
+intercept_agg = intercept_draws %>%
+  group_by(taxon_capture) %>%
+  summarize(prevalence_median = median(prevalence),
+            hu_median = median(hu),
+            b_median = median(b),
+            sigma_median = median(sigma),
+            .groups = "drop")
+
+combined_agg = intercept_agg %>%
+  left_join(contrast_agg %>%
+              select(taxon_capture,
+                     hu_subadult_median,
+                     b_subadult_median), by = "taxon_capture")
 
 group_draws = b_group_draws %>%
   left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
@@ -211,6 +256,11 @@ group_draws_agg = group_draws %>%
             prevalence_median = median(prevalence),
             b_median = median(b),
             .groups = "drop")
+
+```
+
+## Obsevations and predictions
+```{r}
 
 # epred draws
 newdata_basic = expand_grid(taxon_capture = sort(unique(brms_data$taxon_capture)),
@@ -366,19 +416,6 @@ ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
-ggplot(hu_contrast_draws_fixed, aes(x = hu_subadult)) +
-  stat_halfeye(fill = "#66c2a5",
-               .width = c(0.5, 0.95),
-               point_interval = mode_hdi) +
-  facet_wrap("taxon_capture") +
-  geom_vline(xintercept = 0, alpha = 1) +
-  theme_minimal() +
-  labs(
-       # title = "Subadult Effect on Bd Prevalence",
-       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
-       y = "Posterior Density [-]") +
-  theme(text=element_text(size=14))
-
 ggplot(b_contrast_draws, aes(x = b_subadult)) +
     stat_halfeye(fill = "#8da0cb",
                .width = c(0.5, 0.95),
@@ -408,7 +445,7 @@ ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effect_b)) +
        y = "Bd Load Density (logit scale) [-]") +
   scale_color_brewer(palette = "Set2")
 
-ggplot(contrast_agg, aes(x = -hu_median, y = b_median)) +
+ggplot(combined_agg, aes(x = -hu_subadult_median, y = b_subadult_median)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
@@ -420,6 +457,43 @@ ggplot(contrast_agg, aes(x = -hu_median, y = b_median)) +
        x = "Bd Prevalence (log scale) [-]",
        y = "Bd Load Density (logit scale) [-]") +
   scale_color_brewer(palette = "Set2")
+
+ggplot(combined_agg, aes(x = prevalence_median, y = sigma_median)) +
+  geom_point() +
+  geom_text_repel(aes(label = taxon_capture),
+                  color = "#888") +
+  theme_minimal() +
+  labs(
+       title = "Prevalence & Aggregation",
+       x = "Median Bd Prevalence [-]",
+       y = "Median Bd Load Aggregation -- log(sigma) [-]"
+       ) +
+  scale_color_brewer(palette = "Set2")
+
+ggplot(combined_agg, aes(x = hu_subadult_median, y = hu_median)) +
+  geom_point() +
+  geom_text_repel(aes(label = taxon_capture),
+                  color = "#888") +
+  theme_minimal() +
+  labs(
+       title = "Prevalence",
+       x = "Median hu (subadult - adult) [-]",
+       y = "Median hu [-]"
+       ) +
+  scale_color_brewer(palette = "Set2")
+
+```
+
+# correlation analysis
+```{r}
+simple_cor = cor_mat(combined_agg %>%
+                       select(hu_median,
+                              sigma_median,
+                              hu_subadult_median,
+                              b_subadult_median), method = "spearman")
+
+cor_get_pval(simple_cor)
+
 
 ```
 
