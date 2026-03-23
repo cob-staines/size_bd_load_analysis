@@ -63,7 +63,7 @@ bd_sample = db_sample %>%
               select(sample_id,
                      bd_detected,
                      bd_its1_copies_per_swab), by = "sample_id") %>%
-  rename(bd_load = bd_its1_copies_per_swab) %>%
+  dplyr::rename(bd_load = bd_its1_copies_per_swab) %>%
   mutate(bd_detected_co = bd_load >= 6,
          bd_load_co = if_else(bd_load < 6,
                                   0,
@@ -504,12 +504,12 @@ hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
 
 hu_group_draws = hu_specs %>%
   gather_emmeans_draws() %>%
-  rename(hu = .value) %>%
+  dplyr::rename(hu = .value) %>%
   mutate(prevalence = 1 - plogis(hu))
 
 hu_contrast_draws = hu_contrasts_specs %>%
   gather_emmeans_draws() %>%
-  rename(hu_subadult = .value)
+  dplyr::rename(hu_subadult = .value)
 
 hu_contrast_agg = hu_contrast_draws %>%
   group_by(taxon_capture,
@@ -544,11 +544,11 @@ b_contrasts_specs = contrast(b_specs, method = "revpairwise")
 
 b_group_draws = b_specs %>%
   gather_emmeans_draws() %>%
-  rename(b = .value)
+  dplyr::rename(b = .value)
 
 b_contrast_draws = b_contrasts_specs %>%
   gather_emmeans_draws() %>%
-  rename(b_subadult = .value)
+  dplyr::rename(b_subadult = .value)
 
 b_contrast_agg = b_contrast_draws %>%
   group_by(taxon_capture,
@@ -583,11 +583,11 @@ sigma_contrasts_specs = contrast(sigma_specs, method = "revpairwise")
 
 sigma_group_draws = sigma_specs %>%
   gather_emmeans_draws() %>%
-  rename(sigma = .value)
+  dplyr::rename(sigma = .value)
 
 sigma_contrast_draws = sigma_contrasts_specs %>%
   gather_emmeans_draws() %>%
-  rename(sigma_subadult = .value)
+  dplyr::rename(sigma_subadult = .value)
 
 sigma_contrast_agg = sigma_contrast_draws %>%
   group_by(taxon_capture,
@@ -657,13 +657,13 @@ epred_original = epred_draws(model_select,
                              newdata = brms_data,
                              re_formula = NA,
                              ndraws = 50) %>%
-  rename(bd_load_density_epred = .epred) %>%
+  dplyr::rename(bd_load_density_epred = .epred) %>%
   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
 
 epred_fixed = epred_draws(model_select,
                           newdata = newdata_basic,
                           re_formula = NA) %>%
-  rename(bd_load_density_epred = .epred) %>%
+  dplyr::rename(bd_load_density_epred = .epred) %>%
   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
 
 # observation data
@@ -911,7 +911,7 @@ hu_inter_contrasts = contrast(
 
 hu_inter_draws = hu_inter_contrasts %>%   # or hu_interaction_contrasts
   gather_emmeans_draws() %>%
-  rename(hu_coc = .value)
+  dplyr::rename(hu_coc = .value)
 
 hu_inter_agg = hu_inter_draws %>%
   group_by(taxon_capture,
