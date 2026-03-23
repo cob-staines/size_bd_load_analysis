@@ -1,0 +1,266 @@
+---
+title: "environmental_data"
+format: html
+---
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio)
+
+```
+
+# Load data
+
+## RIBBiTR
+```{r}
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+
+# preliminary data
+ribbitr_visit = db_visit %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop") %>%
+  collect()
+
+```
+
+## USGS
+```{r}
+usgs_raw = read.csv(here("data", "USGSBsalBdDataFull.csv")) %>%
+  clean_names()
+
+usgs_visit = usgs_raw %>%
+  mutate(site = paste0("usgs_", site_id),
+         date = mdy(collection_date)) %>% 
+  group_by(site) %>%
+  mutate(site_latitude = first(latitude),
+         site_longitude = first(longitude)) %>%
+  ungroup() %>%
+  group_by(site, site_latitude, site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+```
+
+## RACA
+```{r}
+raca_raw = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
+  clean_names() %>%
+  rename(site = site_name,
+         site_utme = utme_site,
+         site_utmn = utmn_site) %>%
+  mutate(date = as.Date(date),
+         site = tolower(gsub(" ", "_", site)))
+
+raca_sites = raca_raw %>%
+  select(site,
+         site_utme,
+         site_utmn) %>%
+  distinct()
+
+# convert to lat lon
+raca_points = cbind(raca_sites$site_utme,
+                    raca_sites$site_utmn)
+
+v_utm = vect(raca_points, crs="+proj=utm +zone=10 +datum=WGS84  +units=m")
+v_ll = project(v_utm, "+proj=longlat +datum=WGS84")
+v_lonlat = geom(v_ll)[, c("x", "y")]
+
+raca_sites_ll = raca_sites %>%
+  bind_cols(v_lonlat) %>%
+  dplyr::rename(site_longitude = x,
+         site_latitude = y) %>%
+  select(site,
+         site_latitude,
+         site_longitude)
+
+raca_visit = raca_raw %>%
+  select(site,
+         date) %>%
+  left_join(raca_sites_ll, by = "site") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
+## RALU
+```{r}
+ralu_raw = import_list(here("data", "Data Russell et al 2010 DAO.xlsx"))
+
+# site coordinates
+ralu_sites = ralu_raw[[2]] %>%
+  clean_names() %>%
+  mutate(site = tolower(pond_name))
+
+ralu_points = cbind(ralu_sites$x_nad83_zone11n,
+                    ralu_sites$y_nad83_zone11n)
+
+w_utm = vect(ralu_points, crs="+proj=utm +zone=11 +datum=WGS84  +units=m")
+w_ll = project(w_utm, "+proj=longlat +datum=WGS84")
+w_lonlat = geom(w_ll)[, c("x", "y")]
+
+ralu_sites_ll = ralu_sites %>%
+  bind_cols(w_lonlat) %>%
+  dplyr::rename(site_longitude = x,
+         site_latitude = y) %>%
+  select(site,
+         site_latitude,
+         site_longitude)
+
+ralu_visit = ralu_raw[[4]] %>%
+  clean_names() %>%
+  mutate(date = as.Date(bd_sample_date),
+         site = tolower(pond_name)) %>%
+    select(site,
+         date) %>%
+  left_join(ralu_sites_ll, by = "site") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
+# Prepare sites
+```{r}
+day_buffer = 60
+
+check_cols = compare_df_cols(ribbitr_visit,
+                               usgs_visit,
+                               raca_visit,
+                               ralu_visit)
+
+site_date_combined = bind_rows(ribbitr_visit,
+                               usgs_visit,
+                               raca_visit,
+                               ralu_visit)
+
+check_site_unique = get_dupes(site_date_combined, site)
+
+site_date_all = site_date_combined %>%
+  mutate(start_date = date_min - days(day_buffer),
+         end_date = date_max) %>%
+  rename(latitude = site_latitude,
+         longitude = site_longitude,
+         site_name = site) %>%
+  select(-date_min,
+         -date_max)
+
+site_date_pre_2017 = site_date_all %>%
+  filter(start_date <= "2016-12-31") %>%
+  mutate(end_date = if_else(end_date > "2016-12-31", as.Date("2016-12-31"), end_date))
+
+site_date_post_2017 = site_date_all %>%
+  filter(end_date >= "2017-01-01") %>%
+  mutate(start_date = if_else(start_date < "2017-01-01", as.Date("2017-01-01"), start_date))
+
+
+# export
+write_csv(site_date_all, here("python", "environmental_timeseries_pull", "inputs", paste0("site_date_all_", today(), ".csv")))
+write_csv(site_date_pre_2017, here("python", "environmental_timeseries_pull", "inputs", paste0("site_date_pre_2017_", today(), ".csv")))
+write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "inputs", paste0("site_date_post_2017_", today(), ".csv")))
+
+
+```
+
+# Run `pull_environmental_timeseries.py`
+
+# Import timeseries
+```{r}
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-17.csv")) %>%
+  rename(site = site_name,
+         precipitation_mm = precip_mm,
+         temperature_max_c = tmax_c)
+
+```
+
+# Calculate rolling timeseries
+```{r}
+
+sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
+  ts_sym <- sym(ts_col_name)
+  res_sym <- sym(result_col_name)
+  
+  df %>%
+    group_modify(~{
+      n <- nrow(.x)
+      ts_vals <- pull(.x, !!ts_sym)
+      agg_vals <- map_dbl(seq_len(n), function(i) {
+        if (i >= window_size) {
+          window_vals <- ts_vals[(i - window_size + 1):i]
+          f(window_vals)
+        } else {
+          NA_real_
+        }
+      })
+      .x[[result_col_name]] <- agg_vals
+      .x
+    })
+}
+
+rolling_aggregate <- function(x, date, n_days, fun) {
+  runner(
+    x   = x,
+    idx = date,
+    k   = paste0(n_days, " days"),
+    f   = fun
+  )
+}
+
+
+n_val = function(x) sum(!is.na(x))
+
+na_mean = function(x) {
+  mean(x, na.rm = TRUE)
+}
+
+na_max = function(x) {
+  max(x, na.rm = TRUE)
+}
+
+na_sum = function(x) {
+  sum(x, na.rm = TRUE)
+}
+
+env_agg = env_in %>%
+  arrange(site, date) %>%
+  filter(!(is.na(precipitation_mm) & is.na(temperature_max_c))) %>%
+  group_by(site) %>%
+  mutate(precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
+         precip_mm_30_day_sum = rolling_aggregate(precipitation_mm, date, 30, na_sum),
+         temp_c_15_day_mean = rolling_aggregate(temperature_max_c, date, 15, na_mean),
+         temp_c_30_day_mean = rolling_aggregate(temperature_max_c, date, 30, na_mean)) %>%
+  ungroup()
+
+```
+
+# Write env agg
+```{r}
+write_csv(env_agg, here("data", "unified_env_agg.csv"))
+```
