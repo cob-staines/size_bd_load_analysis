@@ -5,7 +5,7 @@ format: html
 
 # Load data & models
 ```{r}
-librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggplot2, ggrepel, emmeans, rstatix)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggplot2, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer)
 
 # load bd_model_env
 load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
@@ -243,7 +243,10 @@ combined_agg = intercept_agg %>%
   left_join(contrast_agg %>%
               select(taxon_capture,
                      hu_subadult_median,
-                     b_subadult_median), by = "taxon_capture")
+                     b_subadult_median,
+                     net_effect_hu,
+                     net_effect_b), by = "taxon_capture") %>%
+  mutate(species = get_species_name(taxon_capture))
 
 group_draws = b_group_draws %>%
   left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
@@ -499,15 +502,73 @@ cor_get_pval(simple_cor)
 
 ## Phylogenetic tree
 ```{r}
+species_list = brms_data %>%
+  mutate(sn = get_species_name(taxon_capture)) %>%
+  select(sn) %>%
+  distinct() %>%
+  arrange(sn) 
+
+resolved = gna_verifier(species_list %>%
+                          pull(sn),
+                        data_source_ids = 4)
+
+species_list_ncbi = species_list %>%
+  left_join(resolved %>%
+              select(submittedName,
+                     matchedCanonicalSimple), by = c("sn" = "submittedName")) %>%
+  mutate(genus = str_split_fixed(sn, " ", 2)[,1],
+         species = str_split_fixed(sn, " ", 2)[,2],
+         umm = sn == matchedCanonicalSimple)
+
+# load sequences
+seq_class =
+  read.fasta(here("data","amphibia16s_classifier", "Amphibia16S_derep1_seqs_extracted",
+                               list.files(here("data","amphibia16s_classifier", "Amphibia16S_derep1_seqs_extracted")), "data", "dna-sequences.fasta")) %>%
+  dplyr::rename(taxon_id = seq.name) %>%
+  arrange(taxon_id) %>%
+  mutate(bp = str_length(seq.text),
+         gene = "16S")
+
+taxa_class = read_tsv(here("data", "amphibia16s_classifier", "Amphibia16S_derep1_taxa_extracted",
+                               list.files(here("data", "amphibia16s_classifier", "Amphibia16S_derep1_taxa_extracted")), "data", "taxonomy.tsv")) %>%
+  rename(taxon_id = `Feature ID`,
+         taxon = Taxon) %>%
+  separate(taxon, into = c("k", "p", "c", "o", "f", "g", "s"), sep = ";") %>%
+  mutate(across(everything(), ~ str_remove(., "^[a-z]__"))) %>%
+  rename(kingdom = k,
+         phylum = p,
+         class = c,
+         order = o,
+         family = f,
+         genus = g,
+         species = s) %>%
+  mutate(domain = "Eukaryota") %>%
+  arrange(taxon_id) %>%
+  select(taxon_id,
+         domain,
+         everything())
+
+taxa_class_summary = taxa_class %>%
+  group_by(genus, species) %>%
+  count()
+
+compare_taxa_lists = species_list %>%
+  left_join(taxa_class_summary, by = c("genus", "species"))
+
+##
+
 
 gene_marker <- "16S"
 species_list = bd_model_env_stats %>%
   mutate(species = get_species_name(taxon_capture)) %>%
   pull(species)
 
-# --- 1. FETCH SEQUENCES ---
-fetch_sequence <- function(species, marker, max_seqs, min_length = 100) {
-  query <- paste0(species, "[Organism] AND ", marker, "[Title]")
+fetch_sequence_reproducible <- function(species, marker, max_seqs = 10, 
+                                        min_length = 100,
+                                        target_min = 400,
+                                        target_max = 700) {
+  query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ", 
+                  marker, "[All Fields])")
   search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs)
   
   if (length(search$ids) == 0) {
@@ -528,6 +589,7 @@ fetch_sequence <- function(species, marker, max_seqs, min_length = 100) {
   if (is.null(dna)) return(NULL)
   if (is.matrix(dna)) dna <- as.list(dna)
   
+  # Filter by minimum length
   lengths <- sapply(dna, length)
   dna <- dna[lengths >= min_length]
   
@@ -537,28 +599,208 @@ fetch_sequence <- function(species, marker, max_seqs, min_length = 100) {
   }
   
   lengths <- sapply(dna, length)
-  return(dna[which.max(lengths)])
+  
+  # Try preferred length range first
+  in_range <- dna[lengths >= target_min & lengths <= target_max]
+  
+  if (length(in_range) > 0) {
+    range_lengths <- sapply(in_range, length)
+    selected <- in_range[which.max(range_lengths)]
+    label <- "preferred range"
+  } else {
+    # Fall back to longest available
+    selected <- dna[which.max(lengths)]
+    label <- "fallback longest"
+  }
+  
+  # Log the selected accession for reproducibility
+  message(species, " [", label, "]: ", 
+          sapply(selected, length), "bp — ", names(selected))
+  
+  return(selected)
 }
 
+# Run and capture selection log
 raw_seqs <- lapply(species_list, function(sp) {
   Sys.sleep(0.4)
-  fetch_sequence(sp, marker = gene_marker, max_seqs = 10)
+  fetch_sequence_reproducible(sp, marker = gene_marker, max_seqs = 50)
 })
 names(raw_seqs) <- species_list
 raw_seqs <- Filter(Negate(is.null), raw_seqs)
-message(length(raw_seqs), " / ", length(species_list), " species retrieved")
 
-# --- 2. COMBINE + ALIGN ---
-combined_seqs <- do.call(c, raw_seqs)  # fix: was missing from your script
+# After fetching, decode and save immediately
+decode_dnabin <- function(x) {
+  tmp <- tempfile(fileext = ".fasta")
+  write.dna(x, tmp, format = "fasta")
+  lines <- readLines(tmp)
+  seq_lines <- lines[!grepl("^>", lines)]
+  seq_string <- paste(seq_lines, collapse = "")
+  gsub("[[:space:]]", "", seq_string)
+}
 
-combined_char <- sapply(as.character(combined_seqs), function(seq) {
-  paste(seq, collapse = "")
+# Decode all sequences
+combined_char <- sapply(names(raw_seqs), function(sp) {
+  decode_dnabin(raw_seqs[[sp]])
 })
-
-# Clean sequence names to species names only (GenBank headers are long)
 names(combined_char) <- names(raw_seqs)
 
+# Sanity check before alignment
+substr(combined_char[1], 1, 50)  # should show ACGTs now
+
+# Save as FASTA for reuse — no need to re-fetch next time
+fasta_lines <- unlist(lapply(names(combined_char), function(sp) {
+  c(paste0(">", sp), combined_char[[sp]])
+}))
+writeLines(fasta_lines, "selected_sequences.fasta")
+message("Sequences saved to selected_sequences.fasta")
+
+# To reload next time instead of re-fetching:
+# dna_saved <- read.dna("selected_sequences.fasta", format = "fasta")
+# combined_char <- sapply(as.character(dna_saved), paste, collapse = "")
+# names(combined_char) <- names(raw_seqs)
+
+# Align
 aligned <- AlignSeqs(DNAStringSet(combined_char))
+# 
+# fetch_all_sequences <- function(species, marker, max_seqs = 50, min_length = 100) {
+#   query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ", marker, "[All Fields])")
+#   search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs)
+#   
+#   if (length(search$ids) == 0) {
+#     message("No sequences found for: ", species)
+#     return(NULL)
+#   }
+#   
+#   message(species, ": ", length(search$ids), " sequences found")
+#   
+#   seqs <- entrez_fetch(db = "nucleotide", id = search$ids, rettype = "fasta")
+#   
+#   tmp <- tempfile(fileext = ".fasta")
+#   writeLines(seqs, tmp)
+#   
+#   dna <- tryCatch(
+#     read.dna(tmp, format = "fasta"),
+#     error = function(e) { message("Failed to parse FASTA for: ", species); return(NULL) }
+#   )
+#   
+#   if (is.null(dna)) return(NULL)
+#   
+#   # Diagnose structure before converting
+#   message(species, ": class=", class(dna), " dim=", 
+#           paste(dim(dna), collapse="x"), " length=", length(dna))
+#   
+#   # Convert to list safely depending on structure
+#   if (!is.null(dim(dna))) {
+#     # It's a matrix — convert row by row preserving DNAbin class
+#     dna_list <- lapply(seq_len(nrow(dna)), function(i) dna[i, , drop = FALSE])
+#     names(dna_list) <- rownames(dna)
+#   } else if (is.list(dna)) {
+#     dna_list <- dna
+#   } else {
+#     # Single sequence
+#     dna_list <- list(dna)
+#     names(dna_list) <- "seq1"
+#   }
+#   
+#   # Filter by minimum length
+#   lengths <- sapply(dna_list, length)
+#   dna_list <- dna_list[lengths >= min_length]
+#   
+#   if (length(dna_list) == 0) {
+#     message("No sequences above min_length for: ", species)
+#     return(NULL)
+#   }
+#   
+#   message(species, ": ", length(dna_list), " sequences retained after length filter")
+#   return(dna_list)
+# }
+# 
+# # Fetch for all species
+# raw_seqs_all <- lapply(species_list, function(sp) {
+#   Sys.sleep(0.4)
+#   fetch_all_sequences(sp, marker = gene_marker, max_seqs = 50)
+# })
+# names(raw_seqs_all) <- species_list
+# raw_seqs_all <- Filter(Negate(is.null), raw_seqs_all)
+# message(length(raw_seqs_all), " / ", length(species_list), " species retrieved")
+# 
+# ## checks for length
+# # Check length distribution across all sequences in raw_seqs_all
+# lengths_all <- lapply(names(raw_seqs_all), function(sp) {
+#   seqs <- raw_seqs_all[[sp]]
+#   lengths <- sapply(seqs, length)
+#   data.frame(species = sp, length = lengths, title = names(seqs))
+# })
+# 
+# lengths_df <- do.call(rbind, lengths_all)
+# 
+# # Summary
+# summary(lengths_df$length)
+# 
+# # Distribution plot
+# hist(lengths_df$length, breaks = 50, 
+#      main = "Sequence length distribution across all species",
+#      xlab = "Length (bp)")
+# 
+# # Per species summary
+# lengths_df |> 
+#   dplyr::group_by(species) |> 
+#   dplyr::summarise(n = n(), min = min(length), median = median(length), max = max(length)) |>
+#   print(n = Inf)
+# 
+# 
+# select_by_length_range <- function(seqs, species_name,
+#                                    preferred_min = 400, preferred_max = 700,
+#                                    fallback_min  = 200, fallback_max  = 2000) {
+#   lengths <- sapply(seqs, length)
+#   
+#   # First try preferred range
+#   in_preferred <- lengths >= preferred_min & lengths <= preferred_max
+#   
+#   if (sum(in_preferred) > 0) {
+#     candidates <- seqs[in_preferred]
+#     label <- "preferred range"
+#   } else {
+#     # Fall back to broader range
+#     in_fallback <- lengths >= fallback_min & lengths <= fallback_max
+#     candidates <- seqs[in_fallback]
+#     label <- "fallback range"
+#     if (sum(in_fallback) == 0) {
+#       candidates <- seqs  # last resort: use anything
+#       label <- "no range filter"
+#     }
+#   }
+#   
+#   # Among candidates, take longest
+#   cand_lengths <- sapply(candidates, length)
+#   best_idx <- which.max(cand_lengths)
+#   
+#   message(species_name, " [", label, "]: ", 
+#           cand_lengths[best_idx], "bp — ", names(candidates)[best_idx])
+#   
+#   tmp <- tempfile(fileext = ".fasta")
+#   write.dna(candidates[best_idx], tmp, format = "fasta")
+#   lines <- readLines(tmp)
+#   seq_string <- paste(lines[!grepl("^>", lines)], collapse = "")
+#   gsub("[[:space:]]", "", seq_string)
+# }
+# 
+# selected_seqs <- mapply(select_by_length_range,
+#                         raw_seqs_all,
+#                         names(raw_seqs_all),
+#                         SIMPLIFY = FALSE)
+
+# # Now combined_char is already a named list of plain strings
+# combined_char <- setNames(unlist(raw_seqs), names(raw_seqs))
+# 
+# # Remove any whitespace from sequences
+# combined_char <- gsub("[[:space:]]", "", combined_char)
+# 
+# # Sanity check
+# substr(combined_char[1], 1, 50)
+# 
+# # Now align
+# aligned <- AlignSeqs(DNAStringSet(combined_char))
 
 # --- 3. BUILD TREE ---
 phydat <- as.phyDat(aligned)
@@ -594,18 +836,55 @@ ggtree::ggtree(tr_rooted, layout = "rectangular") +
 summary(tr_rooted$edge.length)
 is.ultrametric(tr_rooted)
 
-hu_named <- setNames(-contrast_agg$net_effect_hu, contrast_agg$species)
-b_named  <- setNames(contrast_agg$net_effect_b,  contrast_agg$species)
+hu_sub_effect_named <- setNames(-combined_agg$net_effect_hu, combined_agg$species)
+b_sub_effect_named  <- setNames(combined_agg$net_effect_b,  combined_agg$species)
+hu_sub_med_named <- setNames(-combined_agg$hu_subadult_median, combined_agg$species)
+b_sub_med_named  <- setNames(combined_agg$b_subadult_median,  combined_agg$species)
+hu_med_named <- setNames(-combined_agg$hu_median, combined_agg$species)
+b_med_named  <- setNames(combined_agg$b_median,  combined_agg$species)
+prev_med_named <- setNames(combined_agg$prevalence_median, combined_agg$species)
+sigma_med_named  <- setNames(combined_agg$sigma_median,  combined_agg$species)
 
-blomberg_k_hu = phylosig(tr_rooted, hu_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_b = phylosig(tr_rooted, b_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_hu_sub_effect = phylosig(tr_rooted, hu_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_b_sub_effect = phylosig(tr_rooted, b_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_hu_sub_med = phylosig(tr_rooted, hu_sub_med_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_b_sub_med = phylosig(tr_rooted, b_sub_med_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_hu_med = phylosig(tr_rooted, hu_med_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_b_med = phylosig(tr_rooted, b_med_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_prev_med = phylosig(tr_rooted, prev_med_named, method = "K", test = TRUE, nsim = 1000)
+blomberg_k_sigma_med = phylosig(tr_rooted, sigma_med_named, method = "K", test = TRUE, nsim = 1000)
 
 tr_rooted$tip.label
 
-# plot
-par(mfrow = c(1, 2))
-contMap(tr_rooted, hu_named,  title = "HU median", fsize = 0.75)
-contMap(tr_rooted, b_named,   title = "B median", fsize = 0.75)
+# plots
+hu_sub_effect_map = contMap(tr_rooted, hu_sub_effect_named,  title = "hu net effect", fsize = 0.6)
+b_sub_effect_map = contMap(tr_rooted, b_sub_effect_named,   title = "b net_effect", fsize = 0.6)
+hu_sub_med_map = contMap(tr_rooted, hu_sub_med_named,  title = "hu net median", fsize = 0.6)
+b_sub_med_map = contMap(tr_rooted, b_sub_med_named,   title = "b net_median", fsize = 0.6)
+hu_med_map = contMap(tr_rooted, hu_med_named,  title = "hu median", fsize = 0.6)
+b_med_map = contMap(tr_rooted, b_med_named,   title = "b median", fsize = 0.6)
+prev_med_map = contMap(tr_rooted, prev_med_named,  title = "prevalence median effect", fsize = 0.6)
+sigma_med_map = contMap(tr_rooted, sigma_med_named,   title = "sigma median effect", fsize = 0.6)
+
+
+
+hu_sub_effect_map <- setMap(hu_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+b_sub_effect_map <- setMap(b_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+hu_sub_med_map <- setMap(hu_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+b_sub_med_map <- setMap(b_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+hu_med_map <- setMap(hu_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+b_med_map <- setMap(b_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+prev_med_map <- setMap(prev_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+sigma_med_map <- setMap(sigma_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+
+plot(hu_sub_effect_map)
+plot(b_sub_effect_map)
+plot(hu_sub_med_map)
+plot(b_sub_med_map)
+plot(hu_med_map)
+plot(b_med_map)
+plot(prev_med_map)
+plot(sigma_med_map)
 
 ```
 
