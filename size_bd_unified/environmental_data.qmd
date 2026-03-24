@@ -12,7 +12,7 @@ format: html
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio, runner, arrow)
 
 ```
 
@@ -23,6 +23,9 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
 
 # table pointers
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
 db_visit = tbl(dbcon, Id("survey_data", "visit"))
 db_site = tbl(dbcon, Id("survey_data", "site"))
 db_region = tbl(dbcon, Id("survey_data", "region"))
@@ -30,10 +33,15 @@ db_country = tbl(dbcon, Id("survey_data", "country"))
 
 
 # preliminary data
-ribbitr_visit = db_visit %>%
+ribbitr_visit = db_sample %>%
+  left_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
   left_join(db_site, by = "site_id") %>%
   left_join(db_region, by = "region_id") %>%
   left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd",
+         !is.na(taxon_capture)) %>%
   group_by(site,
            site_latitude,
            site_longitude) %>%
@@ -172,6 +180,18 @@ site_date_all = site_date_combined %>%
   select(-date_min,
          -date_max)
 
+days_count = function(df) {
+  df %>%
+  mutate(days = interval(date_min, date_max)) %>%
+  summarize(total_days = sum(days)) %>%
+    pull(total_days)
+}
+
+days_count(ribbitr_visit)
+days_count(usgs_visit)
+days_count(raca_visit)
+days_count(ralu_visit)
+
 site_date_pre_2017 = site_date_all %>%
   filter(start_date <= "2016-12-31") %>%
   mutate(end_date = if_else(end_date > "2016-12-31", as.Date("2016-12-31"), end_date))
@@ -193,10 +213,14 @@ write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "
 
 # Import timeseries
 ```{r}
-env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-17.csv")) %>%
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.csv")) %>%
   rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
+
+write_parquet(env_in, here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
+
+env_in = read_parquet(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
 
 ```
 
@@ -262,5 +286,5 @@ env_agg = env_in %>%
 
 # Write env agg
 ```{r}
-write_csv(env_agg, here("data", "unified_env_agg.csv"))
+write_parquet(env_agg, here("data", "unified_env_agg.parquet"))
 ```
