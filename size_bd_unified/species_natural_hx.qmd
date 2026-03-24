@@ -1,0 +1,88 @@
+---
+title: "species_natural_hx"
+format: html
+---
+
+```{r}
+librarian::shelf(tidyverse, here, iucnredlist)
+
+load(here("data", "bd_model_env_unified_2026-03-22.RData"))
+
+species_list = brms_data %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  mutate(sn = str_to_sentence(gsub("_", " ", taxon_capture)),
+         genus = str_split_fixed(sn, " ", 2)[,1],
+         species = str_split_fixed(sn, " ", 2)[,2]) %>%
+  arrange(sn)
+
+
+```
+
+# query iucn
+```{r}
+api = init_api(Sys.getenv("iucn_token"))
+
+iucn_assessment = assessments_by_name(api, genus = species_list$genus[1], species = species_list$species[1]) %>%
+    mutate(genus_q = species_list$genus[1],
+           species_q = species_list$species[1]) %>%
+    filter(FALSE) %>%
+    select(genus_q,
+           species_q,
+           everything())
+
+cat("\tLooking up species IDs\n")
+  pb = txtProgressBar(min = 1, max = nrow(species_list), style = 3)
+  for (ii in 1:nrow(species_list)) {
+    ii_genus = species_list$genus[ii]
+    ii_species = species_list$species[ii]
+    setTxtProgressBar(pb, ii)
+
+    # pull data
+    new_row <- tryCatch({
+      assessments_by_name(api, genus = ii_genus, species = ii_species) %>%
+        mutate(genus_q = ii_genus,
+               species_q = ii_species) %>%
+        slice_max(order_by = year_published, n = 1)
+    }, error = function(e) {
+      # fail silently
+      NULL
+    })
+
+    # bind
+    if (!is.null(new_row) && nrow(new_row) > 0) {
+      iucn_assessment = bind_rows(iucn_assessment, new_row)
+    }
+    # sleep to avoid rate limiting
+    Sys.sleep(0.5)
+  }
+  close(pb)
+  
+  
+iucn_assessment_clean = iucn_assessment %>%
+  distinct()
+# fetch assessment data
+cat("\tQuerying local taxa occurences\n")
+iucn_assessment_data = assessment_data_many(api,
+                                            iucn_assessment_clean$assessment_id,
+                                            wait_time = 0.5)
+
+habitats = tibble()
+for (ii in 1:nrow(iucn_assessment_clean)) {
+  temp = iucn_assessment_data[[ii]]$habitats %>%
+    mutate(genus_q = iucn_assessment_clean$genus_q[ii],
+           species_q = iucn_assessment_clean$species_q[ii])
+  
+  habitats = bind_rows(habitats,
+                       temp)
+}
+
+habitats_clean = habitats %>%
+  select(genus_q,
+         species_q,
+         everything()) %>%
+  arrange(genus_q,
+          species_q,
+          code)
+
+```
