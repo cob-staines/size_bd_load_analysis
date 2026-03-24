@@ -1,0 +1,537 @@
+---
+title: "sn_resilience_trajectory_analysis"
+format: html
+---
+
+# Load data & models
+```{r}
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggplot2, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer)
+
+# load bd_model_env
+bd_model = read.csv(here("data", paste0("sn_res_traj_bd_model_data_2026-03-16.csv")))
+
+bd_model_stats = bd_model %>%
+  group_by(taxon_capture,
+           res_class,
+           life_stage_simple) %>%
+  summarize(n = n(),
+            .groups= "drop")
+
+brms_data = bd_model %>%
+  mutate(
+    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
+    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
+    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE))
+  )
+
+# load models
+null_zln = readRDS(file = here("snrt_models/snrt_model_results_zln_null.rds"))
+m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+
+model_select = m6_zln
+```
+
+
+## Define analysis functions
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show processing & visualization functions"
+
+get_species_name = function(taxon, newline = FALSE) {
+  species_name = str_to_sentence(gsub("_", " ", taxon))
+  if (newline) {
+    species_name = gsub(" ", "\n", species_name)
+  }
+  return(species_name)
+}
+
+wilson_ci = function(p_hat, n, conf.level = 0.95) {
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[2])
+}
+
+
+```
+
+# Results
+
+## Extract and organize draws
+```{r}
+model_select = m6_zln
+
+# emmeans parameter distributions
+## prevalence
+hu_specs = emmeans(model_select, 
+                   ~ life_stage_simple | taxon_capture * res_class, 
+                   dpar = "hu")
+
+hu_contrasts_specs = contrast(hu_specs, method = "revpairwise")
+
+hu_group_draws = hu_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(hu = .value) %>%
+  mutate(prevalence = 1 - plogis(hu))
+
+hu_contrast_draws = hu_contrasts_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(hu_subadult = .value)
+
+hu_contrast_agg = hu_contrast_draws %>%
+  group_by(taxon_capture,
+           res_class,
+           contrast) %>%
+  summarize(hdi_50 = hdi(hu_subadult, ci = 0.50),
+            hdi_89 = hdi(hu_subadult, ci = 0.89),
+            hdi_95 = hdi(hu_subadult, ci = 0.95),
+            ratio_positive = sum(hu_subadult > 0) / n(),
+            hu_median = median(hu_subadult),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+## b (mu)
+b_specs = emmeans(model_select, 
+                 ~ life_stage_simple | taxon_capture * res_class, 
+                 dpar = "mu")
+
+b_contrasts_specs = contrast(b_specs, method = "revpairwise")
+
+b_group_draws = b_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(b = .value)
+
+b_contrast_draws = b_contrasts_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(b_subadult = .value)
+
+b_contrast_agg = b_contrast_draws %>%
+  group_by(taxon_capture,
+           res_class,
+           contrast) %>%
+  summarize(hdi_50 = hdi(b_subadult, ci = 0.50),
+            hdi_89 = hdi(b_subadult, ci = 0.89),
+            hdi_95 = hdi(b_subadult, ci = 0.95),
+            ratio_positive = sum(b_subadult > 0) / n(),
+            b_median = median(b_subadult),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+## sigma
+sigma_specs = emmeans(model_select, 
+                 ~ life_stage_simple | taxon_capture * res_class, 
+                 dpar = "sigma")
+
+sigma_contrasts_specs = contrast(sigma_specs, method = "revpairwise")
+
+sigma_group_draws = sigma_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(sigma = .value)
+
+sigma_contrast_draws = sigma_contrasts_specs %>%
+  gather_emmeans_draws() %>%
+  dplyr::rename(sigma_subadult = .value)
+
+sigma_contrast_agg = sigma_contrast_draws %>%
+  group_by(taxon_capture,
+           res_class,
+           contrast) %>%
+  summarize(hdi_50 = hdi(sigma_subadult, ci = 0.50),
+            hdi_89 = hdi(sigma_subadult, ci = 0.89),
+            hdi_95 = hdi(sigma_subadult, ci = 0.95),
+            ratio_positive = sum(sigma_subadult > 0) / n(),
+            sigma_median = median(sigma_subadult),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+# combine
+contrast_agg = hu_contrast_agg %>%
+  left_join(b_contrast_agg, by = c("taxon_capture", "res_class", "contrast"), suffix = c("_hu", "_b")) %>%
+  left_join(sigma_contrast_agg, by = c("taxon_capture", "res_class", "contrast")) %>%
+  mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
+         net_effect_b = ratio_positive_b * 2 - 1,
+         net_effect_sigma = ratio_positive * 2 - 1)
+
+group_draws = b_group_draws %>%
+  left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
+                                   "life_stage_simple", "taxon_capture", "res_class")) %>%
+  left_join(sigma_group_draws, by = c(".chain", ".iteration", ".draw", 
+                                      "life_stage_simple", "taxon_capture", "res_class")) %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
+
+group_draws_agg = group_draws %>%
+  group_by(taxon_capture,
+           life_stage_simple,
+           res_class) %>%
+  summarize(hu_median = median(hu),
+            prevalence_median = median(prevalence),
+            b_median = median(b),
+            sigma_median = median(hu),
+            .groups = "drop")
+
+# epred draws
+newdata_basic = expand_grid(taxon_capture = c("rana_muscosa",
+                                              "rana_sierrae"),
+                            life_stage_simple = c("metamorph",
+                                                  "subadult",
+                                                  "adult"),
+                            res_class = c("1-naive",
+                                          "2-epizootic",
+                                          "3-post")) %>%
+  mutate(precip_mm_30_z = 0,
+         precip_mm_30_z2 = 0,
+         temp_c_30_z = 0,
+         temp_c_30_z2 = 0)
+
+# way too big!
+epred_original = epred_draws(model_select,
+                             newdata = brms_data,
+                             re_formula = NA,
+                             ndraws = 50) %>%
+  dplyr::rename(bd_load_density_epred = .epred) %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
+
+epred_fixed = epred_draws(model_select,
+                          newdata = newdata_basic,
+                          re_formula = NA) %>%
+  dplyr::rename(bd_load_density_epred = .epred) %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
+
+# observation data
+obs_data = brms_data %>%
+  group_by(taxon_capture,
+           life_stage_simple,
+           res_class) %>%
+   summarise(n = n(),
+             n_pos = sum(bd_detected_co),
+             bd_prevalence = sum(bd_detected_co) / n(),
+             bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+             bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+             min_load_inf = min(bd_load_co_density[bd_detected_co > 0]),
+             q_25_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.25),
+             q_50_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.50),
+             q_75_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.75),
+             max_load_inf = max(bd_load_co_density[bd_detected_co > 0]),
+             se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+             .groups = "drop") %>%
+  mutate(label_offset = recode_values(life_stage_simple,
+                                      "adult" ~ 0,
+                                      "subadult" ~ 0.5,
+                                      "metamorph" ~ 1),
+         life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
+
+
+```
+
+
+## Visualize outputs
+
+### Prevalence
+```{r}
+# observed
+ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = paste0("n=", n), y = 1.1 - (1 - label_offset) * 0.075),
+          position = position_dodge(width = 0.5),
+          size = 4) +
+  ylim(0, 1.1) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+# modeled
+ggplot(group_draws, aes(y = prevalence, x = res_class, fill = life_stage_simple)) +
+  geom_violin(quantiles = c(0.5),
+              quantile.linetype = 1) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+
+```
+
+### Load
+```{r}
+# observed
+ggplot(brms_data %>%
+         filter(bd_detected_co > 0), aes(y = bd_load_co_density, x = res_class, fill = life_stage_simple)) +
+  geom_violin(quantiles = c(0.5),
+              quantile.linetype = 1) +
+  geom_text(data = obs_data, aes(label = paste0("n=", n_pos), y = 10e8 - (1 - label_offset) * 7 * 10e7),
+            position = position_dodge(width = 0.5),
+            size = 4) +
+  scale_y_log10(limits = c(1, 1e10)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+# ggplot(epred_original, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
+#   geom_violin() +
+#   # geom_boxplot() +
+#   scale_y_log10(limits = c(1, 1e10)) +
+#   theme_minimal() +
+#   facet_wrap("taxon_capture") +
+#   scale_fill_brewer(palette = "Set2")
+
+ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
+  geom_violin(quantiles = c(0.5),
+              quantile.linetype = 1) +
+  # geom_boxplot() +
+  scale_y_log10(limits = c(1, 1e10)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_fill_brewer(palette = "Set2")
+
+
+
+```
+
+### Hypothesis testing
+```{r}
+#| eval: true
+#| echo: false
+#| warning: false
+
+
+# visualize draws
+ggplot(group_draws_agg, aes(x = prevalence_median, y = b_median, color = life_stage_simple)) +
+  geom_point() +
+  geom_path() +
+  theme_minimal() +
+  geom_text_repel(aes(label = res_class), seed = 123) +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+ggplot(group_draws, aes(x = prevalence, y = b, color = life_stage_simple)) +
+  geom_point(alpha = 0.1) +
+  theme_minimal() +
+  facet_grid(res_class ~ taxon_capture) +
+  scale_color_brewer(palette = "Set2")
+
+# single parameter distributions
+
+ggplot(group_draws, aes(y = prevalence, x = res_class, color = life_stage_simple)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+ggplot(group_draws, aes(y = b, x = res_class, color = life_stage_simple)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+ggplot(group_draws, aes(y = sigma, x = res_class, color = life_stage_simple)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
+  theme_minimal() +
+  facet_wrap("taxon_capture") +
+  scale_color_brewer(palette = "Set2")
+
+# visualize contrasts
+ggplot(hu_contrast_draws %>%
+         filter(taxon_capture == "rana_sierrae",
+                contrast != "subadult - metamorph"), aes(x = -hu_subadult, fill = contrast)) +
+  stat_halfeye(alpha = 0.75,
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
+  facet_grid(res_class ~ contrast) +
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Prevalence Effect Size Contrast (logit scale) [-]\nwith 50% & 89% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14)) +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(b_contrast_draws %>%
+         filter(contrast != "subadult - metamorph"), aes(x = b_subadult, fill = contrast)) +
+    stat_halfeye(alpha = 0.75,
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
+  facet_grid(res_class ~ taxon_capture) +
+  geom_vline(xintercept = 0, alpha = 0.5) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect on Bd Prevalence",
+       x = "Bd Load Density Effect Size Contrast (logit scale) [-]\nwith 50% & 89% High Density Interval",
+       y = "Posterior Density [-]") +
+  theme(text=element_text(size=14)) +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(sigma_contrast_draws %>%
+         filter(contrast != "subadult - metamorph"), aes(x = sigma_subadult, fill = contrast)) +
+  stat_halfeye(alpha = 0.75,
+               .width = c(0.5, 0.89),
+               point_interval = mode_hdi) +
+  facet_grid(res_class ~ taxon_capture) +
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  labs(
+    # title = "Subadult Effect on Bd Prevalence",
+    x = "Bd Load Sigma Effect Size Contrast (logit scale) [-]\nwith 50% & 89% High Density Interval",
+    y = "Posterior Density [-]") +
+  theme(text=element_text(size=14)) +
+  scale_fill_brewer(palette = "Set2")
+
+# probability of positive effect
+ggplot(contrast_agg %>%
+         filter(contrast != "subadult - metamorph"), aes(x = net_effect_hu, y = net_effect_b, color = contrast)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_path() +
+  geom_text_repel(aes(label = res_class), seed = 123) +
+  xlim(-1, 1) +
+  ylim(-1, 1) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence\nNet effect relative to adult [-]",
+       y = "Bd Load Density\nNet effect relative to adult[-]") +
+  scale_color_brewer(palette = "Set2") +
+  facet_wrap("taxon_capture")
+
+ggplot(contrast_agg %>%
+         filter(contrast != "subadult - metamorph"), aes(x = hu_median, y = b_median, color = contrast)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_path() +
+  geom_text_repel(aes(label = res_class), seed = 123) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Prevalence\nMedian effect relative to adult [-]",
+       y = "Bd Load Density\nMedian effect relative to adult [-]") +
+  scale_color_brewer(palette = "Set2") +
+  facet_wrap("taxon_capture")
+
+ggplot(contrast_agg %>%
+         filter(contrast != "subadult - metamorph"), aes(x = hu_median, y = sigma_median, color = contrast)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") + 
+  geom_point() +
+  geom_path() +
+  geom_text_repel(aes(label = res_class), seed = 123) +
+  theme_minimal() +
+  labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       x = "Bd Hu\nMedian effect relative to adult [-]",
+       y = "Bd Load Density Dispersion\nMedian effect relative to adult [-]") +
+  scale_color_brewer(palette = "Set2") +
+  facet_wrap("taxon_capture")
+
+
+```
+### Interaction contrasts
+```{r}
+hu_inter_specs = emmeans(
+  model_select,
+  ~ life_stage_simple * res_class | taxon_capture,
+  dpar = "hu"
+)
+
+hu_inter_contrasts = contrast(
+  hu_inter_specs,
+  interaction = "revpairwise"   # pairs life_stage AND res_class simultaneously
+)
+
+hu_inter_draws = hu_inter_contrasts %>%   # or hu_interaction_contrasts
+  gather_emmeans_draws() %>%
+  dplyr::rename(hu_coc = .value)
+
+hu_inter_agg = hu_inter_draws %>%
+  group_by(taxon_capture,
+           life_stage_simple_revpairwise,
+           res_class_revpairwise) %>%
+  summarize(
+    hdi_50     = hdi(hu_coc, ci = 0.50),
+    hdi_89     = hdi(hu_coc, ci = 0.89),
+    hu_median  = median(hu_coc),
+    ratio_positive = sum(hu_coc > 0) / n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    hdi_zero_50 = hdi_50$CI_low > 0 | hdi_50$CI_high < 0,
+    hdi_zero_89 = hdi_89$CI_low > 0 | hdi_89$CI_high < 0
+  )
+
+ggplot(hu_inter_draws %>%
+         filter(life_stage_simple_revpairwise == "metamorph - adult",
+                res_class_revpairwise == "(3-post) - (2-epizootic)"), aes(x = -hu_coc, fill = life_stage_simple_revpairwise)) +
+  stat_halfeye(
+    alpha          = 0.75,
+    .width         = c(0.5, 0.89),
+    point_interval = mode_hdi
+  ) +
+  facet_grid(res_class_revpairwise ~ taxon_capture) +       # no res_class facet — it's now IN the contrast
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  labs(
+    x = "Difference in life-stage effect between res_classes\n(logit scale) with 50% & 89% HDI",
+    y = "Posterior Density [-]"
+  ) +
+  theme(text = element_text(size = 14)) +
+  scale_fill_brewer(palette = "Set2")
+
+```
