@@ -18,7 +18,7 @@ csl: ecology.csl
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, janitor, here, brms, tidybayes)
+librarian::shelf(tidyverse, dbplyr, janitor, here, brms, tidybayes, arrow)
 
 ```
 
@@ -26,7 +26,7 @@ librarian::shelf(tidyverse, dbplyr, janitor, here, brms, tidybayes)
 
 ## environmental
 ```{r}
-env_agg = read_csv(here("data", "unified_env_agg.csv"))
+env_agg = read_parquet(here("data", "unified_env_agg.parquet"))
 
 ```
 
@@ -53,40 +53,7 @@ raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv
     taxon_capture = "rana_cascadae") %>%
   filter(!is.na(bd_its_copies))
 
-raca_population_valid = raca_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-# %>%
-#   filter(n_adult > 0,
-#          n_subadult > 0)
-
-raca_sites = raca_clean %>%
-  select(site,
-         site_utme,
-         site_utmn) %>%
-  distinct()
-
-# convert to lat lon
-raca_points = cbind(raca_sites$site_utme,
-                    raca_sites$site_utmn)
-
-v_utm = vect(raca_points, crs="+proj=utm +zone=10 +datum=WGS84  +units=m")
-v_ll = project(v_utm, "+proj=longlat +datum=WGS84")
-v_lonlat = geom(v_ll)[, c("x", "y")]
-
-raca_sites_ll = raca_sites %>%
-  bind_cols(v_lonlat) %>%
-  dplyr::rename(site_longitude = x,
-         site_latitude = y) %>%
-  select(site,
-         site_latitude,
-         site_longitude)
-
 raca_valid = raca_clean %>%
-  filter(population %in% raca_population_valid$population) %>%
-  left_join(raca_sites_ll, by = "site") %>%
   left_join(env_agg %>%
               select(site,
                      date,
@@ -101,13 +68,13 @@ raca_valid = raca_clean %>%
          life_stage,
          sex,
          svl_mm,
-         site_latitude,
-         site_longitude,
          precip_mm_30_day_sum,
          temp_c_30_day_mean,
          region,
          country,
          project)
+
+peace = janitor::get_dupes(env_agg, site, date)
 
 
 
