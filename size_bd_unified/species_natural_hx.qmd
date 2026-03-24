@@ -71,7 +71,10 @@ habitats = tibble()
 for (ii in 1:nrow(iucn_assessment_clean)) {
   temp = iucn_assessment_data[[ii]]$habitats %>%
     mutate(genus_q = iucn_assessment_clean$genus_q[ii],
-           species_q = iucn_assessment_clean$species_q[ii])
+           species_q = iucn_assessment_clean$species_q[ii],
+           pop_trend = iucn_assessment_data[[ii]]$population_trend$description[1],
+           redlist_category = iucn_assessment_data[[ii]]$red_list_category$description[1],
+           redlist_code = iucn_assessment_data[[ii]]$red_list_category$code[1])
   
   habitats = bind_rows(habitats,
                        temp)
@@ -80,9 +83,12 @@ for (ii in 1:nrow(iucn_assessment_clean)) {
 habitats_clean = habitats %>%
   select(genus_q,
          species_q,
+         redlist_code,
          everything()) %>%
   arrange(genus_q,
           species_q,
           code)
+
+write_csv(habitats_clean, here("size_bd_unified", "iucn_habitat_use.csv"))
 
 ```
