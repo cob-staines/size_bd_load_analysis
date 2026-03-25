@@ -1,0 +1,30 @@
+---
+title: "05_species_meta_regression"
+format: html
+---
+
+# Setup
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr)
+
+```
+
+# Load models and data
+```{r}
+# load models
+null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
+m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+
+model_select = m5g_zln
+
+# phylogenetic tree
+
+# natural history traits
+
+```
