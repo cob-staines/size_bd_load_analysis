@@ -213,14 +213,14 @@ write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "
 
 # Import timeseries
 ```{r}
-env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.csv")) %>%
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-25.csv")) %>%
   rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
 
-write_parquet(env_in, here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
-
-env_in = read_parquet(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
+# write_parquet(env_in, here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
+# 
+# env_in = read_parquet(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
 
 ```
 
@@ -286,5 +286,5 @@ env_agg = env_in %>%
 
 # Write env agg
 ```{r}
-write_parquet(env_agg, here("data", "unified_env_agg.parquet"))
+write_csv(env_agg, here("data", "unified_env_agg.csv"))
 ```
