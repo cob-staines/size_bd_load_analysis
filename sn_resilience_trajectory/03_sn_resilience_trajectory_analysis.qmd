@@ -26,8 +26,8 @@ brms_data = bd_model %>%
   )
 
 # load models
-null_zln = readRDS(file = here("snrt_models/snrt_model_results_zln_null.rds"))
-m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+null_zln = readRDS(file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_null.rds"))
+m6_zln = readRDS(file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds"))
 
 model_select = m6_zln
 ```
@@ -109,15 +109,15 @@ hu_contrast_agg = hu_contrast_draws %>%
             .groups = "drop") %>%
   mutate(
     hdi_zero_50 = case_when(
-      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_89 = case_when(
-      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_95 = case_when(
-      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      hdi_95[1] > 0 | hdi_95 < 0 ~ TRUE,
       .default = FALSE
     ))
 
@@ -148,15 +148,15 @@ b_contrast_agg = b_contrast_draws %>%
             .groups = "drop") %>%
   mutate(
     hdi_zero_50 = case_when(
-      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_89 = case_when(
-      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_95 = case_when(
-      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
       .default = FALSE
     ))
 
@@ -187,15 +187,15 @@ sigma_contrast_agg = sigma_contrast_draws %>%
             .groups = "drop") %>%
   mutate(
     hdi_zero_50 = case_when(
-      hdi_50$CI_low > 0 | hdi_50$CI_high < 0 ~ TRUE,
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_89 = case_when(
-      hdi_89$CI_low > 0 | hdi_89$CI_high < 0 ~ TRUE,
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
       .default = FALSE
     ),
     hdi_zero_95 = case_when(
-      hdi_95$CI_low > 0 | hdi_95$CI_high < 0 ~ TRUE,
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
       .default = FALSE
     ))
 
@@ -512,8 +512,8 @@ hu_inter_agg = hu_inter_draws %>%
     .groups = "drop"
   ) %>%
   mutate(
-    hdi_zero_50 = hdi_50$CI_low > 0 | hdi_50$CI_high < 0,
-    hdi_zero_89 = hdi_89$CI_low > 0 | hdi_89$CI_high < 0
+    hdi_zero_50 = hdi_50[1] > 0 | hdi_50[2] < 0,
+    hdi_zero_89 = hdi_89[1] > 0 | hdi_89[2] < 0
   )
 
 ggplot(hu_inter_draws %>%
@@ -533,5 +533,241 @@ ggplot(hu_inter_draws %>%
   ) +
   theme(text = element_text(size = 14)) +
   scale_fill_brewer(palette = "Set2")
+
+```
+
+# Random effects
+
+## Population
+
+### Contrasts
+```{r}
+
+# Step 1: get posterior predictions for all observed combinations
+nd <- model_select$data |>
+  distinct(population, res_class, life_stage_simple, taxon_capture) |>
+  filter(life_stage_simple %in% c("metamorph", "adult"),
+         res_class == "3-post") |>
+  mutate(
+    precip_mm_30_z  = 0,
+    precip_mm_30_z2 = 0,
+    temp_c_30_z     = 0,
+    temp_c_30_z2    = 0
+  )
+
+hu_pop_draws <- model_select |>
+  epred_draws(
+    newdata    = nd,
+    dpar       = "hu",
+    re_formula = ~ (1 | population:res_class:life_stage_simple)
+  )
+
+hu_pop_draws_pairs = hu_pop_draws %>%
+  group_by(population, .draw) %>%
+  mutate(n = n()) %>%
+  ungroup() %>%
+  filter(n > 1)
+
+hu_pop_contrasts <- hu_pop_draws_pairs |>
+  compare_levels(
+    var        = hu,
+    by         = life_stage_simple,
+    comparison = "pairwise",
+    draw_indices = c("population", "res_class", "taxon_capture", ".draw")
+  )
+
+hu_pop_contrasts_agg = hu_pop_contrasts |>
+  group_by(population, res_class, life_stage_simple) |>
+  median_qi(hu)
+
+# mu
+mu_pop_draws <- model_select |>
+  epred_draws(
+    newdata    = nd,
+    dpar       = "mu",
+    re_formula = ~ (1 | population:res_class:life_stage_simple)
+  )
+
+mu_pop_draws_pairs = mu_pop_draws %>%
+  group_by(population, .draw) %>%
+  mutate(n = n()) %>%
+  ungroup() %>%
+  filter(n > 1)
+
+mu_pop_contrasts <- mu_pop_draws_pairs |>
+  compare_levels(
+    var        = mu,
+    by         = life_stage_simple,
+    comparison = "pairwise",
+    draw_indices = c("population", "res_class", "taxon_capture", ".draw")
+  )
+
+mu_pop_contrasts_agg = mu_pop_contrasts |>
+  group_by(population, res_class, life_stage_simple) |>
+  median_qi(mu)
+
+pop_contrasts_agg = hu_pop_contrasts_agg %>%
+  left_join(mu_pop_contrasts_agg, by = c("population", "res_class", "life_stage_simple"), suffix = c("_hu", "_mu"))
+
+ggplot(pop_contrasts_agg, aes(x = -hu, y = mu)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") +
+  geom_point() +
+  geom_text_repel(aes(label = population), seed = 123, color = "#888") +
+  theme_minimal() +
+  # labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       # x = "Bd Hu\nMedian effect relative to adult [-]",
+       # y = "Bd Load Density Dispersion\nMedian effect relative to adult [-]") +
+  scale_color_brewer(palette = "Set2")
+```
+
+### Values
+```{r}
+hu_spec_pop <- emmeans(rg, ~ life_stage_simple * res_class | population)
+
+res_classes <- unique(model_select$data$res_class)  # e.g. "1-naive", "2-epizootic"
+res_pattern <- paste(res_classes, collapse = "|")
+
+hu_draws_pop <- model_select |>
+  spread_draws(`r_population:res_class:life_stage_simple__hu`[group, term]) |>
+  mutate(
+    res_class         = stringr::str_extract(group, res_pattern),
+    population        = stringr::str_extract(group, 
+                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
+    life_stage_simple = stringr::str_extract(group,
+                          paste(unique(model_select$data$life_stage_simple), 
+                                collapse = "|"))
+  )
+
+hu_draws_pop_agg = hu_draws_pop %>%
+  dplyr::rename(hu = `r_population:res_class:life_stage_simple__hu`) %>%
+  group_by(life_stage_simple,
+           res_class,
+           population) %>%
+  summarize(hdi_50 = hdi(hu, ci = 0.50),
+            hdi_89 = hdi(hu, ci = 0.89),
+            hdi_95 = hdi(hu, ci = 0.95),
+            hu_ratio_positive = sum(hu > 0) / n(),
+            hu_median = median(hu),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+b_draws_pop <- model_select |>
+  spread_draws(`r_population:res_class:life_stage_simple`[group, term]) |>
+  mutate(
+    res_class         = stringr::str_extract(group, res_pattern),
+    population        = stringr::str_extract(group, 
+                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
+    life_stage_simple = stringr::str_extract(group,
+                          paste(unique(model_select$data$life_stage_simple), 
+                                collapse = "|"))
+  )
+
+b_draws_pop_agg = b_draws_pop %>%
+  dplyr::rename(mu = `r_population:res_class:life_stage_simple`) %>%
+  group_by(life_stage_simple,
+           res_class,
+           population) %>%
+  summarize(hdi_50 = hdi(mu, ci = 0.50),
+            hdi_89 = hdi(mu, ci = 0.89),
+            hdi_95 = hdi(mu, ci = 0.95),
+            mu_ratio_positive = sum(mu > 0) / n(),
+            mu_median = median(mu),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+sigma_draws_pop <- model_select |>
+  spread_draws(`r_population:res_class:life_stage_simple__sigma`[group, term]) |>
+  mutate(
+    res_class         = stringr::str_extract(group, res_pattern),
+    population        = stringr::str_extract(group, 
+                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
+    life_stage_simple = stringr::str_extract(group,
+                          paste(unique(model_select$data$life_stage_simple), 
+                                collapse = "|"))
+  )
+
+sigma_draws_pop_agg = sigma_draws_pop %>%
+  dplyr::rename(sigma = `r_population:res_class:life_stage_simple__sigma`) %>%
+  group_by(life_stage_simple,
+           res_class,
+           population) %>%
+  summarize(hdi_50 = hdi(sigma, ci = 0.50),
+            hdi_89 = hdi(sigma, ci = 0.89),
+            hdi_95 = hdi(sigma, ci = 0.95),
+            sigma_ratio_positive = sum(sigma > 0) / n(),
+            sigma_median = median(sigma),
+            .groups = "drop") %>%
+  mutate(
+    hdi_zero_50 = case_when(
+      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_89 = case_when(
+      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
+      .default = FALSE
+    ),
+    hdi_zero_95 = case_when(
+      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
+      .default = FALSE
+    ))
+
+combined_draws_pop_agg = hu_draws_pop_agg %>%
+  select(life_stage_simple,
+         res_class,
+         population,
+         hu_median,
+         hu_ratio_positive) %>%
+  left_join(b_draws_pop_agg %>%
+              select(life_stage_simple,
+                     res_class,
+                     population,
+                     mu_median,
+                     mu_ratio_positive), by = c("life_stage_simple", "res_class", "population")) %>%
+  left_join(sigma_draws_pop_agg %>%
+              select(life_stage_simple,
+                     res_class,
+                     population,
+                     sigma_median,
+                     sigma_ratio_positive), by = c("life_stage_simple", "res_class", "population"))
+
+ggplot(combined_draws_pop_agg %>%
+         filter(res_class == "3-post",
+                life_stage_simple %in% c("metamorph", "adult")), aes(x = -hu_median, y = mu_median, color = life_stage_simple)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") +
+  geom_point() +
+  geom_text_repel(aes(label = population), seed = 123, color = "#888") +
+  theme_minimal() +
+  # labs(
+       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
+       # x = "Bd Hu\nMedian effect relative to adult [-]",
+       # y = "Bd Load Density Dispersion\nMedian effect relative to adult [-]") +
+  scale_color_brewer(palette = "Set2")
 
 ```
