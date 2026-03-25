@@ -238,8 +238,8 @@ null_zln <- brm(
 
 null_zln = add_criterion(null_zln, "loo")
 
-saveRDS(null_zln, file = here("snrt_models/snrt_model_results_zln_null.rds"))
-null_zln = readRDS(file = here("snrt_models/snrt_model_results_zln_null.rds"))
+saveRDS(null_zln, file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_null.rds"))
+null_zln = readRDS(file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_null.rds"))
 
 
 # fixed env
@@ -264,8 +264,8 @@ m6_zln <- brm(
 
 m6_zln = add_criterion(m6_zln, "loo")
 
-saveRDS(m6_zln, file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
-m6_zln = readRDS(file = "snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds")
+saveRDS(m6_zln, file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds"))
+m6_zln = readRDS(file = here("sn_resilience_trajectory/snrt_models/snrt_model_results_zln_life_tax_poptls2envsp2_envsp2.rds"))
 
 ```
 
