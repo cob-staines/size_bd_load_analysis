@@ -36,7 +36,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, bayesplot,  cmdstanr, bayestestR, rio)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, bayesplot, cmdstanr, bayestestR, rio)
 
 ```
 ## Data selection
@@ -514,6 +514,51 @@ ribbitr_valid = bd_sample_valid %>%
 
 ```
 
+### HYPHY
+```{r}
+### Hylodes phyllodes
+hyphy_raw = import_list(here("data", "CDMR_H.phyllodes_metadata_Oct2_LKS.xlsx"))
+
+hyphy_clean = hyphy_raw[[1]] %>%
+  clean_names() %>%
+  filter(timepoint == 0) %>%
+  # filter(timepoint == 0 | treatment == "Saline control") %>%
+  dplyr::rename(svl_mm = svl,
+                date = capture_date) %>%
+  mutate(life_stage_simple = case_when(
+    svl_mm < 27.5 ~ "subadult",
+    svl_mm >= 27.5 ~ "adult",
+    .default = NA),
+    taxon_capture = "hylodes_phyllodes",
+    site = tolower(transect),
+    population = region,
+    country = "brazil",
+    bd_its_copies = bd_load,
+    project = "HYPHY"
+  ) %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"))
+
+hyphy_population_valid = hyphy_clean %>%
+  group_by(population) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop")
+
+hyphy_valid = hyphy_clean %>%
+  select(taxon_capture,
+         date,
+         site,
+         population,
+         bd_its_copies,
+         life_stage_simple,
+         svl_mm,
+         region,
+         country,
+         project)
+```
+
 ### Combine datasets
 ```{r}
 
@@ -526,10 +571,10 @@ bd_model = bind_rows(raca_valid,
                      ralu_valid,
                      usgs_valid,
                      ribbitr_valid) %>%
-  mutate(bd_detected_co = bd_its_copies >= 10,
-         bd_load_co = if_else(bd_its_copies < 10,
+  mutate(bd_load_co = if_else(bd_its_copies < 10,
                               0,
                               bd_its_copies),
+         bd_detected_co = bd_load_co > 0,
          bd_load_co_density = bd_load_co / svl_mm)
 
 (bd_model_stats = bd_model %>%
