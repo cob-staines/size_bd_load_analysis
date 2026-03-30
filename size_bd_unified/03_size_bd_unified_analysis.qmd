@@ -256,10 +256,14 @@ group_draws_agg = group_draws %>%
   group_by(taxon_capture,
            life_stage_simple) %>%
   summarize(hu_median = median(hu),
+            hu_hdi = tidybayes::hdi(hu, ci = 0.89),
             prevalence_median = median(prevalence),
             b_median = median(b),
-            .groups = "drop")
-
+            b_hdi = tidybayes::hdi(b, ci = 0.89),
+            .groups = "drop") %>%
+  mutate(prevalence_hdi_1 = 1 - plogis(hu_hdi[, 2]),
+         prevalence_hdi_2 = 1 - plogis(hu_hdi[, 1]))
+         
 ```
 
 ## Obsevations and predictions
@@ -484,6 +488,19 @@ ggplot(combined_agg, aes(x = hu_subadult_median, y = hu_median)) +
        y = "Median hu [-]"
        ) +
   scale_color_brewer(palette = "Set2")
+
+ggplot(group_draws_agg, aes(y = prevalence_median, ymin = prevalence_hdi_1, ymax = prevalence_hdi_2, x = taxon_capture, color = life_stage_simple)) +
+  geom_pointrange(position = position_dodge(width = 0.7)) +
+  theme_minimal() +
+  coord_flip()
+
+plot_load_draws_sum = ggplot(load_draws_summary, aes(x = species, y = log_load_mean, ymin = log_load_ci05, ymax = log_load_ci95)) +
+  geom_pointrange() +
+  labs(y = "log(Bd-positive load)\n(posterior mean ± 95% CrI)",
+       x = "Species",
+       title = "Bd-positive load") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 ```
 
