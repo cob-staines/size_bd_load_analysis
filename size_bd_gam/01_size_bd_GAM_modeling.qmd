@@ -316,3 +316,32 @@ ggplot(mu_agg, aes(x = svl_mm, color = taxon_capture, fill = taxon_capture)) +
 
 
 ```
+
+# Recreate groups
+```{r}
+hu_draws_groups = hu_draws %>%
+  mutate(life_stage_simple = case_when(
+    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
+    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
+  ))
+
+mu_draws_groups = mu_draws %>%
+  mutate(life_stage_simple = case_when(
+    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
+    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
+  ))
+
+hu_groups_agg = hu_draws_groups %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  median_qi(hu, .width = c(.89))
+
+mu_groups_agg = mu_draws_groups %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  median_qi(mu, .width = c(.89))
+
+
+```
