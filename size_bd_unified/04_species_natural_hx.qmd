@@ -89,6 +89,6 @@ habitats_clean = habitats %>%
           species_q,
           code)
 
-write_csv(habitats_clean, here("size_bd_unified", "iucn_habitat_use.csv"))
+write_csv(habitats_clean, here("size_bd_unified", "intermediates", "iucn_habitat_use.csv"))
 
 ```
