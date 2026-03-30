@@ -64,10 +64,10 @@ bd_sample = db_sample %>%
                      bd_detected,
                      bd_its1_copies_per_swab), by = "sample_id") %>%
   dplyr::rename(bd_load = bd_its1_copies_per_swab) %>%
-  mutate(bd_detected_co = bd_load >= 6,
-         bd_load_co = if_else(bd_load < 6,
-                                  0,
-                                  bd_load),
+  mutate(bd_load_co = if_else(bd_load < 10,
+                              0,
+                              bd_load),
+         bd_detected_co = bd_load_co > 0,
          bd_load_co_density = bd_load_co / svl_mm)
 
 # load populations
@@ -135,9 +135,6 @@ bd_model = bd_life_stage %>%
          life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
 
 write_csv(bd_model, here("data", paste0("sn_res_traj_bd_model_data_", today(), ".csv")))
-
-peace = bd_model %>%
-  filter(life_stage_simple == "metamorph")
 
 ```
 
