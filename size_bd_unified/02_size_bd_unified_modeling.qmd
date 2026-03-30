@@ -530,7 +530,7 @@ hyphy_clean = hyphy_raw[[1]] %>%
     svl_mm >= 27.5 ~ "adult",
     .default = NA),
     taxon_capture = "hylodes_phyllodes",
-    site = tolower(transect),
+    site = gsub("aw", "s", tolower(transect)),
     population = region,
     country = "brazil",
     bd_its_copies = bd_load,
@@ -545,6 +545,14 @@ hyphy_population_valid = hyphy_clean %>%
   summarize(n_adult = sum(life_stage_simple == "adult"),
             n_subadult = sum(life_stage_simple == "subadult"),
             .groups = "drop")
+
+peace = hyphy_clean %>%
+  select(site) %>%
+  distinct()
+
+hope = hyphy_clean %>%
+  summarize(date_min = min(date),
+            date_max = max(date))
 
 hyphy_valid = hyphy_clean %>%
   select(taxon_capture,
