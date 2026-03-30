@@ -148,6 +148,8 @@ ranarasi_valid = bd_life_stage %>%
   left_join(site_year_pop, by = c("site", "year")) %>%
   filter(!is.na(bd_its1_copies_per_swab)) %>%
   mutate(project = "MLRG")
+
+
 ```
 
 # Combine data
@@ -178,6 +180,10 @@ brms_data = bind_rows(ranarasi_valid,
 env_alignment_check = any(is.na(brms_data$precip_mm_30_day_sum)) | any(is.na(brms_data$temp_c_30_day_mean))
 
 save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))
+
+peace = brms_data %>%
+  group_by(taxon_capture) %>%
+  count()
 
 ```
 
@@ -242,62 +248,71 @@ m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
 
 # visualize results
 ```{r}
-library(tidybayes)
-library(ggplot2)
-library(dplyr)
-library(patchwork)  # for combining plots
 
-# Create a prediction grid over the range of svl_mm
-svl_seq <- data.frame(svl_mm = seq(min(raca_clean$svl_mm), 
-                                    max(raca_clean$svl_mm), 
-                                    length.out = 200))
+svl_df = brms_data %>%
+  filter(!is.na(svl_mm)) %>%
+  group_by(taxon_capture) %>%
+  reframe(svl_mm = seq(20, 75, length.out = 200)) %>%
+  mutate(precip_mm_30_z = 0,
+         precip_mm_30_z2 = 0,
+         temp_c_30_z = 0,
+         temp_c_30_z2 = 0)
 
-# --- Mu (log-mean of positive part) ---
-pred_mu <- fitted(fit_01, 
-                  newdata  = svl_seq, 
-                  dpar     = "mu",
-                  scale    = "response",
-                  summary  = TRUE) %>% 
-  as.data.frame() %>%
-  bind_cols(svl_seq)
+# epred draws
+hu_draws = svl_df %>%
+  add_epred_draws(m1_zln, dpar = "hu", re_formula = NA)
 
-p_mu <- ggplot(pred_mu, aes(x = svl_mm)) +
-  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.3, fill = "steelblue") +
-  geom_line(aes(y = Estimate), color = "steelblue", linewidth = 1) +
-  labs(title = "Smooth effect on mu",
-       x = "SVL (mm)", y = "mu (log-mean of positive values)") +
-  theme_classic()
+mu_draws = svl_df %>%
+  add_epred_draws(m1_zln, dpar = "mu", re_formula = NA)
 
-# --- Hu (hurdle / P(zero)) ---
-pred_hu <- fitted(fit_01, 
-                  newdata  = svl_seq, 
-                  dpar     = "hu",
-                  scale    = "response",
-                  summary  = TRUE) %>% 
-  as.data.frame() %>%
-  bind_cols(svl_seq) %>%
-  mutate(prevalence = 1 - plogis(Estimate),
-         prevQ2.5 = 1 - plogis(Q2.5),
-         prevQ97.5 = 1 - plogis(Q97.5))
+sigma_draws = svl_df %>%
+  add_linpred_draws(m1_zln, dpar = "sigma", re_formula = NA)
 
-p_hu <- ggplot(pred_hu, aes(x = svl_mm)) +
-  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.3, fill = "coral") +
-  geom_line(aes(y = Estimate), color = "coral", linewidth = 1) +
-  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
-  labs(title = "Smooth effect on hu",
-       x = "SVL (mm)", y = "P(zero)") +
-  theme_classic()
+epred_drawss = svl_df %>%
+  add_epred_draws(m1_zln, re_formula = NA)
 
-p_prev <- ggplot(pred_hu, aes(x = svl_mm)) +
-  geom_ribbon(aes(ymin = prevQ2.5, ymax = prevQ97.5), alpha = 0.3, fill = "coral") +
-  geom_line(aes(y = prevalence), color = "coral", linewidth = 1) +
-  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
-  labs(title = "Smooth effect on hu",
-       x = "SVL (mm)", y = "P(zero)") +
-  theme_classic()
+# agg
+hu_agg = hu_draws %>%
+  group_by(svl_mm, taxon_capture) %>%
+  median_qi(hu, .width = c(0.89))
 
-# Combine
-p_mu / p_prev
+prev_agg = hu_draws %>%
+  mutate(prevalence = 1 - plogis(hu)) %>%
+  group_by(svl_mm, taxon_capture) %>%
+  median_qi(prevalence, .width = c(0.89))
+
+mu_agg = mu_draws %>%
+  group_by(svl_mm, taxon_capture) %>%
+  median_qi(mu, .width = c(0.89))
+
+ggplot(hu_agg, aes(x = svl_mm, color = taxon_capture, fill = taxon_capture)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), alpha = 0.3) +
+  geom_line(aes(y = hu), linewidth = 1) +
+  labs(title = "Smooth effect on Bd prevalence",
+       x = "SVL (mm)", y = "Bd Prevalence") +
+  theme_classic() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(prev_agg, aes(x = svl_mm, color = taxon_capture, fill = taxon_capture)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), alpha = 0.3) +
+  geom_line(aes(y = prevalence), linewidth = 1) +
+  labs(title = "Smooth effect on Bd prevalence",
+       x = "SVL (mm)", y = "Bd Prevalence") +
+  theme_classic() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2") +
+  ylim(0, 1)
+
+ggplot(mu_agg, aes(x = svl_mm, color = taxon_capture, fill = taxon_capture)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), alpha = 0.3) +
+  geom_line(aes(y = mu), linewidth = 1) +
+  labs(title = "Smooth effect on Bd load",
+       x = "SVL (mm)", y = "log(Bd load)") +
+  theme_classic() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2")
+
 
 
 ```
