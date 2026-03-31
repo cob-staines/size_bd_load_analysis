@@ -11,7 +11,7 @@ format: html
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans)
+librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, rio, janitor)
 
 ```
 
@@ -56,12 +56,45 @@ nhx = read_csv(here("data", "species_notes_2026-03-26.csv")) %>%
          iucn_redlist_category,
          development_stage)
 
+# Jetz & Pyron 2018 phylogeny (https://datadryad.org/dataset/doi:10.5061/dryad.cc3n6j5#usage)
+
+
+# Greenburg data
+gb_data = import_list(here("data", "doi_10_5061_dryad_t54h6__v20170724", "Greenberg_Evol_Appl_full_dataset.xls"))
+
+
+gb_full = gb_data[[1]] %>%
+  clean_names()
+gb_raw = gb_data[[2]] %>%
+  clean_names()
 # climate descriptors..,
 ## climate normals? or can I use the climate response models here?
 
 ```
 
+
 # combine data
+
+## align Greenburg data
+```{r}
+species_list = brms_data %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  arrange(taxon_capture) %>%
+  mutate(species = gsub("[a-z]*_", "", taxon_capture))
+
+gb_species_full = gb_full %>%
+  select(genus,
+         species,
+         species_id) %>%
+  distinct() %>%
+  arrange(species)
+
+gb_aligned = species_list %>%
+  full_join(gb_species_full, by = "species")
+
+```
+
 ```{r}
 hu_draws = hu_specs %>%
   gather_emmeans_draws() %>%
