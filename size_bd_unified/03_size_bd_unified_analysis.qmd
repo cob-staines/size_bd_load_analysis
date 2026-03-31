@@ -511,207 +511,332 @@ cor_get_pval(simple_cor)
 
 ## Phylogenetic tree
 
-### Create
+### Jetz & Pyron 2018
+https://datadryad.org/dataset/doi:10.5061/dryad.cc3n6j5#usage
 ```{r}
-gene_marker <- "16S"
-species_list = bd_model_env_stats %>%
-  mutate(species = get_species_name(taxon_capture)) %>%
-  pull(species)
+jp_raw = read.tree(file = here("data", "amph_shl_new_Consensus_7238.tre"))
 
-taxon_list = bd_model_env_stats %>%
-  pull(taxon_capture)
+# preview alignment
+jk_species_list = bd_model_env_stats %>%
+  mutate(sn = str_to_title(taxon_capture)) %>%
+  select(sn) %>%
+  mutate(genus = str_split_fixed(sn, "_", 2)[,1],
+         species = str_split_fixed(sn, "_", 2)[,2])
 
-fetch_sequence_reproducible <- function(species, marker, max_seqs = 10, 
-                                        min_length = 100,
-                                        target_min = 400,
-                                        target_max = 700) {
-  query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ", 
-                  marker, "[All Fields])")
-  search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs)
+jp_species_list = tibble(jp_sn = jp_raw$tip.label) %>%
+  mutate(jp_genus = str_split_fixed(jp_sn, "_", 2)[,1],
+         species = str_split_fixed(jp_sn, "_", 2)[,2],
+         jp = TRUE)
   
-  if (length(search$ids) == 0) {
-    message("No sequence found for: ", species)
-    return(NULL)
-  }
-  
-  seqs <- entrez_fetch(db = "nucleotide", id = search$ids, rettype = "fasta")
-  
-  tmp <- tempfile(fileext = ".fasta")
-  writeLines(seqs, tmp)
-  
-  dna <- tryCatch(
-    read.dna(tmp, format = "fasta"),
-    error = function(e) { message("Failed to parse FASTA for: ", species); return(NULL) }
-  )
-  
-  if (is.null(dna)) return(NULL)
-  if (is.matrix(dna)) dna <- as.list(dna)
-  
-  # Filter by minimum length
-  lengths <- sapply(dna, length)
-  dna <- dna[lengths >= min_length]
-  
-  if (length(dna) == 0) {
-    message("No sequences above min_length for: ", species)
-    return(NULL)
-  }
-  
-  lengths <- sapply(dna, length)
-  
-  # Try preferred length range first
-  in_range <- dna[lengths >= target_min & lengths <= target_max]
-  
-  if (length(in_range) > 0) {
-    range_lengths <- sapply(in_range, length)
-    selected <- in_range[which.max(range_lengths)]
-    label <- "preferred range"
-  } else {
-    # Fall back to longest available
-    selected <- dna[which.max(lengths)]
-    label <- "fallback longest"
-  }
-  
-  # Log the selected accession for reproducibility
-  message(species, " [", label, "]: ", 
-          sapply(selected, length), "bp — ", names(selected))
-  
-  return(selected)
-}
 
-# Run and capture selection log
-raw_seqs <- lapply(species_list, function(sp) {
-  Sys.sleep(0.4)
-  fetch_sequence_reproducible(sp, marker = gene_marker, max_seqs = 50)
-})
-names(raw_seqs) <- species_list
-raw_seqs <- Filter(Negate(is.null), raw_seqs)
+peace = jk_species_list %>%
+  left_join(jp_species_list, by = "species") %>%
+  select(sn,
+         jp_sn,
+         genus,
+         jp_genus,
+         everything())
 
-# After fetching, decode and save immediately
-decode_dnabin <- function(x) {
-  tmp <- tempfile(fileext = ".fasta")
-  write.dna(x, tmp, format = "fasta")
-  lines <- readLines(tmp)
-  seq_lines <- lines[!grepl("^>", lines)]
-  seq_string <- paste(seq_lines, collapse = "")
-  gsub("[[:space:]]", "", seq_string)
-}
+species_list_j = bd_model_env_stats %>%
+  select(taxon_capture) %>%
+  distinct() %>%
+  mutate(sn = str_to_title(taxon_capture),
+         jp_sn = recode_values(sn,
+                               "Lithobates_warszewitschii" ~ "Rana_warszewitschii",
+                               "Lithobates_blairi" ~ "Rana_blairi",
+                               "Lithobates_chiricahuensis" ~ "Rana_chiricahuensis",
+                               "Lithobates_palustris" ~ "Rana_palustris",
+                               "Lithobates_sphenocephalus" ~ "Rana_sphenocephala",
+                               default = sn))
 
-# Decode all sequences
-combined_char <- sapply(names(raw_seqs), function(sp) {
-  decode_dnabin(raw_seqs[[sp]])
-})
-names(combined_char) <- names(raw_seqs)
+# Prune to species list
+jp_pruned = keep.tip(jp_raw, species_list_j$jp_sn)
+combined_agg_j = combined_agg %>%
+  left_join(species_list_j %>%
+              select(taxon_capture,
+                     jp_sn), by = "taxon_capture")
 
-# Sanity check before alignment
-substr(combined_char[1], 1, 50)  # should show ACGTs now
+# Ccheck plot
+plotTree(jp_pruned, fsize = 0.8)
 
-# Save as FASTA for reuse — no need to re-fetch next time
-fasta_lines <- unlist(lapply(names(combined_char), function(sp) {
-  c(paste0(">", sp), combined_char[[sp]])
+is.binary(jp_pruned)
+
+table(sapply(1:jp_pruned$Nnode, function(n) {
+  length(Children(jp_pruned, n + Ntip(jp_pruned)))
 }))
-writeLines(fasta_lines, here("size_bd_unified", "intermediates", "selected_sequences.fasta"))
-message("Sequences saved to selected_sequences.fasta")
 
-# To reload next time instead of re-fetching:
-# dna_saved <- read.dna(here("size_bd_unified", "intermediates", "selected_sequences.fasta"), format = "fasta")
-# combined_char <- sapply(as.character(dna_saved), paste, collapse = "")
-# names(combined_char) <- taxon_list
-
-# Align
-aligned <- AlignSeqs(DNAStringSet(combined_char))
-
-# --- 3. BUILD TREE ---
-phydat <- as.phyDat(aligned)
-
-dist_mat <- dist.ml(phydat, model = "JC69")
-
-nj_tree <- NJ(dist_mat)
-
-fit <- pml(nj_tree, phydat)
-fit_opt <- optim.pml(fit,
-                     model         = "GTR",
-                     optInv        = TRUE,
-                     optGamma      = TRUE,
-                     rearrangement = "NNI")
-
-tr_phylo <- fit_opt$tree
-
-# --- 4. ROOT ---
-tr_rooted <- midpoint(tr_phylo)
-
-# --- 5. QUICK SANITY CHECKS ---
-summary(tr_rooted$edge.length)
-is.ultrametric(tr_rooted)  # expected FALSE for ML tree
-# plot(tr_rooted, cex = 0.6)
-
-# Optional: compare topology to your original OTL tree
-ggtree::ggtree(tr_rooted, layout = "rectangular") +
-  ggtree::geom_tiplab(size = 3, align = FALSE) +
-  ggtree::theme_tree2() +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.3)))
-
-# Now has real branch lengths!
-summary(tr_rooted$edge.length)
-is.ultrametric(tr_rooted)
-
-phylo_covar = vcv.phylo(tr_rooted, corr = TRUE)
-
-saveRDS(phylo_covar, here("size_bd_unified", "intermediates", "phylo_covar.rds"))
-
-write.tree(tr_rooted, here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
 ```
+
+<!-- ### Create -->
+<!-- ```{r} -->
+<!-- gene_marker <- "16S" -->
+<!-- species_list = bd_model_env_stats %>% -->
+<!--   mutate(species = get_species_name(taxon_capture)) %>% -->
+<!--   pull(species) -->
+
+<!-- taxon_list = bd_model_env_stats %>% -->
+<!--   pull(taxon_capture) -->
+
+<!-- fetch_sequence_reproducible <- function(species, marker, max_seqs = 10,  -->
+<!--                                         min_length = 100, -->
+<!--                                         target_min = 400, -->
+<!--                                         target_max = 700) { -->
+<!--   query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ",  -->
+<!--                   marker, "[All Fields])") -->
+<!--   search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs) -->
+
+<!--   if (length(search$ids) == 0) { -->
+<!--     message("No sequence found for: ", species) -->
+<!--     return(NULL) -->
+<!--   } -->
+
+<!--   seqs <- entrez_fetch(db = "nucleotide", id = search$ids, rettype = "fasta") -->
+
+<!--   tmp <- tempfile(fileext = ".fasta") -->
+<!--   writeLines(seqs, tmp) -->
+
+<!--   dna <- tryCatch( -->
+<!--     read.dna(tmp, format = "fasta"), -->
+<!--     error = function(e) { message("Failed to parse FASTA for: ", species); return(NULL) } -->
+<!--   ) -->
+
+<!--   if (is.null(dna)) return(NULL) -->
+<!--   if (is.matrix(dna)) dna <- as.list(dna) -->
+
+<!--   # Filter by minimum length -->
+<!--   lengths <- sapply(dna, length) -->
+<!--   dna <- dna[lengths >= min_length] -->
+
+<!--   if (length(dna) == 0) { -->
+<!--     message("No sequences above min_length for: ", species) -->
+<!--     return(NULL) -->
+<!--   } -->
+
+<!--   lengths <- sapply(dna, length) -->
+
+<!--   # Try preferred length range first -->
+<!--   in_range <- dna[lengths >= target_min & lengths <= target_max] -->
+
+<!--   if (length(in_range) > 0) { -->
+<!--     range_lengths <- sapply(in_range, length) -->
+<!--     selected <- in_range[which.max(range_lengths)] -->
+<!--     label <- "preferred range" -->
+<!--   } else { -->
+<!--     # Fall back to longest available -->
+<!--     selected <- dna[which.max(lengths)] -->
+<!--     label <- "fallback longest" -->
+<!--   } -->
+
+<!--   # Log the selected accession for reproducibility -->
+<!--   message(species, " [", label, "]: ",  -->
+<!--           sapply(selected, length), "bp — ", names(selected)) -->
+
+<!--   return(selected) -->
+<!-- } -->
+
+<!-- # Run and capture selection log -->
+<!-- raw_seqs <- lapply(species_list, function(sp) { -->
+<!--   Sys.sleep(0.4) -->
+<!--   fetch_sequence_reproducible(sp, marker = gene_marker, max_seqs = 50) -->
+<!-- }) -->
+<!-- names(raw_seqs) <- species_list -->
+<!-- raw_seqs <- Filter(Negate(is.null), raw_seqs) -->
+
+<!-- # After fetching, decode and save immediately -->
+<!-- decode_dnabin <- function(x) { -->
+<!--   tmp <- tempfile(fileext = ".fasta") -->
+<!--   write.dna(x, tmp, format = "fasta") -->
+<!--   lines <- readLines(tmp) -->
+<!--   seq_lines <- lines[!grepl("^>", lines)] -->
+<!--   seq_string <- paste(seq_lines, collapse = "") -->
+<!--   gsub("[[:space:]]", "", seq_string) -->
+<!-- } -->
+
+<!-- # Decode all sequences -->
+<!-- combined_char <- sapply(names(raw_seqs), function(sp) { -->
+<!--   decode_dnabin(raw_seqs[[sp]]) -->
+<!-- }) -->
+<!-- names(combined_char) <- names(raw_seqs) -->
+
+<!-- # Sanity check before alignment -->
+<!-- substr(combined_char[1], 1, 50)  # should show ACGTs now -->
+
+<!-- # Save as FASTA for reuse — no need to re-fetch next time -->
+<!-- fasta_lines <- unlist(lapply(names(combined_char), function(sp) { -->
+<!--   c(paste0(">", sp), combined_char[[sp]]) -->
+<!-- })) -->
+<!-- writeLines(fasta_lines, here("size_bd_unified", "intermediates", "selected_sequences.fasta")) -->
+<!-- message("Sequences saved to selected_sequences.fasta") -->
+
+<!-- # To reload next time instead of re-fetching: -->
+<!-- # dna_saved <- read.dna(here("size_bd_unified", "intermediates", "selected_sequences.fasta"), format = "fasta") -->
+<!-- # combined_char <- sapply(as.character(dna_saved), paste, collapse = "") -->
+<!-- # names(combined_char) <- taxon_list -->
+
+<!-- # Align -->
+<!-- aligned <- AlignSeqs(DNAStringSet(combined_char)) -->
+
+<!-- # --- 3. BUILD TREE --- -->
+<!-- phydat <- as.phyDat(aligned) -->
+
+<!-- dist_mat <- dist.ml(phydat, model = "JC69") -->
+
+<!-- nj_tree <- NJ(dist_mat) -->
+
+<!-- fit <- pml(nj_tree, phydat) -->
+<!-- fit_opt <- optim.pml(fit, -->
+<!--                      model         = "GTR", -->
+<!--                      optInv        = TRUE, -->
+<!--                      optGamma      = TRUE, -->
+<!--                      rearrangement = "NNI") -->
+
+<!-- tr_phylo <- fit_opt$tree -->
+
+<!-- # --- 4. ROOT --- -->
+<!-- tr_rooted <- midpoint(tr_phylo) -->
+
+<!-- # --- 5. QUICK SANITY CHECKS --- -->
+<!-- summary(tr_rooted$edge.length) -->
+<!-- is.ultrametric(tr_rooted)  # expected FALSE for ML tree -->
+<!-- # plot(tr_rooted, cex = 0.6) -->
+
+<!-- # Optional: compare topology to your original OTL tree -->
+<!-- ggtree::ggtree(tr_rooted, layout = "rectangular") + -->
+<!--   ggtree::geom_tiplab(size = 3, align = FALSE) + -->
+<!--   ggtree::theme_tree2() + -->
+<!--   scale_x_continuous(expand = expansion(mult = c(0, 0.3))) -->
+
+<!-- # Now has real branch lengths! -->
+<!-- summary(tr_rooted$edge.length) -->
+<!-- is.ultrametric(tr_rooted) -->
+
+<!-- phylo_covar = vcv.phylo(tr_rooted, corr = TRUE) -->
+
+<!-- saveRDS(phylo_covar, here("size_bd_unified", "intermediates", "phylo_covar.rds")) -->
+
+<!-- write.tree(tr_rooted, here("size_bd_unified", "intermediates", "phylo_tree.nwk")) -->
+<!-- ``` -->
 
 ### Analyze
 ```{r}
 tr_rooted = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
 
-hu_sub_effect_named <- setNames(-combined_agg$net_effect_hu, combined_agg$species)
-b_sub_effect_named  <- setNames(combined_agg$net_effect_b,  combined_agg$species)
-hu_sub_med_named <- setNames(-combined_agg$hu_subadult_median, combined_agg$species)
-b_sub_med_named  <- setNames(combined_agg$b_subadult_median,  combined_agg$species)
-hu_med_named <- setNames(-combined_agg$hu_median, combined_agg$species)
-b_med_named  <- setNames(combined_agg$b_median,  combined_agg$species)
-prev_med_named <- setNames(combined_agg$prevalence_median, combined_agg$species)
-sigma_med_named  <- setNames(combined_agg$sigma_median,  combined_agg$species)
+# hu_sub_effect_named <- setNames(-combined_agg$net_effect_hu, combined_agg$species)
+# b_sub_effect_named  <- setNames(combined_agg$net_effect_b,  combined_agg$species)
+# hu_sub_med_named <- setNames(-combined_agg$hu_subadult_median, combined_agg$species)
+# b_sub_med_named  <- setNames(combined_agg$b_subadult_median,  combined_agg$species)
+# hu_med_named <- setNames(-combined_agg$hu_median, combined_agg$species)
+# b_med_named  <- setNames(combined_agg$b_median,  combined_agg$species)
+# prev_med_named <- setNames(combined_agg$prevalence_median, combined_agg$species)
+# sigma_med_named  <- setNames(combined_agg$sigma_median,  combined_agg$species)
 
-blomberg_k_hu_sub_effect = phylosig(tr_rooted, hu_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_b_sub_effect = phylosig(tr_rooted, b_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_hu_sub_med = phylosig(tr_rooted, hu_sub_med_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_b_sub_med = phylosig(tr_rooted, b_sub_med_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_hu_med = phylosig(tr_rooted, hu_med_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_b_med = phylosig(tr_rooted, b_med_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_prev_med = phylosig(tr_rooted, prev_med_named, method = "K", test = TRUE, nsim = 1000)
-blomberg_k_sigma_med = phylosig(tr_rooted, sigma_med_named, method = "K", test = TRUE, nsim = 1000)
 
-tr_rooted$tip.label
+# blomberg_k_hu_sub_effect = phylosig(tr_rooted, hu_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_b_sub_effect = phylosig(tr_rooted, b_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_hu_sub_med = phylosig(tr_rooted, hu_sub_med_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_b_sub_med = phylosig(tr_rooted, b_sub_med_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_hu_med = phylosig(tr_rooted, hu_med_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_b_med = phylosig(tr_rooted, b_med_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_prev_med = phylosig(tr_rooted, prev_med_named, method = "K", test = TRUE, nsim = 1000)
+# blomberg_k_sigma_med = phylosig(tr_rooted, sigma_med_named, method = "K", test = TRUE, nsim = 1000)
+
+# tr_rooted$tip.label
 
 # plots
-hu_sub_effect_map = contMap(tr_rooted, hu_sub_effect_named,  title = "hu net effect", fsize = 0.6)
-b_sub_effect_map = contMap(tr_rooted, b_sub_effect_named,   title = "b net_effect", fsize = 0.6)
-hu_sub_med_map = contMap(tr_rooted, hu_sub_med_named,  title = "hu net median", fsize = 0.6)
-b_sub_med_map = contMap(tr_rooted, b_sub_med_named,   title = "b net_median", fsize = 0.6)
-hu_med_map = contMap(tr_rooted, hu_med_named,  title = "hu median", fsize = 0.6)
-b_med_map = contMap(tr_rooted, b_med_named,   title = "b median", fsize = 0.6)
-prev_med_map = contMap(tr_rooted, prev_med_named,  title = "prevalence median effect", fsize = 0.6)
-sigma_med_map = contMap(tr_rooted, sigma_med_named,   title = "sigma median effect", fsize = 0.6)
+# hu_sub_effect_map = contMap(jp_pruned, hu_sub_effect_named,  title = "hu net effect", fsize = 0.6)
+# b_sub_effect_map = contMap(jp_pruned, b_sub_effect_named,   title = "b net_effect", fsize = 0.6)
+# hu_sub_med_map = contMap(jp_pruned, hu_sub_med_named,  title = "hu net median", fsize = 0.6)
+# b_sub_med_map = contMap(jp_pruned, b_sub_med_named,   title = "b net_median", fsize = 0.6)
+# hu_med_map = contMap(jp_pruned, hu_med_named,  title = "hu median", fsize = 0.6)
+# b_med_map = contMap(jp_pruned, b_med_named,   title = "b median", fsize = 0.6)
+# prev_med_map = contMap(jp_pruned, prev_med_named,  title = "prevalence median effect", fsize = 0.6)
+# sigma_med_map = contMap(jp_pruned, sigma_med_named,   title = "sigma median effect", fsize = 0.6)
+
+# hu_sub_effect_map <- setMap(hu_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# b_sub_effect_map <- setMap(b_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# hu_sub_med_map <- setMap(hu_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# b_sub_med_map <- setMap(b_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# hu_med_map <- setMap(hu_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# b_med_map <- setMap(b_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# prev_med_map <- setMap(prev_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+# sigma_med_map <- setMap(sigma_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+
+# calculate blomberg K
+blomberg_k = function(tree, var_values, species) {
+  set_named = setNames(var_values, species)
+  return(blomberg_k_sigma_med = phylosig(tree, set_named, method = "K", test = TRUE, nsim = 1000))
+}
 
 
+# define color maps
+sym_div_cont_map = function(tree, var_values, species, center, p_title, style = "div") {
+  set_named = setNames(var_values, species)
+  
+  sym_lim = max(abs(center - min(var_values)), abs(center - max(var_values)))
+  
+  map_1 = contMap(tree, set_named,
+                   lims = c(center - sym_lim, center + sym_lim),
+                   title = p_title, fsize = 0.4)
+  
+  if (style == "div") {
+    colors = colorRampPalette(c("#762a83", "white", "#1b7837"))(101)
+  } else if (style == "lin") {
+    colors = colorRampPalette(c("white", "#1b7837"))(101)
+  }
+  map_2 = setMap(map_1, colors = colors)
+  
+  return(map_2)
+}
 
-hu_sub_effect_map <- setMap(hu_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-b_sub_effect_map <- setMap(b_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-hu_sub_med_map <- setMap(hu_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-b_sub_med_map <- setMap(b_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-hu_med_map <- setMap(hu_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-b_med_map <- setMap(b_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-prev_med_map <- setMap(prev_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-sigma_med_map <- setMap(sigma_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
+hu_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_subadult_median, combined_agg_j$jp_sn)
+b_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$b_subadult_median, combined_agg_j$jp_sn)
+hu_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_median, combined_agg_j$jp_sn)
+prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
+sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
 
-plot(hu_sub_effect_map)
-plot(b_sub_effect_map)
+hu_sub_med_map = sym_div_cont_map(jp_pruned,
+                                  combined_agg_j$hu_subadult_median,
+                                  combined_agg_j$jp_sn,
+                                  0,
+                                  "Bd prevalence (hu): median subadult effect")
+
+b_sub_med_map = sym_div_cont_map(jp_pruned,
+                                 combined_agg_j$b_subadult_median,
+                                 combined_agg_j$jp_sn,
+                                 0,
+                                 "Bd load: median subadult effect")
+
+hu_med_map = sym_div_cont_map(jp_pruned,
+                              combined_agg_j$hu_median,
+                              combined_agg_j$jp_sn,
+                              0,
+                              "Median Bd prevalence (hu)")
+
+prev_med_map = sym_div_cont_map(jp_pruned,
+                                combined_agg_j$prevalence_median,
+                                combined_agg_j$jp_sn,
+                                0.5,
+                                "Median Bd prevalence")
+
+sigma_med_map = sym_div_cont_map(jp_pruned,
+                                 combined_agg_j$sigma_median,
+                                 combined_agg_j$jp_sn,
+                                 0.8822,
+                                 "Median Bd load dispersion (sigma)")
+
+
+hu_sub_med_k
+b_sub_med_k
+# hu_med_k
+prev_med_k
+sigma_med_k
+
+# plot(hu_sub_effect_map)
+# plot(b_sub_effect_map)
 plot(hu_sub_med_map)
 plot(b_sub_med_map)
-plot(hu_med_map)
-plot(b_med_map)
+# plot(hu_med_map)
+# plot(b_med_map)
 plot(prev_med_map)
 plot(sigma_med_map)
 
