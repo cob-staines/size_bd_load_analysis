@@ -790,6 +790,7 @@ sym_div_cont_map = function(tree, var_values, species, center, p_title, style = 
 
 hu_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_subadult_median, combined_agg_j$jp_sn)
 b_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$b_subadult_median, combined_agg_j$jp_sn)
+# b_med_k = blomberg_k(jp_pruned, combined_agg_j$b_median, combined_agg_j$jp_sn)
 hu_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_median, combined_agg_j$jp_sn)
 prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
 sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
@@ -804,13 +805,19 @@ b_sub_med_map = sym_div_cont_map(jp_pruned,
                                  combined_agg_j$b_subadult_median,
                                  combined_agg_j$jp_sn,
                                  0,
-                                 "Bd load: median subadult effect")
+                                 "Bd log load (mu): median subadult effect")
 
-hu_med_map = sym_div_cont_map(jp_pruned,
-                              combined_agg_j$hu_median,
-                              combined_agg_j$jp_sn,
-                              0,
-                              "Median Bd prevalence (hu)")
+# b_med_map = sym_div_cont_map(jp_pruned,
+#                               combined_agg_j$b_median,
+#                               combined_agg_j$jp_sn,
+#                               4.135,
+#                               "Median Bd log load (mu)")
+# 
+# hu_med_map = sym_div_cont_map(jp_pruned,
+#                               combined_agg_j$hu_median,
+#                               combined_agg_j$jp_sn,
+#                               0,
+#                               "Median Bd prevalence (hu)")
 
 prev_med_map = sym_div_cont_map(jp_pruned,
                                 combined_agg_j$prevalence_median,

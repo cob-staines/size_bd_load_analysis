@@ -282,6 +282,11 @@ bd_sample = db_sample %>%
                      bd_detected,
                      bd_its1_copies_per_swab), by = "sample_id")
 
+peace = bd_sample %>%
+  group_by(taxon_capture) %>%
+  count() %>%
+  collect()
+
 # define populations
 bd_population = bd_sample %>%
   left_join(sn_populations, by = "site", copy = TRUE) %>%
