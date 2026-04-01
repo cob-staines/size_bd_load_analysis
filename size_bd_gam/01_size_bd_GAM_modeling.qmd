@@ -18,7 +18,7 @@ csl: ecology.csl
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janitor, here, brms, cmdstanr, tidybayes)
+librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janitor, here, brms, cmdstanr, tidybayes, patchwork)
 
 ```
 
@@ -32,26 +32,34 @@ env_agg = read_csv(here("data", "unified_env_agg.csv"))
 
 ## RACA
 ```{r}
-raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
-  clean_names() %>%
+raca_raw = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
+  clean_names()
+
+met_med = raca_raw %>%
+  filter(life_stage == "M",
+         !is.na(svl_mm)) %>%
+  summarize(mm = median(svl_mm))
+
+raca_clean = raca_raw %>%
   filter(life_stage %in% c("A", "S", "Y", "M")) %>%
   dplyr::rename(site = site_name,
          body_mass_g = weight_g,
          site_utme = utme_site,
          site_utmn = utmn_site,
          bd_its1_copies_per_swab = bd_swab_results_its) %>%
-  mutate(life_stage_simple = case_when(
-    svl_mm >= 50 ~ "adult",
-    svl_mm < 50 ~ "subadult",
-    life_stage == "M" ~ "metamorph"),
-    date = as.Date(date),
-    site = tolower(gsub(" ", "_", site)),
-    site_utm_zone = 11,  # verify
-    population = site,
-    region = "W",
-    country = "usa",
-    project = "RACA",
-    taxon_capture = "rana_cascadae") %>%
+  mutate(date = as.Date(date),
+         life_stage_simple = case_when(
+           life_stage == "M" ~ "metamorph",
+           svl_mm >= 50 ~ "adult",
+           svl_mm < 50 ~ "subadult"),
+         svl_mm = if_else(life_stage_simple == "metamorph" & is.na(svl_mm), 25, svl_mm),
+         site = tolower(gsub(" ", "_", site)),
+         site_utm_zone = 11,  # verify
+         population = site,
+         region = "W",
+         country = "usa",
+         project = "RACA",
+         taxon_capture = "rana_cascadae") %>%
   filter(!is.na(bd_its1_copies_per_swab))
 
 raca_valid = raca_clean %>%
@@ -113,16 +121,15 @@ bd_life_stage = bd_sample %>%
   filter(life_stage %in% c("adult",
                            "subadult",
                            NA) |
-           tad_stage >= 44,
-         !is.na(svl_mm)) %>%
+           tad_stage >= 44) %>%
   mutate(svl_mm = if_else(!is.na(tad_stage) & is.na(svl_mm), 25, svl_mm),
          life_stage_simple = case_when(
-    !is.na(tad_stage) | svl_mm < 30 ~ "metamorph",
-    is.na(svl_mm) ~ life_stage,
-    (svl_mm >= 40) ~ "adult",
-    (svl_mm < 40) ~ "subadult",
-    .default = NA),
-    year = year(date)) %>%
+           !is.na(tad_stage) | svl_mm < 30 ~ "metamorph",
+           (svl_mm >= 40) ~ "adult",
+           (svl_mm < 40) ~ "subadult",
+           .default = NA),
+         svl_mm = if_else(life_stage_simple == "metamorph" & is.na(svl_mm), 25, svl_mm),
+         year = year(date)) %>%
   filter(!is.na(life_stage_simple))
 
 ranarasi_valid = bd_life_stage %>%
@@ -165,6 +172,8 @@ brms_data = bind_rows(ranarasi_valid,
                      precip_mm_30_day_sum,
                      temp_c_30_day_mean), by = c("site", "date")) %>%
   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")),
+         is_metamorph = as.numeric(life_stage_simple == "metamorph"),
+         is_not_metamorph = as.numeric(life_stage_simple != "metamorph"),
          bd_load_co = if_else(bd_its1_copies_per_swab < 10,
                               0,
                               bd_its1_copies_per_swab),
@@ -185,13 +194,24 @@ peace = brms_data %>%
   group_by(taxon_capture) %>%
   count()
 
+ggplot(brms_data, aes(x = svl_mm, color = life_stage_simple)) +
+  geom_histogram() +
+  facet_wrap("taxon_capture")
+
 ```
 
 # Modeling
 ## Model setup
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-03-25.RData")) 
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-01.RData"))
+
+raca_data = brms_data %>%
+  filter(taxon_capture == "rana_cascadae")
+ramu_data = brms_data %>%
+  filter(taxon_capture == "rana_muscosa")
+rasi_data = brms_data %>%
+  filter(taxon_capture == "rana_sierrae")
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
@@ -243,10 +263,128 @@ m1_zln <- add_criterion(m1_zln, "loo")
 saveRDS(m1_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
 m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
 
+m2_formula = bf(
+    bd_load_co_density ~ is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+    hu ~  is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+    sigma ~ 1 +  (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2)
+  )
+
+m2_zln_raca <- brm(
+  formula  =  m2_formula,
+  data     = raca_data %>%
+                  filter(taxon_capture == "rana_cascadae"),
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_raca <- add_criterion(m2_zln_raca, "loo")
+
+saveRDS(m2_zln_raca, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+
 
 ```
 
 # visualize results
+
+## including metamophs
+```{r}
+# non-metamorph: vary svl_mm, smooth is active
+nd_notmet <- tibble(
+  svl_mm          = seq(min(raca_data$svl_mm, na.rm = TRUE),
+                        max(raca_data$svl_mm, na.rm = TRUE),
+                        length.out = 200),
+  is_metamorph    = 0,
+  is_not_metamorph = 1,
+  precip_mm_30_z  = 0, precip_mm_30_z2 = 0,
+  temp_c_30_z     = 0, temp_c_30_z2    = 0
+)
+
+# metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+nd_met <- tibble(
+  svl_mm           = mean(raca_data$svl_mm, na.rm = TRUE),  # doesn't matter
+  is_metamorph     = 1,
+  is_not_metamorph = 0,
+  precip_mm_30_z   = 0, precip_mm_30_z2 = 0,
+  temp_c_30_z      = 0, temp_c_30_z2    = 0
+)
+
+# non-metamorph
+hu_notmet   <- nd_notmet |> add_epred_draws(m2_zln_raca, dpar = "hu",  re_formula = NA)
+mu_notmet   <- nd_notmet |> add_epred_draws(m2_zln_raca, dpar = "mu",  re_formula = NA)
+
+# metamorph — keep all draws for boxplot distribution
+hu_met      <- nd_met    |> add_epred_draws(m2_zln_raca, dpar = "hu",  re_formula = NA)
+mu_met      <- nd_met    |> add_epred_draws(m2_zln_raca, dpar = "mu",  re_formula = NA)
+
+# non-metamorph: median + interval over svl sequence
+prev_notmet_agg <- hu_notmet |>
+  mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
+  group_by(svl_mm) |>
+  median_qi(prevalence, .width = 0.89)
+
+mu_notmet_agg <- mu_notmet |>
+  group_by(svl_mm) |>
+  median_qi(mu, .width = 0.89)
+
+# metamorph: keep raw draws for boxplot
+prev_met_draws <- hu_met |>
+  mutate(prevalence = 1 - plogis(hu))
+
+mu_met_draws <- mu_met
+
+# --- prevalence ---
+p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
+  geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
+  labs(x = NULL, y = "Bd Prevalence") +
+  ylim(0, 1) +
+  theme_classic()
+
+p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
+  geom_line(color = "#FC8D62", linewidth = 1) +
+  labs(x = "SVL (mm)", y = NULL) +
+  ylim(0, 1) +
+  theme_classic()
+
+p_prev <- p_prev_met + p_prev_notmet +
+  plot_layout(widths = c(1, 3)) +
+  plot_annotation(title = "Smooth + fixed effect on Bd prevalence")
+
+# --- mu ---
+# get shared y range first
+mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
+
+p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
+  geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
+  labs(x = NULL, y = "log(Bd load)") +
+  ylim(mu_ylim) +
+  theme_classic()
+
+p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
+  geom_line(color = "#FC8D62", linewidth = 1) +
+  labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
+  ylim(mu_ylim) +
+  theme_classic() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank()
+  )
+
+p_mu <- p_mu_met + p_mu_notmet +
+  plot_layout(widths = c(1, 3)) +
+  plot_annotation(title = "Smooth + fixed effect on Bd load")
+
+p_prev
+p_mu
+
+```
+
+## post-metamophic
 ```{r}
 
 svl_df = brms_data %>%
