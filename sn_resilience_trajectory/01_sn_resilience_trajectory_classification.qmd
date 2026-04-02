@@ -38,6 +38,14 @@ db_country = tbl(dbcon, Id("survey_data", "country"))
 db_hist = tbl(dbcon, Id("survey_data", "site_history"))
 db_cmr = tbl(dbcon, Id("survey_data", "cmr"))
 
+peace = db_ves %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  filter(site == "70439") %>%
+  arrange(date) %>%
+  collect()
+
 bd_sample = db_sample %>%
   inner_join(db_capture, by = "capture_id") %>%
   left_join(db_cmr, by = "cmr_id") %>%
@@ -236,7 +244,7 @@ data_pop = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
               filter(!is.na(area_sqr_m)) %>%
               select(site, area_sqr_m) %>%
               collect(), by = "site") %>%
-  rename(site_area_m2 = area_sqr_m) %>%
+  dplyr::rename(site_area_m2 = area_sqr_m) %>%
   group_by(pop_id) %>%
   mutate(pop_area_m2 = sum(site_area_m2)) %>%
   ungroup()
@@ -252,8 +260,8 @@ reintro_pit_events = reintro_pits %>%
   left_join(data_pop, by = "site") %>%
   group_by(relocate_id, pop_id) %>%
   summarize(release_count = n(),
-            release_year = first(release_year),
-            first_release_date = first(release_date),
+            release_year = min(release_year, na.rm = TRUE),
+            first_release_date = min(release_date, na.rm = TRUE),
             .groups = "drop") %>%
   arrange(pop_id,
           release_year)
@@ -283,7 +291,7 @@ first_release_events =  treatment_events %>%
   group_by(pop_id) %>%
   slice_min(year) %>%
   ungroup() %>%
-  rename(first_treatment_year = year,
+  dplyr::rename(first_treatment_year = year,
          first_treatment_type = treatment_type) %>%
   select(-treatment_event)
 
@@ -301,7 +309,7 @@ post_treatment_mask_sites = c()  # currently only mask augmentation sites post-a
 # mask for populations/years after a release event
 post_treatment_mask = expand_grid(unique(first_release_events$pop_id),
                        seq(min(first_release_events$first_treatment_year), 2025)) %>%
-  rename(pop_id = 1,
+  dplyr::rename(pop_id = 1,
          year = 2) %>%
   left_join(first_release_events, by = "pop_id") %>%
   filter(year >= first_treatment_year) %>%
@@ -385,7 +393,7 @@ year_valid = bd_capture_valid %>%
 
 site_pop_year = expand_grid(bd_population_valid$population,
                        unique(year_valid$year)) %>%
-  rename(population = 1,
+  dplyr::rename(population = 1,
          year = 2) %>%
   left_join(bd_population_valid, by = "population") %>%
   filter(year >= first_year,
@@ -406,6 +414,12 @@ bd_site_valid = site_pop_year %>%
   select(population, site) %>%
   distinct()
 
+pop_species_map = bd_capture_valid %>%
+  select(taxon_capture,
+         population) %>%
+  distinct() %>%
+  collect()
+
 # list included treatment events (for visualization)
 treatment_events_valid = treatment_events %>%
   inner_join(site_pop_year %>%
@@ -425,12 +439,6 @@ pop_year = site_pop_year %>%
 pop_year_tx = pop_year %>%
   # left_join(first_release_events, by = c("population")) %>%
   arrange(population, year)
-
-pop_species_map = bd_capture_valid %>%
-  select(taxon_capture,
-         population) %>%
-  distinct() %>%
-  collect()
 
 ```
 
@@ -568,7 +576,7 @@ abundance_visual = data_visual %>%
            survey_period
            ) %>%
   # rename(date_ves = date) %>%
-  summarise(date_start_ves = first(date),
+  summarise(date_start_ves = min(date, na.rm = TRUE),
             ves_days = n_distinct(date),
             adult_count_visual = sum(count_ves),
             .groups = "drop") %>%
@@ -616,7 +624,7 @@ abundance_cmr = data_cmr %>%
   group_by(population,
            year,
            survey_period) %>%
-  summarise(date_start_cmr = first(date),
+  summarise(date_start_cmr = min(date, na.rm = TRUE),
             cmr_days = n_distinct(date),
             adult_count_cmr = n_distinct(local_cmr_id),
             adult_count_cmr_reintro = n_distinct(local_cmr_id[reintro]),
@@ -937,16 +945,16 @@ epi_events = epi_thresholds %>%
   # filter potential event starts to epi threshold years
   filter(epi_thresh) %>%
   select(population, year) %>%
-  rename(start_year = year) %>%
+  dplyr::rename(start_year = year) %>%
   left_join(epi_thresholds %>%
                # filter potential event ends to low_count years
                filter(lag_diff_pos) %>%
                select(population, year) %>%
-               rename(end_year = year), by = "population", relationship = "many-to-many") %>%
+               dplyr::rename(end_year = year), by = "population", relationship = "many-to-many") %>%
   bind_rows(epi_thresholds %>%
               filter(epi_thresh) %>%
               select(population, year) %>%
-              rename(start_year = year) %>%
+              dplyr::rename(start_year = year) %>%
               distinct() %>%
               mutate(end_year = 2100)) %>%
   anti_join(exceptions, by = c("population", "end_year")) %>%
@@ -1013,7 +1021,7 @@ manual_legend_df = data.frame(
   event = c("✱  Release event", "†  Antifungal treatment")
 )
 
-ggplot(pop_year_bd %>%
+rt_ramu = ggplot(pop_year_bd %>%
          filter(taxon_capture == "rana_muscosa"), aes(x = year)) +
   # timeseries
   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
@@ -1073,7 +1081,7 @@ ggplot(pop_year_bd %>%
   ggtitle("Rana muscosa resilience trajectory classification (adults only)") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
-ggplot(pop_year_bd %>%
+rt_rasi = ggplot(pop_year_bd %>%
          filter(taxon_capture == "rana_sierrae"), aes(x = year)) +
   # timeseries
   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
@@ -1133,79 +1141,16 @@ ggplot(pop_year_bd %>%
   ggtitle("Rana sierrae resilience trajectory classification (adults only)") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
-# ggplot(pop_year_class, aes(x = year)) +
-#   
-#   # time series (points and interpolations)
-#   geom_point(aes(y = adult_bd_prevalence * prev_coef, color = "Bd prevalence"), size = psize) +
-#   # geom_line(aes(y = adult_bd_prevalence_terp * prev_coef, color = "Bd prevalence")) +
-#   geom_point(aes(y = log10(adult_positive_bd_load_geom_mean + 1), color = "geom-mean(+Bd load)"), size = psize) +
-#   # geom_line(aes(y = log10(adult_positive_bd_load_geom_mean_terp + 1), color = "geom-mean(+Bd load)")) +
-#   geom_point(aes(y = log10(adult_count + 1), color = "Adult count"), size = psize, shape = "triangle") +
-#   # geom_line(aes(y = log10(adult_count_terp + 1), color = "Adult count")) +
-# 
-#   # swab counts
-#   geom_text(data = pop_adult_swab_counts, x = 2010, y = prev_coef, size = 3,
-#             aes(label = paste0(adult_swab_n, " swabs"))) +
-#   
-#   # classification
-#   geom_tile(data = pop_year_class, aes(y = -1, fill = res_class), height = 1) +
-#   
-#   # thresholds
-#   geom_hline(yintercept = 0.5 * prev_coef, linetype = "dashed", color = "#f1b6da") +
-#   geom_hline(yintercept = log10(10 + 1), linetype = "dashed", color = "#0571b0") +
-#   geom_hline(yintercept = log10(21000 + 1), linetype = "dashed", color = "#d01c8b") +
-# 
-#   # event markers
-#   geom_text(data = treatment_events_valid %>% filter(grepl("release", treatment_type)),
-#             aes(x = year), y = -2.1, size = 5, label = "*") +
-#   geom_text(data = treatment_events_valid %>% filter(grepl("antifungal", treatment_type)),
-#             aes(x = year), y = -1.75, size = 2.5, label = "†") +
-#   geom_point(
-#     data = manual_legend_df,
-#     aes(x = x, y = y, alpha = event),
-#     colour = NA
-#   ) +
-#   scale_alpha_discrete(
-#     name = "Events",
-#     guide = guide_legend(override.aes = list(
-#       colour = NA,
-#       shape = NA,
-#       size = 0
-#     ))
-#   ) +
-# 
-#   facet_wrap(population ~ .) +
-# 
-#   scale_color_manual(
-#     name = "Timeseries",
-#     values = c(meet at 1pm Eastern on Thursday, March 5th at this zoom link: https://pitt.zoom.us/j/664882169  I’ll also attempt to send a calendar invite using Outlook.  If you can’t make it and want me to record it let me know. I’m also
-#     "Adult count" = "#0571b0",
-#     "Bd prevalence" = "#f1b6da",
-#     "geom-mean(+Bd load)" = "#d01c8b"
-#   )) +
-# 
-#   scale_fill_manual(
-#     name = "Resillience classification",
-#     values = c(
-#     "1-naive" = "#b8e186",
-#     "2-epizootic" = "#d01c8b",
-#     "3-post" = "#0571b0"
-#   )) +
-# 
-#   scale_y_continuous(
-#     name = "Adult abundance & Geometric mean Bd load",
-#     breaks = c(0, 3, 6, 9),
-#     labels = function(x) {
-#       labs = scales::math_format(10^.x+1)(x)
-#       labs[x == 0] = "0"
-#       labs
-#     },
-#     sec.axis = sec_axis(~./prev_coef, name="Bd Prevalence")
-#   ) +
-#   ggtitle("Time series and resilience trajectory classification (from adults only)") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "01_resilience_traj_ramu.png"),
+       rt_ramu,
+       width = 10, height = 6)
 
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "01_resilience_traj_rasi.png"),
+       rt_rasi,
+       width = 10, height = 10)
+
+rt_ramu
+rt_rasi
 ```
 
 # scatter plot
