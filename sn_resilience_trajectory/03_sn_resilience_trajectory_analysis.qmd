@@ -17,12 +17,17 @@ bd_model_stats = bd_model %>%
   summarize(n = n(),
             .groups= "drop")
 
-brms_data = bd_model %>%
+precip_sc  = scale(bd_model$precip_mm_30_day_sum)
+temp_sc    = scale(bd_model$temp_c_30_day_mean)
+precip2_sc = scale(bd_model$precip_mm_30_day_sum ^ 2)
+temp2_sc   = scale(bd_model$temp_c_30_day_mean ^ 2)
+
+brms_data = bd_model |>
   mutate(
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE))
+    precip_mm_30_z  = as.numeric(precip_sc),
+    temp_c_30_z     = as.numeric(temp_sc),
+    precip_mm_30_z2 = as.numeric(precip2_sc),
+    temp_c_30_z2    = as.numeric(temp2_sc)
   )
 
 # load models
@@ -101,25 +106,11 @@ hu_contrast_agg = hu_contrast_draws %>%
   group_by(taxon_capture,
            res_class,
            contrast) %>%
-  summarize(hdi_50 = hdi(hu_subadult, ci = 0.50),
-            hdi_89 = hdi(hu_subadult, ci = 0.89),
-            hdi_95 = hdi(hu_subadult, ci = 0.95),
-            ratio_positive = sum(hu_subadult > 0) / n(),
+  summarize(hu_hdi_50 = hdi(hu_subadult, .width = 0.50),
+            hu_hdi_95 = hdi(hu_subadult, .width = 0.95),
+            hu_ratio_positive = sum(hu_subadult > 0) / n(),
             hu_median = median(hu_subadult),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95 < 0 ~ TRUE,
-      .default = FALSE
-    ))
+            .groups = "drop")
 
 ## b (mu)
 b_specs = emmeans(model_select, 
@@ -140,25 +131,11 @@ b_contrast_agg = b_contrast_draws %>%
   group_by(taxon_capture,
            res_class,
            contrast) %>%
-  summarize(hdi_50 = hdi(b_subadult, ci = 0.50),
-            hdi_89 = hdi(b_subadult, ci = 0.89),
-            hdi_95 = hdi(b_subadult, ci = 0.95),
-            ratio_positive = sum(b_subadult > 0) / n(),
+  summarize(b_hdi_50 = hdi(b_subadult, .width = 0.50),
+            b_hdi_95 = hdi(b_subadult, .width = 0.95),
+            b_ratio_positive = sum(b_subadult > 0) / n(),
             b_median = median(b_subadult),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+            .groups = "drop")
 
 ## sigma
 sigma_specs = emmeans(model_select, 
@@ -179,33 +156,19 @@ sigma_contrast_agg = sigma_contrast_draws %>%
   group_by(taxon_capture,
            res_class,
            contrast) %>%
-  summarize(hdi_50 = hdi(sigma_subadult, ci = 0.50),
-            hdi_89 = hdi(sigma_subadult, ci = 0.89),
-            hdi_95 = hdi(sigma_subadult, ci = 0.95),
-            ratio_positive = sum(sigma_subadult > 0) / n(),
+  summarize(sigma_hdi_50 = hdi(sigma_subadult, .width = 0.50),
+            sigma_hdi_95 = hdi(sigma_subadult, .width = 0.95),
+            sigma_ratio_positive = sum(sigma_subadult > 0) / n(),
             sigma_median = median(sigma_subadult),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+            .groups = "drop")
 
 # combine
 contrast_agg = hu_contrast_agg %>%
   left_join(b_contrast_agg, by = c("taxon_capture", "res_class", "contrast"), suffix = c("_hu", "_b")) %>%
   left_join(sigma_contrast_agg, by = c("taxon_capture", "res_class", "contrast")) %>%
-  mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
-         net_effect_b = ratio_positive_b * 2 - 1,
-         net_effect_sigma = ratio_positive * 2 - 1)
+  mutate(net_effect_hu = hu_ratio_positive * 2 - 1,
+         net_effect_b = b_ratio_positive * 2 - 1,
+         net_effect_sigma = sigma_ratio_positive * 2 - 1)
 
 group_draws = b_group_draws %>%
   left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
@@ -239,12 +202,12 @@ newdata_basic = expand_grid(taxon_capture = c("rana_muscosa",
          temp_c_30_z2 = 0)
 
 # way too big!
-epred_original = epred_draws(model_select,
-                             newdata = brms_data,
-                             re_formula = NA,
-                             ndraws = 50) %>%
-  dplyr::rename(bd_load_density_epred = .epred) %>%
-  mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
+# epred_original = epred_draws(model_select,
+#                              newdata = brms_data,
+#                              re_formula = NA,
+#                              ndraws = 50) %>%
+#   dplyr::rename(bd_load_density_epred = .epred) %>%
+#   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")))
 
 epred_fixed = epred_draws(model_select,
                           newdata = newdata_basic,
@@ -284,7 +247,7 @@ obs_data = brms_data %>%
 ### Prevalence
 ```{r}
 # observed
-ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple)) +
+p_obs_prev = ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple)) +
   geom_point(position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
@@ -298,27 +261,39 @@ ggplot(obs_data, aes(y = bd_prevalence, x = res_class, color = life_stage_simple
   scale_color_brewer(palette = "Set2")
 
 # modeled
-ggplot(group_draws, aes(y = prevalence, x = res_class, fill = life_stage_simple)) +
+p_mod_prev = ggplot(group_draws, aes(y = prevalence, x = res_class, fill = life_stage_simple)) +
   geom_violin(quantiles = c(0.5),
               quantile.linetype = 1) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_fill_brewer(palette = "Set2")
 
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_observed_prevalence.png"),
+       p_obs_prev,
+       width = 8, height = 5)
+
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_modeled_prevalence.png"),
+       p_mod_prev,
+       width = 8, height = 5)
+
+p_obs_prev
+p_mod_prev
 
 ```
 
 ### Load
 ```{r}
 # observed
-ggplot(brms_data %>%
-         filter(bd_detected_co > 0), aes(y = bd_load_co_density, x = res_class, fill = life_stage_simple)) +
+p_obs_load = ggplot(brms_data %>%
+         filter(bd_detected_co > 0) %>%
+           mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult"))),
+         aes(y = bd_load_co_density, x = res_class, fill = life_stage_simple)) +
   geom_violin(quantiles = c(0.5),
               quantile.linetype = 1) +
   geom_text(data = obs_data, aes(label = paste0("n=", n_pos), y = 10e8 - (1 - label_offset) * 7 * 10e7),
             position = position_dodge(width = 0.5),
             size = 4) +
-  scale_y_log10(limits = c(1, 1e10)) +
+  scale_y_log10(limits = c(0.01, 1e10)) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_fill_brewer(palette = "Set2")
@@ -331,15 +306,25 @@ ggplot(brms_data %>%
 #   facet_wrap("taxon_capture") +
 #   scale_fill_brewer(palette = "Set2")
 
-ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
+p_mod_load = ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_stage_simple)) +
   geom_violin(quantiles = c(0.5),
               quantile.linetype = 1) +
   # geom_boxplot() +
-  scale_y_log10(limits = c(1, 1e10)) +
+  scale_y_log10(limits = c(0.01, 1e10)) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_fill_brewer(palette = "Set2")
 
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_observed_load.png"),
+       p_obs_load,
+       width = 8, height = 5)
+
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_modeled_load.png"),
+       p_mod_load,
+       width = 8, height = 5)
+
+p_obs_load
+p_mod_load
 
 
 ```
@@ -352,13 +337,23 @@ ggplot(epred_fixed, aes(y = bd_load_density_epred, x = res_class, fill = life_st
 
 
 # visualize draws
-ggplot(group_draws_agg, aes(x = prevalence_median, y = b_median, color = life_stage_simple)) +
+p_median_groups = ggplot(group_draws_agg, aes(x = prevalence_median, y = b_median, color = life_stage_simple)) +
   geom_point() +
   geom_path() +
   theme_minimal() +
   geom_text_repel(aes(label = res_class), seed = 123) +
   facet_wrap("taxon_capture") +
-  scale_color_brewer(palette = "Set2")
+  scale_color_brewer(palette = "Set2") +
+  labs(
+       title = "Median Bd Prevalence and Load by Group",
+       x = "Bd Prevalence [-]",
+       y = "Log(Bd load) [-]")
+
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_median_groups.png"),
+       p_median_groups,
+       width = 8, height = 5)
+
+p_median_groups
 
 ggplot(group_draws, aes(x = prevalence, y = b, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
@@ -540,14 +535,14 @@ ggplot(hu_inter_draws %>%
 
 ## Population
 
-### Contrasts
 ```{r}
 
 # Step 1: get posterior predictions for all observed combinations
 nd <- model_select$data |>
   distinct(population, res_class, life_stage_simple, taxon_capture) |>
   filter(life_stage_simple %in% c("metamorph", "adult"),
-         res_class == "3-post") |>
+         # res_class == "3-post"
+         ) |>
   mutate(
     precip_mm_30_z  = 0,
     precip_mm_30_z2 = 0,
@@ -563,7 +558,7 @@ hu_pop_draws <- model_select |>
   )
 
 hu_pop_draws_pairs = hu_pop_draws %>%
-  group_by(population, .draw) %>%
+  group_by(res_class, population, .draw) %>%
   mutate(n = n()) %>%
   ungroup() %>%
   filter(n > 1)
@@ -578,8 +573,9 @@ hu_pop_contrasts <- hu_pop_draws_pairs |>
 
 hu_pop_contrasts_agg = hu_pop_contrasts |>
   group_by(population, res_class, life_stage_simple) |>
-  median_qi(hu)
-
+  reframe(huu_median = median(hu),
+          huu_hdi_50 = hdi(hu, ci = 0.50),
+          huu_hdi_95 = hdi(hu, ci = 0.95))
 # mu
 mu_pop_draws <- model_select |>
   epred_draws(
@@ -589,7 +585,7 @@ mu_pop_draws <- model_select |>
   )
 
 mu_pop_draws_pairs = mu_pop_draws %>%
-  group_by(population, .draw) %>%
+  group_by(res_class, population, .draw) %>%
   mutate(n = n()) %>%
   ungroup() %>%
   filter(n > 1)
@@ -604,170 +600,217 @@ mu_pop_contrasts <- mu_pop_draws_pairs |>
 
 mu_pop_contrasts_agg = mu_pop_contrasts |>
   group_by(population, res_class, life_stage_simple) |>
-  median_qi(mu)
+  summarize(mu_median = median(mu),
+            mu_hdi_50_lo = tidybayes::hdi(mu, .width = 0.95)[1],
+            mu_hdi_50_hi = tidybayes::hdi(mu, .width = 0.50)[2],
+            mu_hdi_95_lo = tidybayes::hdi(mu, .width = 0.95)[1],
+            mu_hdi_95_hi = tidybayes::hdi(mu, .width = 0.95)[2],
+            .groups = "drop")
+  
+mu_pop_contrasts_agg$population = factor(mu_pop_contrasts_agg$population, mu_pop_contrasts_agg %>%
+                                           filter(res_class == "3-post") %>%
+                                           arrange(desc(mu_median)) %>%
+                                           select(population) %>%
+                                           distinct() %>%
+                                           pull(population))
 
 pop_contrasts_agg = hu_pop_contrasts_agg %>%
-  left_join(mu_pop_contrasts_agg, by = c("population", "res_class", "life_stage_simple"), suffix = c("_hu", "_mu"))
+  left_join(mu_pop_contrasts_agg, by = c("population", "res_class", "life_stage_simple"))
 
-ggplot(pop_contrasts_agg, aes(x = -hu, y = mu)) +
+# visualize
+
+ggplot(hu_pop_contrasts %>%
+         filter(life_stage_simple == "metamorph - adult",
+                res_class == "3-post"), aes(x = hu)) +
+  stat_halfeye(
+    alpha          = 0.75,
+    .width         = c(0.5, 0.89),
+    point_interval = mode_hdi
+  ) +
+  facet_wrap("population") +
+  geom_vline(xintercept = 0, alpha = 1) +
+  theme_minimal() +
+  # labs(
+  #   x = "Difference in life-stage effect between res_classes\n(logit scale) with 50% & 89% HDI",
+  #   y = "Posterior Density [-]"
+  # ) +
+  theme(text = element_text(size = 14)) +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(mu_pop_contrasts_agg |> filter(res_class == "3-post"),
+       aes(x = population, y = mu_median)) +
+  geom_hline(yintercept = 0, color = "#888") +
+  geom_pointrange(aes(ymin = mu_hdi_95_lo, ymax = mu_hdi_95_hi)) +
+  geom_rect(aes(
+    ymin = mu_hdi_50_lo,
+    ymax = mu_hdi_50_hi,
+    xmin = as.numeric(factor(population)) - 0.3,
+    xmax = as.numeric(factor(population)) + 0.3
+  ),
+  fill = "#333", color = NA, alpha = 0.4) +
+  coord_flip() +
+  theme_minimal()
+
+p_post_meta_effect_pop = ggplot(pop_contrasts_agg %>%
+         filter(res_class %in% c("3-post")), aes(x = -hu, y = mu, color = res_class)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") +
   geom_point() +
   geom_text_repel(aes(label = population), seed = 123, color = "#888") +
   theme_minimal() +
-  # labs(
-       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
-       # x = "Bd Hu\nMedian effect relative to adult [-]",
-       # y = "Bd Load Density Dispersion\nMedian effect relative to adult [-]") +
+  labs(
+    title = "Post-epizootic Metamorph Effect (metamorph - adult)",
+    x = "Median Bd -Hu (log odds Bd positive) [-]",
+    y = "Median Bd Load [-]") +
   scale_color_brewer(palette = "Set2")
+
+
+ggsave(here("sn_resilience_trajectory", "snrt_plots", "03_post_metamorph contrast_population.png"),
+       p_post_meta_effect_pop,
+       width = 8, height = 5)
+
+p_post_meta_effect_pop
+
+# consider plotting this as halfeye
 ```
 
-### Values
+## Climate
+
+### Precip
 ```{r}
-hu_spec_pop <- emmeans(rg, ~ life_stage_simple * res_class | population)
 
-res_classes <- unique(model_select$data$res_class)  # e.g. "1-naive", "2-epizootic"
-res_pattern <- paste(res_classes, collapse = "|")
+apply_scale <- function(x_new, sc_obj) {
+  (x_new - attr(sc_obj, "scaled:center")) / attr(sc_obj, "scaled:scale")
+}
 
-hu_draws_pop <- model_select |>
-  spread_draws(`r_population:res_class:life_stage_simple__hu`[group, term]) |>
+remove_scale = function(x_sc, sc_obj) {
+  x_sc * attr(sc_obj, "scaled:scale") + attr(sc_obj, "scaled:center")
+}
+
+# define sequences over real-world ranges
+precip_seq <- seq(min(brms_data$precip_mm_30_day_sum),
+                  max(brms_data$precip_mm_30_day_sum),
+                  length.out = 100)
+
+# scale them using the original parameters
+nd_precip <- model_select$data |>
+  distinct(res_class, life_stage_simple, taxon_capture) |>
+  cross_join(tibble(precip_mm_30_day_sum = precip_seq)) |>
   mutate(
-    res_class         = stringr::str_extract(group, res_pattern),
-    population        = stringr::str_extract(group, 
-                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
-    life_stage_simple = stringr::str_extract(group,
-                          paste(unique(model_select$data$life_stage_simple), 
-                                collapse = "|"))
+    temp_c_30_day_mean   = remove_scale(0, temp_sc),
+    precip_mm_30_z  = apply_scale(precip_mm_30_day_sum,       precip_sc),
+    temp_c_30_z     = apply_scale(temp_c_30_day_mean,         temp_sc),
+    precip_mm_30_z2 = apply_scale(precip_mm_30_day_sum ^ 2,   precip2_sc),
+    temp_c_30_z2    = apply_scale(temp_c_30_day_mean ^ 2,     temp2_sc)
   )
 
-hu_draws_pop_agg = hu_draws_pop %>%
-  dplyr::rename(hu = `r_population:res_class:life_stage_simple__hu`) %>%
-  group_by(life_stage_simple,
-           res_class,
-           population) %>%
-  summarize(hdi_50 = hdi(hu, ci = 0.50),
-            hdi_89 = hdi(hu, ci = 0.89),
-            hdi_95 = hdi(hu, ci = 0.95),
-            hu_ratio_positive = sum(hu > 0) / n(),
-            hu_median = median(hu),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
-
-b_draws_pop <- model_select |>
-  spread_draws(`r_population:res_class:life_stage_simple`[group, term]) |>
-  mutate(
-    res_class         = stringr::str_extract(group, res_pattern),
-    population        = stringr::str_extract(group, 
-                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
-    life_stage_simple = stringr::str_extract(group,
-                          paste(unique(model_select$data$life_stage_simple), 
-                                collapse = "|"))
+# hu
+hu_draws_precip <- model_select |>
+  epred_draws(
+    newdata    = nd_precip,
+    dpar       = "hu",
+    re_formula = ~ (1 | taxon_capture:res_class:life_stage_simple)
   )
 
-b_draws_pop_agg = b_draws_pop %>%
-  dplyr::rename(mu = `r_population:res_class:life_stage_simple`) %>%
-  group_by(life_stage_simple,
-           res_class,
-           population) %>%
-  summarize(hdi_50 = hdi(mu, ci = 0.50),
-            hdi_89 = hdi(mu, ci = 0.89),
-            hdi_95 = hdi(mu, ci = 0.95),
-            mu_ratio_positive = sum(mu > 0) / n(),
-            mu_median = median(mu),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+hu_agg_precip = hu_draws_precip |>
+  mutate(prevalence = 1 - plogis(hu)) |>
+  group_by(taxon_capture, res_class, life_stage_simple, precip_mm_30_day_sum) |>
+  median_qi(prevalence)
 
-sigma_draws_pop <- model_select |>
-  spread_draws(`r_population:res_class:life_stage_simple__sigma`[group, term]) |>
-  mutate(
-    res_class         = stringr::str_extract(group, res_pattern),
-    population        = stringr::str_extract(group, 
-                          paste0("^(.+?)(?=_(?:", res_pattern, "))")),
-    life_stage_simple = stringr::str_extract(group,
-                          paste(unique(model_select$data$life_stage_simple), 
-                                collapse = "|"))
+# mu
+
+mu_draws_precip <- model_select |>
+  epred_draws(
+    newdata    = nd_precip,
+    dpar       = "mu",
+    re_formula = ~ (1 | taxon_capture:res_class:life_stage_simple)
   )
 
-sigma_draws_pop_agg = sigma_draws_pop %>%
-  dplyr::rename(sigma = `r_population:res_class:life_stage_simple__sigma`) %>%
-  group_by(life_stage_simple,
-           res_class,
-           population) %>%
-  summarize(hdi_50 = hdi(sigma, ci = 0.50),
-            hdi_89 = hdi(sigma, ci = 0.89),
-            hdi_95 = hdi(sigma, ci = 0.95),
-            sigma_ratio_positive = sum(sigma > 0) / n(),
-            sigma_median = median(sigma),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+mu_agg_precip = mu_draws_precip |>
+  group_by(taxon_capture, res_class, life_stage_simple, precip_mm_30_day_sum) |>
+  median_qi(mu)
 
-combined_draws_pop_agg = hu_draws_pop_agg %>%
-  select(life_stage_simple,
-         res_class,
-         population,
-         hu_median,
-         hu_ratio_positive) %>%
-  left_join(b_draws_pop_agg %>%
-              select(life_stage_simple,
-                     res_class,
-                     population,
-                     mu_median,
-                     mu_ratio_positive), by = c("life_stage_simple", "res_class", "population")) %>%
-  left_join(sigma_draws_pop_agg %>%
-              select(life_stage_simple,
-                     res_class,
-                     population,
-                     sigma_median,
-                     sigma_ratio_positive), by = c("life_stage_simple", "res_class", "population"))
-
-ggplot(combined_draws_pop_agg %>%
-         filter(res_class == "3-post",
-                life_stage_simple %in% c("metamorph", "adult")), aes(x = -hu_median, y = mu_median, color = life_stage_simple)) +
-  geom_vline(xintercept = 0, color = "#aaa") +
-  geom_hline(yintercept = 0, color = "#aaa") +
-  geom_point() +
-  geom_text_repel(aes(label = population), seed = 123, color = "#888") +
+# visualize
+ggplot(hu_agg_precip, aes(x = precip_mm_30_day_sum, y = prevalence, ymin = .lower, ymax = .upper, color = life_stage_simple, fill = life_stage_simple)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_grid(taxon_capture ~ res_class) +
   theme_minimal() +
-  # labs(
-       # title = "Subadult Effect: Fraction Above Zero (FAZ)",
-       # x = "Bd Hu\nMedian effect relative to adult [-]",
-       # y = "Bd Load Density Dispersion\nMedian effect relative to adult [-]") +
-  scale_color_brewer(palette = "Set2")
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(mu_agg_precip, aes(x = precip_mm_30_day_sum, y = mu, ymin = .lower, ymax = .upper, color = life_stage_simple, fill = life_stage_simple)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_grid(taxon_capture ~ res_class) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2")
 
 ```
+
+### Temp
+```{r}
+temp_seq   <- seq(min(brms_data$temp_c_30_day_mean),
+                  max(brms_data$temp_c_30_day_mean),
+                  length.out = 100)
+
+nd_temp <- model_select$data |>
+  distinct(res_class, life_stage_simple, taxon_capture) |>
+  cross_join(tibble(temp_c_30_day_mean = temp_seq)) |>
+  mutate(
+    precip_mm_30_day_sum   = remove_scale(0, precip_sc),
+    precip_mm_30_z  = apply_scale(precip_mm_30_day_sum,       precip_sc),
+    temp_c_30_z     = apply_scale(temp_c_30_day_mean,         temp_sc),
+    precip_mm_30_z2 = apply_scale(precip_mm_30_day_sum ^ 2,   precip2_sc),
+    temp_c_30_z2    = apply_scale(temp_c_30_day_mean ^ 2,     temp2_sc)
+  )
+
+
+# hu
+hu_draws_temp <- model_select |>
+  epred_draws(
+    newdata    = nd_temp,
+    dpar       = "hu",
+    re_formula = ~ (1 | taxon_capture:res_class:life_stage_simple)
+  )
+
+hu_agg_temp = hu_draws_temp |>
+  mutate(prevalence = 1 - plogis(hu)) |>
+  group_by(taxon_capture, res_class, life_stage_simple, temp_c_30_day_mean) |>
+  median_qi(prevalence)
+
+# mu
+
+mu_draws_temp <- model_select |>
+  epred_draws(
+    newdata    = nd_temp,
+    dpar       = "mu",
+    re_formula = ~ (1 | taxon_capture:res_class:life_stage_simple)
+  )
+
+mu_agg_temp = mu_draws_temp |>
+  group_by(taxon_capture, res_class, life_stage_simple, temp_c_30_day_mean) |>
+  median_qi(mu)
+
+# visualize
+ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = .lower, ymax = .upper, color = life_stage_simple, fill = life_stage_simple)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_grid(taxon_capture ~ res_class) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2") +
+  ylim(0, 1)
+
+ggplot(mu_agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = .lower, ymax = .upper, color = life_stage_simple, fill = life_stage_simple)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_grid(taxon_capture ~ res_class) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set2") +
+  scale_fill_brewer(palette = "Set2")
+
+
+```
+
