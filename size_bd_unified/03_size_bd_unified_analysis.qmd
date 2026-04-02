@@ -130,6 +130,87 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
 
 
 ## Organize draws
+
+### Linpred Draws
+```{r}
+
+nd_spp_lss = model_select$data |>
+  distinct(taxon_capture, life_stage_simple)
+
+
+# hu contrast
+hu_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "hu",
+    re_formula = NA
+  )
+
+hu_spp_draws = hu_spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(hu = mean(hu), .groups = "drop")
+
+hu_spp_lss_contrast_draws = hu_spp_lss_draws |>
+  pivot_wider(
+    id_cols     = c(taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = hu
+  ) |>
+  mutate(hu_contrast = subadult - adult,
+         contrast = "subadult - adult")
+
+# mu 
+mu_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "mu",
+    re_formula = NA
+  )
+
+mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
+  pivot_wider(
+    id_cols     = c(taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = mu
+  ) |>
+  mutate(mu_contrast = subadult - adult,
+         contrast = "subadult - adult")
+
+# sigma 
+sigma_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "sigma",
+    re_formula = NA
+  )
+
+sigma_spp_draws = sigma_spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(sigma = mean(sigma), .groups = "drop")
+
+f_draw_agg <- function(draws, group_vars, agg_var) {
+  
+  draws |>
+    group_by(across(all_of(group_vars))) |>
+    reframe(
+      "{agg_var}_lower_50" := tidybayes::hdi(.data[[agg_var]], .width = 0.50)[, 1],
+      "{agg_var}_upper_50" := tidybayes::hdi(.data[[agg_var]], .width = 0.50)[, 2],
+      "{agg_var}_lower_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 1],
+      "{agg_var}_upper_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 2],
+      "{agg_var}_median"   := median(.data[[agg_var]]),
+      .groups = "drop"
+    )
+}
+
+hu_spp_agg = f_draw_agg(hu_spp_draws, c("taxon_capture"), "hu")
+prevalence_spp_agg = f_draw_agg(hu_spp_draws %>%
+                                    mutate(prevalence = 1 - plogis(hu)), c("taxon_capture"), "prevalence")
+sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
+mu_spp_ls_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
+hu_spp_ls_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
+
+```
+
 ```{r}
 # load specs
 load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_2026-03-22.RData"))
@@ -151,31 +232,24 @@ hu_group_draws = hu_specs_ls %>%
   dplyr::rename(hu = .value) %>%
   mutate(prevalence = 1 - plogis(hu))
 
+hu_group_agg = hu_group_draws %>%
+  group_by(taxon_capture) %>%
+  summarize(hdi_50 = tidybayes::hdi(hu, .width = 0.50),
+            hdi_95 = tidybayes::hdi(hu, .width = 0.95),
+            hu_median = median(hu),
+            .groups = "drop")
+
 hu_contrast_draws = hu_contrasts_specs %>%
   gather_emmeans_draws() %>%
   dplyr::rename(hu_subadult = .value)
 
 hu_contrast_agg = hu_contrast_draws %>%
   group_by(taxon_capture, contrast) %>%  # check!
-  summarize(hdi_50 = tidybayes::hdi(hu_subadult, ci = 0.50),
-            hdi_89 = tidybayes::hdi(hu_subadult, ci = 0.89),
-            hdi_95 = tidybayes::hdi(hu_subadult, ci = 0.95),
+  summarize(hdi_50 = tidybayes::hdi(hu_subadult, .width = 0.50),
+            hdi_95 = tidybayes::hdi(hu_subadult, .width = 0.95),
             ratio_positive = sum(hu_subadult > 0) / n(),
             hu_subadult_median = median(hu_subadult),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+            .groups = "drop")
 
 
 # b
@@ -195,30 +269,24 @@ b_contrast_draws = b_contrasts_specs %>%
 
 b_contrast_agg = b_contrast_draws %>%
   group_by(taxon_capture) %>%
-  summarize(hdi_50 = tidybayes::hdi(b_subadult, ci = 0.50),
-            hdi_89 = tidybayes::hdi(b_subadult, ci = 0.89),
-            hdi_95 = tidybayes::hdi(b_subadult, ci = 0.95),
+  summarize(hdi_50 = tidybayes::hdi(b_subadult, .width = 0.50),
+            hdi_95 = tidybayes::hdi(b_subadult, .width = 0.95),
             ratio_positive = sum(b_subadult > 0) / n(),
             b_subadult_median = median(b_subadult),
-            .groups = "drop") %>%
-  mutate(
-    hdi_zero_50 = case_when(
-      hdi_50[1] > 0 | hdi_50[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_89 = case_when(
-      hdi_89[1] > 0 | hdi_89[2] < 0 ~ TRUE,
-      .default = FALSE
-    ),
-    hdi_zero_95 = case_when(
-      hdi_95[1] > 0 | hdi_95[2] < 0 ~ TRUE,
-      .default = FALSE
-    ))
+            .groups = "drop")
 
 # sigma
 sigma_draws = sigma_specs %>%
   gather_emmeans_draws() %>%
   dplyr::rename(sigma = .value)
+
+
+sigma_group_agg = sigma_draws %>%
+  group_by(taxon_capture) %>%
+  reframe(hdi_50 = tidybayes::hdi(sigma, .width = 0.50),
+          hdi_95 = tidybayes::hdi(sigma, .width = 0.95),
+          sigma_median = median(sigma),
+          .groups = "drop")
 
 # combine
 contrast_agg = hu_contrast_agg %>%
@@ -278,12 +346,12 @@ newdata_basic = expand_grid(taxon_capture = sort(unique(brms_data$taxon_capture)
          temp_c_30_z = 0,
          temp_c_30_z2 = 0)
 
-# way too big, limit to 50 draws!
-epred_original = epred_draws(model_select,
-                             newdata = brms_data,
-                             re_formula = NA,
-                             ndraws = 200) %>%
-  dplyr::rename(bd_load_density_epred = .epred)
+# # way too big, limit to 50 draws!
+# epred_original = epred_draws(model_select,
+#                              newdata = brms_data,
+#                              re_formula = NA,
+#                              ndraws = 200) %>%
+#   dplyr::rename(bd_load_density_epred = .epred)
 
 epred_fixed = epred_draws(model_select,
                           newdata = newdata_basic,
@@ -360,13 +428,13 @@ ggplot(brms_data %>%
   facet_wrap("taxon_capture") +
   scale_fill_brewer(palette = "Set2")
 
-ggplot(epred_original, aes(y = bd_load_density_epred, x = life_stage_simple, fill = life_stage_simple)) +
-  geom_violin() +
-  # geom_boxplot() +
-  scale_y_log10(limits = c(1, 1e10)) +
-  theme_minimal() +
-  facet_wrap("taxon_capture") +
-  scale_fill_brewer(palette = "Set2")
+# ggplot(epred_original, aes(y = bd_load_density_epred, x = life_stage_simple, fill = life_stage_simple)) +
+#   geom_violin() +
+#   # geom_boxplot() +
+#   scale_y_log10(limits = c(1, 1e10)) +
+#   theme_minimal() +
+#   facet_wrap("taxon_capture") +
+#   scale_fill_brewer(palette = "Set2")
 
 ggplot(epred_fixed, aes(y = bd_load_density_epred, x = life_stage_simple, fill = life_stage_simple)) +
   geom_violin() +
@@ -437,20 +505,27 @@ ggplot(b_contrast_draws, aes(x = b_subadult)) +
   theme(text=element_text(size=14))
 
 # probability of positive effect
-ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effect_b)) +
+p_net_effect_scatter = ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effect_b)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
-  geom_text_repel(aes(label = taxon_capture),
-                  color = "#888") +
+  geom_text_repel(aes(label = get_species_name(taxon_capture)),
+                  color = "#333",
+                  size = 3) +
   xlim(-1, 1) +
   ylim(-1, 1) +
   theme_minimal() +
   labs(
        title = "Net Subadult Effect (Subadult - Adult)",
-       x = "Bd Prevalence (log scale) [-]",
-       y = "Bd Load Density (logit scale) [-]") +
+       x = "Contrast of log odds of Bd detection\n(subadult - adult) [-]",
+       y = "Contrast of log Bd load density\n(subadult - adult) [-]") +
   scale_color_brewer(palette = "Set2")
+
+ggsave(here("size_bd_unified", "unified_figures", "03_net_effect_scatter.png"),
+       p_net_effect_scatter,
+       width = 8, height = 8)
+
+p_net_effect_scatter
 
 ggplot(combined_agg, aes(x = -hu_subadult_median, y = b_subadult_median)) +
   geom_vline(xintercept = 0, color = "#aaa") +
@@ -493,6 +568,109 @@ ggplot(group_draws_agg, aes(y = prevalence_median, ymin = prevalence_hdi_1, ymax
   geom_pointrange(position = position_dodge(width = 0.7)) +
   theme_minimal() +
   coord_flip()
+
+```
+
+## Cascade plots
+```{r}
+# hu_spp_agg = f_draw_agg(hu_spp_lss_draws, c("taxon_capture"), "hu")
+# sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
+# mu_spp_ls_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
+# hu_spp_ls_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
+
+p_cascade_hu_contrast_linpred = ggplot(hu_spp_ls_contrast_agg, aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(get_species_name(taxon_capture), hu_contrast_median))) +
+  geom_vline(xintercept = 0, color = "#555") +
+  geom_rect(aes(xmin = -hu_contrast_lower_50, xmax = -hu_contrast_upper_50), height = 0.2, color = "#000") +
+  geom_pointrange() +
+  theme_minimal() +
+  labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
+       x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
+       y = "Species")
+
+# p_cascade_hu_contrast = ggplot(hu_contrast_agg, aes(x = -hu_subadult_median, xmin = -hdi_95[,1], xmax = -hdi_95[,2], reorder(get_species_name(taxon_capture), hu_subadult_median))) +
+#   geom_vline(xintercept = 0, color = "#555") +
+#   geom_rect(aes(xmin = -hdi_50[,1], xmax = -hdi_50[,2]), height = 0.2, color = "#000") +
+#   geom_pointrange() +
+#   theme_minimal() +
+#   labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
+#        x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
+#        y = "Species")
+
+p_cascade_mu_contrast_linpred = ggplot(mu_spp_ls_contrast_agg, aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(get_species_name(taxon_capture), -mu_contrast_median))) +
+  geom_vline(xintercept = 0, color = "#555") +
+  geom_rect(aes(xmin = mu_contrast_lower_50, xmax = mu_contrast_upper_50), height = 0.2, color = "#000") +
+  geom_pointrange() +
+  theme_minimal() +
+  labs(title = "Bd Load Contrast (Subadult - Adult)",
+       x = "Contrast of log Bd load (Subadult - Adult) [-]",
+       y = "Species")
+
+# p_cascade_mu_contrast = ggplot(b_contrast_agg, aes(x = b_subadult_median, xmin = hdi_95[,1], xmax = hdi_95[,2], reorder(get_species_name(taxon_capture), -b_subadult_median))) +
+#   geom_vline(xintercept = 0, color = "#555") +
+#   geom_rect(aes(xmin = hdi_50[,1], xmax = hdi_50[,2]), height = 0.2, color = "#000") +
+#   geom_pointrange() +
+#   theme_minimal() +
+#   labs(title = "Bd Load Contrast (Subadult - Adult)",
+#        x = "Contrast of log Bd load (Subadult - Adult) [-]",
+#        y = "Species")
+
+p_cascade_prevalence_linpred = ggplot(prevalence_spp_agg, aes(x = prevalence_median, xmin = prevalence_lower_95, xmax = prevalence_upper_95, reorder(get_species_name(taxon_capture), -prevalence_median))) +
+  geom_rect(aes(xmin = prevalence_lower_50, xmax = prevalence_upper_50), height = 0.2, color = "#000") +
+  geom_pointrange() +
+  xlim(0, 1) +
+  theme_minimal() +
+  labs(title = "Bd Prevalence",
+       x = "Prevalence draws [-]",
+       y = "Species")
+
+
+# p_cascade_prevalence = ggplot(hu_group_agg, aes(x = 1 - plogis(hu_median), xmin = 1 - plogis(hdi_95[,1]), xmax = 1 - plogis(hdi_95[,2]), reorder(get_species_name(taxon_capture), hu_median))) +
+#   geom_rect(aes(xmin = 1 - plogis(hdi_50[,1]), xmax = 1 - plogis(hdi_50[,2])), height = 0.2, color = "#000") +
+#   geom_pointrange() +
+#   xlim(0, 1) +
+#   theme_minimal() +
+#   labs(title = "Bd Prevalence",
+#        x = "Prevalence draws [-]",
+#        y = "Species")
+
+p_cascade_sigma_linpred = ggplot(sigma_spp_agg, aes(x = sigma_median, xmin = sigma_lower_95, xmax = sigma_upper_95, reorder(get_species_name(taxon_capture), -sigma_median))) +
+  geom_rect(aes(xmin = sigma_lower_50, xmax = sigma_upper_50), height = 0.2, color = "#000") +
+  geom_pointrange() +
+  theme_minimal() +
+  labs(title = "Bd Load Dispersion",
+       x = "Log load standard deviation (sigma) draws [-]",
+       y = "Species")
+
+# p_cascade_sigma = ggplot(sigma_group_agg, aes(x = sigma_median, xmin = hdi_95[,1], xmax = hdi_95[,2], reorder(get_species_name(taxon_capture), -sigma_median))) +
+#   geom_rect(aes(xmin = hdi_50[,1], xmax = hdi_50[,2]), height = 0.2, color = "#000") +
+#   geom_pointrange() +
+#   theme_minimal() +
+#   labs(title = "Bd Load Dispersion",
+#        x = "Log load standard deviation (sigma) draws [-]",
+#        y = "Species")
+
+# save plots
+ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_hu_contrast.png"),
+       p_cascade_hu_contrast_linpred,
+       width = 8, height = 6)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_mu_contrast.png"),
+       p_cascade_mu_contrast_linpred,
+       width = 8, height = 6)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_prevalence.png"),
+       p_cascade_prevalence_linpred,
+       width = 8, height = 6)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_sigma.png"),
+       p_cascade_sigma_linpred,
+       width = 8, height = 6)
+
+
+p_cascade_hu_contrast_linpred
+p_cascade_mu_contrast_linpred
+p_cascade_prevalence_linpred
+p_cascade_sigma_linpred
 
 ```
 
