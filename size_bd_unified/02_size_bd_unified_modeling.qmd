@@ -52,7 +52,8 @@ Species were included if supported by least 14 swabbed adults and subadults (eac
 ### Bd density and Zero-cutoff
 I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd density per linear distance of skin swabbed (within species), to correct for linear effects of larger swabbing area in larger frogs. I also set any Bd ITS copy numbers < 10 to zero, to represent uncertainty in qPCR results and support consistency in zero-inflation modeling.
 
-### Amphibian Disease Portal
+
+### Amphibian Disease Portal (NOT INCLUDED)
 ```{r}
 adp_raw = read_csv(here("data", "amphibian_disease_data_processed.csv"))
 
