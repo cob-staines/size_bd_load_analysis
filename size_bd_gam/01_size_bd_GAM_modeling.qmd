@@ -209,9 +209,11 @@ load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-01.RData"))
 raca_data = brms_data %>%
   filter(taxon_capture == "rana_cascadae")
 ramu_data = brms_data %>%
-  filter(taxon_capture == "rana_muscosa")
+  filter(taxon_capture == "rana_muscosa",
+         svl_mm >= 20)
 rasi_data = brms_data %>%
-  filter(taxon_capture == "rana_sierrae")
+  filter(taxon_capture == "rana_sierrae",
+         svl_mm >= 20)
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
@@ -241,28 +243,29 @@ null_zln <- add_criterion(null_zln, "loo")
 saveRDS(null_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
 null_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
 
-m1_zln <- brm(
-  formula  =  bf(
-    bd_load_co_density ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
-    hu ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
-    sigma ~ 1 + taxon_capture +  (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture)
-  ),
-  data     = brms_data,
-  family   = hurdle_lognormal(),
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains   = 4,
-  iter     = 2000,
-  warmup   = 1000,
-  seed     = 124,
-  cores    = 4,
-  backend = "cmdstanr"
-)
+# m1_zln <- brm(
+#   formula  =  bf(
+#     bd_load_co_density ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
+#     hu ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
+#     sigma ~ 1 + taxon_capture +  (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture)
+#   ),
+#   data     = brms_data,
+#   family   = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains   = 4,
+#   iter     = 2000,
+#   warmup   = 1000,
+#   seed     = 124,
+#   cores    = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# m1_zln <- add_criterion(m1_zln, "loo")
+# 
+# saveRDS(m1_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
+# m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
 
-m1_zln <- add_criterion(m1_zln, "loo")
-
-saveRDS(m1_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
-m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
-
+# RACA
 m2_formula = bf(
     bd_load_co_density ~ is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
     hu ~  is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
@@ -271,8 +274,7 @@ m2_formula = bf(
 
 m2_zln_raca <- brm(
   formula  =  m2_formula,
-  data     = raca_data %>%
-                  filter(taxon_capture == "rana_cascadae"),
+  data     = raca_data,
   family   = hurdle_lognormal(),
   control = list(adapt_delta = 0.95, max_treedepth = 12),
   chains = 4, iter = 2000, warmup = 1000,
@@ -284,6 +286,37 @@ m2_zln_raca <- add_criterion(m2_zln_raca, "loo")
 saveRDS(m2_zln_raca, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
 m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
 
+# RAMU
+m2_zln_ramu <- brm(
+  formula  =  m2_formula,
+  data     = ramu_data,
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_ramu <- add_criterion(m2_zln_ramu, "loo")
+
+saveRDS(m2_zln_ramu, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+
+# RASI
+m2_zln_rasi <- brm(
+  formula  =  m2_formula,
+  data     = rasi_data,
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_rasi <- add_criterion(m2_zln_rasi, "loo")
+
+saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+
+
 
 ```
 
@@ -291,6 +324,9 @@ m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_r
 
 ## including metamophs
 ```{r}
+model_select = m2_zln_ramu
+adult_cutoff_mm = 40
+
 # non-metamorph: vary svl_mm, smooth is active
 nd_notmet <- tibble(
   svl_mm          = seq(min(raca_data$svl_mm, na.rm = TRUE),
@@ -312,12 +348,12 @@ nd_met <- tibble(
 )
 
 # non-metamorph
-hu_notmet   <- nd_notmet |> add_epred_draws(m2_zln_raca, dpar = "hu",  re_formula = NA)
-mu_notmet   <- nd_notmet |> add_epred_draws(m2_zln_raca, dpar = "mu",  re_formula = NA)
+hu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
+mu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
 
 # metamorph — keep all draws for boxplot distribution
-hu_met      <- nd_met    |> add_epred_draws(m2_zln_raca, dpar = "hu",  re_formula = NA)
-mu_met      <- nd_met    |> add_epred_draws(m2_zln_raca, dpar = "mu",  re_formula = NA)
+hu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
+mu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
 
 # non-metamorph: median + interval over svl sequence
 prev_notmet_agg <- hu_notmet |>
@@ -343,11 +379,17 @@ p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
   theme_classic()
 
 p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
-  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
-  geom_line(color = "#FC8D62", linewidth = 1) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#8DA0CB", alpha = 0.3) +
+  geom_line(color = "#8DA0CB", linewidth = 1) +
+  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
   labs(x = "SVL (mm)", y = NULL) +
   ylim(0, 1) +
-  theme_classic()
+  theme_classic() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank()
+  )
 
 p_prev <- p_prev_met + p_prev_notmet +
   plot_layout(widths = c(1, 3)) +
@@ -358,7 +400,7 @@ p_prev <- p_prev_met + p_prev_notmet +
 mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
 
 p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
-  geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
+  geom_boxplot(fill = "#FC8D62", alpha = 0.6, outlier.shape = NA) +
   labs(x = NULL, y = "log(Bd load)") +
   ylim(mu_ylim) +
   theme_classic()
@@ -366,6 +408,7 @@ p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
 p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
   geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
   geom_line(color = "#FC8D62", linewidth = 1) +
+  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
   labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
   ylim(mu_ylim) +
   theme_classic() +
