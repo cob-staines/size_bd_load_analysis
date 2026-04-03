@@ -214,7 +214,7 @@ write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "
 # Import timeseries
 ```{r}
 env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-25.csv")) %>%
-  rename(site = site_name,
+  dplyr::rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
 
@@ -276,8 +276,10 @@ env_agg = env_in %>%
   arrange(site, date) %>%
   filter(!(is.na(precipitation_mm) & is.na(temperature_max_c))) %>%
   group_by(site) %>%
-  mutate(precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
+  mutate(precip_mm_10_day_sum = rolling_aggregate(precipitation_mm, date, 10, na_sum),
+         precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
          precip_mm_30_day_sum = rolling_aggregate(precipitation_mm, date, 30, na_sum),
+         temp_c_10_day_mean = rolling_aggregate(temperature_max_c, date, 10, na_mean),
          temp_c_15_day_mean = rolling_aggregate(temperature_max_c, date, 15, na_mean),
          temp_c_30_day_mean = rolling_aggregate(temperature_max_c, date, 30, na_mean)) %>%
   ungroup()
