@@ -9,6 +9,7 @@ df-print: kable
 bibliography: references.bib
 csl: ecology.csl
 ---
+
 # Introduction
 
 ## Motivation
@@ -39,640 +40,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, bayesplot, cmdstanr, bayestestR, rio)
 
 ```
-## Data selection
-### Classifying by life stage
-These analyses were carried out for post-metamorphic individuals only. Individuals were classified as "adult" or "subadult" with a threshold snout-vent-length (SVL [mm]), identified independently for each species from the literature (see data collection code for specific thresholds used and their sources).
-  
-### Classification by population
-"Populations" were defined at the region level within Panamá. In the Sierra Nevada, sites were grouped where evidence supported connectivity at he scale of individuals. Elsewhere in North America, populations were defined at the site level.
 
-### Species selection criteria:
-Species were included if supported by least 14 swabbed adults and subadults (each).
-
-### Bd density and Zero-cutoff
-I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd density per linear distance of skin swabbed (within species), to correct for linear effects of larger swabbing area in larger frogs. I also set any Bd ITS copy numbers < 10 to zero, to represent uncertainty in qPCR results and support consistency in zero-inflation modeling.
-
-
-### Amphibian Disease Portal (NOT INCLUDED)
-```{r}
-adp_raw = read_csv(here("data", "amphibian_disease_data_processed.csv"))
-
-colnames(adp_raw)
-
-problems(adp_raw)
-
-adp_filter = adp_raw %>%
-  filter(!is.na(length),
-         !is.na(decimalLatitude),
-         diseaseTested == "Bd",
-         testMethod %in% c("quantitative PCR", "realtime PCR"),
-         basisOfRecord == "LivingSpecimen")
-
-adp_group = adp_filter %>%
-  group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 40) %>%
-  count()
-
-peace = adp_filter %>%
-  select(testMethod) %>%
-  distinct()
-
-adp_select = adp_filter %>%
-  filter(genus == "Rana",
-         specificEpithet == "boylii",
-         diagnosticLab == "Briggs Lab, University of California Santa Barbara")
-
-
-```
-
-### RACA
-```{r}
-
-# csv data
-##  RACA data
-raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
-  clean_names() %>%
-  filter(life_stage %in% c("A", "S", "Y")) %>%
-  dplyr::rename(site = site_name,
-         body_mass_g = weight_g,
-         site_utme = utme_site,
-         site_utmn = utmn_site,
-         bd_its_copies = bd_swab_results_its) %>%
-  mutate(life_stage_simple = case_when(
-    svl_mm >= 50 ~ "adult",
-    svl_mm < 50 ~ "subadult"),
-    date = as.Date(date),
-    site = tolower(gsub(" ", "_", site)),
-    site_utm_zone = 11,  # verify
-    population = site,
-    region = "W",
-    country = "usa",
-    project = "RACA",
-    taxon_capture = "rana_cascadae") %>%
-  filter(!is.na(bd_its_copies))
-
-raca_population_valid = raca_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
-raca_valid = raca_clean %>%
-  filter(population %in% raca_population_valid$population) %>%
-  select(taxon_capture,
-         date,
-         site,
-         population,
-         bd_its_copies,
-         life_stage_simple,
-         life_stage,
-         sex,
-         svl_mm,
-         site_latitude,
-         site_longitude,
-         region,
-         country,
-         project)
-
-```
-
-### RALU
-```{r}
-ralu_raw = import_list(here("data", "Data Russell et al 2010 DAO.xlsx"))
-
-ralu_clean = ralu_raw[[4]] %>%
-  clean_names() %>%
-  dplyr::rename(life_stage = age_class) %>%
-  mutate(taxon_capture = "rana_luteiventris",
-         date = as.Date(bd_sample_date),
-         site = tolower(pond_name),
-         population = site,
-         region = "NW",
-         country = "usa",
-         life_stage_simple = recode_values(life_stage,
-                                           "ADULT" ~ "adult",
-                                           "JUVENILE" ~ "subadult",
-                                           "METAMORPH" ~ "metamorph"),
-         bd_its_copies = actual_bd_load * 60,
-         sex = tolower(sex),
-         project = "RALU",
-         svl_mm = 25  # using smallest age glass SVL, as researchers used standardized swab lengths.
-         ) %>%
-  filter(!is.na(life_stage_simple),
-         !is.na(bd_its_copies),
-         life_stage_simple %in% c("adult", "subadult"))
-
-ralu_population_valid = ralu_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
-ralu_valid = ralu_clean %>%
-  select(taxon_capture,
-         date,
-         site,
-         population,
-         bd_its_copies,
-         life_stage_simple,
-         life_stage,
-         sex,
-         svl_mm,
-         site_latitude,
-         site_longitude,
-         region,
-         country,
-         project)
-```
-
-### USGS
-```{r}
-
-## laod USGS data
-usgs_raw = read.csv(here("data", "USGSBsalBdDataFull.csv"))
-
-usgs_clean = usgs_raw %>%
-  clean_names() %>%
-  dplyr::rename(site_latitude = latitude,
-         site_longitude = longitude,
-         svl_mm = body_length,
-         life_stage = age,
-         region = reg,
-         bd_its_copies = copy_num) %>%
-  mutate(taxon_capture = tolower(gsub(" ", "_", scientific_name)),
-         life_stage_simple = tolower(life_stage),
-         life_stage_simple = recode_values(life_stage_simple,
-                                        "juvenile" ~ "subadult",
-                                        default = life_stage_simple),
-         date = mdy(collection_date),
-         site = paste0("usgs_", site_id),
-         population = site,
-         project = "usgs",
-         country = "usa") %>%
-  filter(!is.na(taxon_capture),
-         !is.na(bd_its_copies),
-         !is.na(svl_mm),
-         life_stage_simple %in% c("subadult", "adult"))
-
-usgs_taxon_population_valid = usgs_clean %>%
-  group_by(taxon_capture, population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
-usgs_taxon_valid = usgs_clean %>%
-  inner_join(usgs_taxon_population_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
-  group_by(taxon_capture) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop") %>%
-  filter(n_adult >= 14,
-         n_subadult >= 14,
-         taxon_capture != "lithobates_chiricahuensis")
-
-usgs_valid = usgs_clean %>%
-  inner_join(usgs_taxon_population_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
-  filter(taxon_capture %in% usgs_taxon_valid$taxon_capture) %>%
-  select(taxon_capture,
-         svl_mm,
-         sex,
-         life_stage_simple,
-         life_stage,
-         date,
-         bd_its_copies,
-         population,
-         site,
-         site_latitude,
-         site_longitude,
-         region,
-         country,
-         project)
-
-usgs_spp = usgs_valid %>%
-  group_by(taxon_capture,
-           life_stage_simple) %>%
-  count()
-
-```
-
-### RIBBiTR, etc.
-```{r}
-
-## SN populations
-sn_populations = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
-  dplyr::rename(population = pop_id) %>%
-  mutate(population_sn = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
-         site = as.character(site)) %>%
-  select(site,
-         population_sn)
-
-
-population_valid_pa = c("altos_de_campana",
-                        "caribbean",
-                        "el_cope",
-                        "el_valle",
-                        "santa_fe")
-
-# RIBBiTR data
-
-## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
-
-# table pointers
-db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
-db_sample = tbl(dbcon, Id("survey_data", "sample"))
-db_capture = tbl(dbcon, Id("survey_data", "capture"))
-db_survey = tbl(dbcon, Id("survey_data", "survey"))
-db_visit = tbl(dbcon, Id("survey_data", "visit"))
-db_project = tbl(dbcon, Id("survey_data", "project"))
-db_site = tbl(dbcon, Id("survey_data", "site"))
-db_region = tbl(dbcon, Id("survey_data", "region"))
-db_country = tbl(dbcon, Id("survey_data", "country"))
-
-
-# preliminary data
-bd_sample = db_sample %>%
-  right_join(db_capture, by = "capture_id") %>%
-  left_join(db_survey, by = "survey_id") %>%
-  left_join(db_visit, by = "visit_id") %>%
-  left_join(db_site, by = "site_id") %>%
-  left_join(db_region, by = "region_id") %>%
-  left_join(db_country, by = "country_id") %>%
-  left_join(db_project, by = "project_id") %>%
-  filter(sample_type == "bd",
-         !is.na(taxon_capture)) %>%
-  inner_join(db_bd %>%
-              filter(!is.na(bd_detected)) %>%
-               # limit to one qPCR result per sample
-              group_by(sample_id) %>%
-              slice_sample(n = 1) %>%
-              ungroup() %>%
-              select(sample_id,
-                     bd_detected,
-                     bd_its1_copies_per_swab), by = "sample_id")
-
-peace = bd_sample %>%
-  group_by(taxon_capture) %>%
-  count() %>%
-  collect()
-
-# define populations
-bd_population = bd_sample %>%
-  left_join(sn_populations, by = "site", copy = TRUE) %>%
-  mutate(population = case_when(
-    country %in% c("brazil", "panama") ~ region,
-    region == "california" ~ population_sn,
-    .default = site
-  )) %>%
-  filter(country != "panama" | (country == "panama" & population %in% population_valid_pa),
-         !is.na(site_latitude))
-
-# define life stage simple
-bd_life_stage = bd_population %>%
-  filter(life_stage %in% c("adult",
-                           "subadult",
-                           "juvenile",
-                           NA)) %>%
-  mutate(life_stage_simple = case_when(
-    # us
-    # https://animaldiversity.org/accounts/Acris_blanchardi/
-    ((taxon_capture == "acris_blanchardi") & (svl_mm >= 16)) ~ "adult",
-    ((taxon_capture == "acris_blanchardi") & (svl_mm < 16)) ~ "subadult",
-    # Wright and Wright 1949
-    ((taxon_capture == "anaxyrus_americanus") & (svl_mm >= 54)) ~ "adult",
-    ((taxon_capture == "anaxyrus_americanus") & (svl_mm < 54)) ~ "subadult",
-    # Lannoo 2005 (Amphibian Declines: The Conservation Status of United States Species)
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 48)) ~ "adult",
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 48)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "anaxyrus_debilis") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "anaxyrus_debilis") & (svl_mm < 37)) ~ "subadult",
-    # Conant and Collins 1991
-    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm < 51)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm < 32)) ~ "subadult",
-    # Conant & Collins 1998
-    ((taxon_capture == "hyla_cinerea") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_cinerea") & (svl_mm < 32)) ~ "subadult",
-    # Johnson 1987
-    ((taxon_capture == "hyla_versicolor") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_versicolor") & (svl_mm < 32)) ~ "subadult",
-    # Minton, 2001 / Lanoo 2005
-    ((taxon_capture == "lithobates_blairi") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "lithobates_blairi") & (svl_mm < 51)) ~ "subadult",
-    # Platz and Mecham 1963
-    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm >= 57)) ~ "adult",
-    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm < 57)) ~ "subadult",
-    # Minton 2001
-    ((taxon_capture == "lithobates_palustris") & (svl_mm >= 43)) ~ "adult",
-    ((taxon_capture == "lithobates_palustris") & (svl_mm < 43)) ~ "subadult",
-    # Conant and Collins, 1991
-    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm < 51)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 20)) ~ "adult",
-    ((taxon_capture == "pseudacris_crucifer") & (svl_mm < 20)) ~ "subadult",
-    # Hulse, C. and McCoy C. J. and Ellen Censky ,1998.
-    ((taxon_capture == "pseudacris_feriarum") & (svl_mm >= 19)) ~ "adult",
-    ((taxon_capture == "pseudacris_feriarum") & (svl_mm < 19)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "pseudacris_regilla") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "pseudacris_regilla") & (svl_mm < 25)) ~ "subadult",
-    # Howard 1981
-    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 95)) ~ "adult",
-    ((taxon_capture == "rana_catesbeiana") & (svl_mm < 95)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "rana_clamitans") & (svl_mm >= 60)) ~ "adult",
-    ((taxon_capture == "rana_clamitans") & (svl_mm < 60)) ~ "subadult",
-    # Knapp
-    ((taxon_capture == "rana_muscosa") & is.na(svl_mm)) ~ life_stage,
-    ((taxon_capture == "rana_muscosa") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_muscosa") & (svl_mm < 40)) ~ "subadult",
-    # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
-    ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
-    # Knapp
-    ((taxon_capture == "rana_sierrae") & is.na(svl_mm)) ~ life_stage,
-    ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_sierrae") & (svl_mm < 40)) ~ "subadult",
-    # Martof 1963
-    ((taxon_capture == "rana_sylvatica") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "rana_sylvatica") & (svl_mm < 37)) ~ "subadult",
-    # Conant and Collins, 1991
-    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm >= 44)) ~ "adult",
-    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm < 44)) ~ "subadult",
-    # Stebbins, 1985
-    ((taxon_capture == "spea_multiplicata") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "spea_multiplicata") & (svl_mm < 37)) ~ "subadult",
-    
-    # brasil
-    # Heyer, W. R., and R. B. Cocroft. 1986
-    ((taxon_capture == "hylodes_phyllodes") & (svl_mm >= 27.5)) ~ "adult",
-    ((taxon_capture == "hylodes_phyllodes") & (svl_mm < 27.5)) ~ "subadult",
-    # Kwet, A., and M. Solé. 2005
-    ((taxon_capture == "ischnocnema_henselii") & (svl_mm >= 23.0)) ~ "adult",
-    ((taxon_capture == "ischnocnema_henselii") & (svl_mm < 23.0)) ~ "subadult",
-    # Kwet, A., and M. Solé. 2005
-    ((taxon_capture == "brachycephalus_pitanga") & (svl_mm >= 10.8)) ~ "adult",
-    ((taxon_capture == "brachycephalus_pitanga") & (svl_mm <10.8)) ~ "subadult",
-    ((taxon_capture == "boana_faber") & (svl_mm >= 70)) ~ "adult",
-    ((taxon_capture == "boana_faber") & (svl_mm < 70)) ~ "subadult",
-   
-    # country == "brazil" & life_stage == "adult" ~ "adult",
-    # country == "brazil" & life_stage %in% c("subadult", "juvenile") ~ "subadult",
-    
-    # panama
-    # Savage 1972 & Crump 1988
-    ((taxon_capture == "atelopus_varius") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "atelopus_varius") & (svl_mm < 25)) ~ "subadult",
-    # Lynch and Myers 1983
-    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm >= 20.2)) ~ "adult",
-    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm < 20.2)) ~ "subadult",
-    # Lynch and Myers 1983
-    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm >= 23.5)) ~ "adult",
-    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm < 23.5)) ~ "subadult",
-    # Amphibiaweb
-    ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 18.8)) ~ "adult",
-    ((taxon_capture == "colostethus_panamansis") & (svl_mm < 18.8)) ~ "subadult",
-    # Leenders 2001
-    ((taxon_capture == "dendrobates_auratus") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "dendrobates_auratus") & (svl_mm < 25)) ~ "subadult",
-    # Amphibiaweb
-    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm >= 21)) ~ "adult",
-    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm < 21)) ~ "subadult",
-    # Basante 2025
-    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 35)) ~ "adult",
-    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm < 35)) ~ "subadult",
-    # Wang 2008
-    ((taxon_capture == "pristimantis_ridens") & (svl_mm >= 16)) ~ "adult",
-    ((taxon_capture == "pristimantis_ridens") & (svl_mm < 16)) ~ "subadult",
-    # Savage 2002
-    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm >= 42)) ~ "adult",
-    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm < 42)) ~ "subadult",
-    # Easteal 1963
-    ((taxon_capture == "rhinella_marina") & (svl_mm >= 85)) ~ "adult",
-    ((taxon_capture == "rhinella_marina") & (svl_mm < 85)) ~ "subadult",
-    # Savage 2002
-    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm >= 20.5)) ~ "adult",
-    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm < 20.5)) ~ "subadult",
-    # Ibunez & Smith 1995
-    ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 15.1)) ~ "adult",
-    ((taxon_capture == "silverstoneia_flotator") & (svl_mm < 15.1)) ~ "subadult",
-    # Grant & Myers 2013
-    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm >= 15.4)) ~ "adult",
-    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm < 15.4)) ~ "subadult",
-    # Duellman, W. E. 2001
-    ((taxon_capture == "smilisca_sila") & (svl_mm >= 31.6)) ~ "adult",
-    ((taxon_capture == "smilisca_sila") & (svl_mm < 31.6)) ~ "subadult",
-    .default = NA_character_
-  )) %>%
-  filter(!is.na(life_stage_simple),
-         !is.na(svl_mm))
-
-# identify valid species & populations
-## drop pops without both adults and juveniles
-## drop species without 14 or more adults and juveniles each
-pop_taxa_valid = bd_life_stage %>%
-  group_by(taxon_capture, population) %>%
-  summarize(n_adult = sum(as.integer(life_stage_simple == "adult")),
-            n_subadult = sum(as.integer(life_stage_simple == "subadult")),
-            .groups = "drop")
-# %>%
-#   filter(n_adult > 0,
-#          n_subadult > 0)
-
-taxa_valid = bd_life_stage %>%
-  inner_join(pop_taxa_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
-  group_by(taxon_capture) %>%
-  summarize(n_adult = sum(as.integer(life_stage_simple == "adult"), na.rm = TRUE),
-            n_subadult = sum(as.integer(life_stage_simple == "subadult"), na.rm = TRUE),
-            .groups = "drop") %>%
-  filter(n_adult >= 14,
-         n_subadult >= 14)
-
-# identify valid samples
-bd_sample_valid = bd_life_stage %>%
-  mutate(year = year(date),
-         project = project_id) %>%
-  inner_join(pop_taxa_valid, by = c("taxon_capture", "population")) %>%
-  inner_join(taxa_valid, by = "taxon_capture") %>%
-  # limit to 1 bd sample per capture
-  group_by(capture_id) %>%
-  slice_sample(n = 1) %>%
-  ungroup() %>%
-  select(sample_id,
-         bd_detected,
-         bd_its1_copies_per_swab,
-         sample_name,
-         capture_id,
-         taxon_capture,
-         life_stage,
-         life_stage_simple,
-         svl_mm,
-         body_mass_g,
-         sex,
-         date,
-         year,
-         site,
-         site_latitude,
-         site_longitude,
-         population,
-         region,
-         country,
-         project) %>%
-  collect()
-
-# final data selection and cleaning for model
-ribbitr_valid = bd_sample_valid %>%
-  dplyr::rename(bd_its_copies = bd_its1_copies_per_swab) %>%
-  select(bd_its_copies,
-         taxon_capture,
-         life_stage,
-         life_stage_simple,
-         svl_mm,
-         body_mass_g,
-         sex,
-         date,
-         year,
-         site,
-         site_latitude,
-         site_longitude,
-         population,
-         region,
-         country,
-         project)
-
-```
-
-### HYPHY
-```{r}
-### Hylodes phyllodes
-hyphy_raw = import_list(here("data", "CDMR_H.phyllodes_metadata_Oct2_LKS.xlsx"))
-
-hyphy_clean = hyphy_raw[[1]] %>%
-  clean_names() %>%
-  filter(timepoint == 0) %>%
-  # filter(timepoint == 0 | treatment == "Saline control") %>%
-  dplyr::rename(svl_mm = svl,
-                date = capture_date) %>%
-  mutate(life_stage_simple = case_when(
-    svl_mm < 27.5 ~ "subadult",
-    svl_mm >= 27.5 ~ "adult",
-    .default = NA),
-    taxon_capture = "hylodes_phyllodes",
-    site = gsub("aw", "s", tolower(transect)),
-    population = region,
-    country = "brazil",
-    bd_its_copies = bd_load,
-    project = "HYPHY"
-  ) %>%
-  filter(!is.na(life_stage_simple),
-         !is.na(bd_its_copies),
-         life_stage_simple %in% c("adult", "subadult"))
-
-hyphy_population_valid = hyphy_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
-peace = hyphy_clean %>%
-  select(site) %>%
-  distinct()
-
-hope = hyphy_clean %>%
-  summarize(date_min = min(date),
-            date_max = max(date))
-
-hyphy_valid = hyphy_clean %>%
-  select(taxon_capture,
-         date,
-         site,
-         population,
-         bd_its_copies,
-         life_stage_simple,
-         svl_mm,
-         region,
-         country,
-         project)
-```
-
-### Combine datasets
-```{r}
-
-column_check = compare_df_cols(raca_valid,
-                               ralu_valid,
-                               usgs_valid,
-                               ribbitr_valid)
-
-bd_model = bind_rows(raca_valid,
-                     ralu_valid,
-                     usgs_valid,
-                     ribbitr_valid) %>%
-  mutate(bd_load_co = if_else(bd_its_copies < 10,
-                              0,
-                              bd_its_copies),
-         bd_detected_co = bd_load_co > 0,
-         bd_load_co_density = bd_load_co / svl_mm)
-
-(bd_model_stats = bd_model %>%
-  group_by(taxon_capture, country) %>%
-  summarise(regions = paste(sort(unique(region)), collapse = ", "),
-            population_n = n_distinct(population),
-            site_n = n_distinct(site),
-            year_first = year(min(date)),
-            year_last = year(max(date)),
-            year_count = n_distinct(year(date)),
-            adult_n = sum(life_stage_simple == "adult"),
-            subadult_n = sum(life_stage_simple == "subadult"),
-            .groups = "drop") %>%
-  arrange(country,
-          taxon_capture))
-
-# write_csv(bd_model_stats, here("data", "size_bd_modeling_unified_stats.csv"))
-
-```
-
-## Environmental data
-To support comparing Bd prevalence and loads between sites and species across a range of environmental conditions, I incorporated local (~5 km) daily maximum temperature (CHIRTS) and daily precipitation (CHIRPS) time series. Following Sonn et al. 2019 [sonn2019effects], I created 15-day and 30-day means (for tempurature) and sums (for precipitation). Preliminary model fitting showed stronger relationships between Bd prevalence and 15-day lag products, while Bd load showed stronger relationships with 30-day lag products, similar to Sonn et al. 2019.
-
-
-### Join with env. data
-```{r}
-#| eval: false
-#| warning: false
-#| code-fold: true
-#| code-summary: "Show environmental data mergin code"
-
-env_agg = read_csv(here("data", "unified_env_agg.csv"))
-
-
-bd_model_env = bd_model %>%
-  left_join(env_agg, by = c("site", "date"))
-
-brms_data = bd_model_env %>%
-  mutate(
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)),
-    precip_mm_15_z2 = as.numeric(scale(precip_mm_15_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_15_z2 = as.numeric(scale(temp_c_15_day_mean ^ 2, center = TRUE, scale = TRUE))) %>%
-  select(taxon_capture,
-         everything())
-
-save(brms_data, file = here("data", paste0("bd_model_env_unified_", today(), ".RData")))
-
-```
 
 ## Load saved data
 ```{r}
@@ -683,7 +51,7 @@ save(brms_data, file = here("data", paste0("bd_model_env_unified_", today(), ".R
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
 
 # checks
 sum(is.na(brms_data$bd_load_co_density))
@@ -715,47 +83,16 @@ I modeled Bd load using a Baysian zero-inflated (or "hurdle") log-normal model [
 #| code-fold: true
 #| code-summary: "Show model setup code"
 
-# unified, scaled model
-brms_scales = brms_data %>%
-  group_by() %>%
-  summarize(precip_mm_15_day_sum_mean = mean(precip_mm_15_day_sum),
-            precip_mm_15_day_sum_sd = sd(precip_mm_15_day_sum),
-            precip_mm_30_day_sum_mean = mean(precip_mm_30_day_sum),
-            precip_mm_30_day_sum_sd = sd(precip_mm_30_day_sum),
-            temp_c_15_day_mean_mean = mean(temp_c_15_day_mean),
-            temp_c_15_day_mean_sd = sd(temp_c_15_day_mean),
-            temp_c_30_day_mean_mean = mean(temp_c_30_day_mean),
-            temp_c_30_day_mean_sd = sd(temp_c_30_day_mean),
-            precip_mm_15_day_sum2_mean = mean(precip_mm_15_day_sum ^ 2),
-            precip_mm_15_day_sum2_sd = sd(precip_mm_15_day_sum ^ 2),
-            precip_mm_30_day_sum2_mean = mean(precip_mm_30_day_sum ^ 2),
-            precip_mm_30_day_sum2_sd = sd(precip_mm_30_day_sum ^ 2),
-            temp_c_15_day_mean2_mean = mean(temp_c_15_day_mean ^ 2),
-            temp_c_15_day_mean2_sd = sd(temp_c_15_day_mean ^ 2),
-            temp_c_30_day_mean2_mean = mean(temp_c_30_day_mean ^ 2),
-            temp_c_30_day_mean2_sd = sd(temp_c_30_day_mean ^ 2))
-
-brms_rescale = function(df, scales) {
-  df_out = df %>%
-    mutate(precip_mm_15_z = (precip_mm_15_day_sum - scales$precip_mm_15_day_sum_mean)/scales$precip_mm_15_day_sum_sd,
-           precip_mm_30_z = (precip_mm_30_day_sum - scales$precip_mm_30_day_sum_mean)/scales$precip_mm_30_day_sum_sd,
-           temp_c_15_z = (temp_c_15_day_mean - scales$temp_c_15_day_mean_mean)/scales$temp_c_15_day_mean_sd,
-           temp_c_30_z = (temp_c_30_day_mean - scales$temp_c_30_day_mean_mean)/scales$temp_c_30_day_mean_sd,
-           precip_mm_15_z2 = (precip_mm_15_day_sum^2 - scales$precip_mm_15_day_sum2_mean)/scales$precip_mm_15_day_sum2_sd,
-           precip_mm_30_z2 = (precip_mm_30_day_sum^2 - scales$precip_mm_30_day_sum2_mean)/scales$precip_mm_30_day_sum2_sd,
-           temp_c_15_z2 = (temp_c_15_day_mean^2 - scales$temp_c_15_day_mean2_mean)/scales$temp_c_15_day_mean2_sd,
-           temp_c_30_z2 = (temp_c_30_day_mean^2 - scales$temp_c_30_day_mean2_mean)/scales$temp_c_30_day_mean2_sd
-           )
-}
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 
 model_priors <- c(
   # b
-  prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 3),   class = "b"),
+  prior(normal(0, 20), class = "Intercept"),
+  prior(normal(0, 20),   class = "b"),
   
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
-  prior(normal(0, 1), class = "b", dpar = "hu"),
+  prior(normal(0, 2), class = "b", dpar = "hu"),
   
   # Sigma
   prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
@@ -765,38 +102,37 @@ model_priors <- c(
   prior(exponential(1), class = "sd")
 )
 
-model_priors_ga <- c(
-  # b
-  prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 3),   class = "link"),
-  
-  # hu
-  prior(normal(0, 2), class = "Intercept", dpar = "link_hu"),
-  prior(normal(0, 1), class = "b", dpar = "link_hu"),
-  
-  # Sigma
-  prior(normal(0, 1), class = "Intercept", dpar = "link_shape"),
-  prior(normal(0, 0.3), class = "b", dpar = "link_shape"),
-  
-  # Random effects
-  prior(exponential(1), class = "sd")
-)
+# model_priors_ga <- c(
+#   # b
+#   prior(normal(0, 5), class = "Intercept"),
+#   prior(normal(0, 3),   class = "link"),
+#   
+#   # hu
+#   prior(normal(0, 2), class = "Intercept", dpar = "link_hu"),
+#   prior(normal(0, 1), class = "b", dpar = "link_hu"),
+#   
+#   # Sigma
+#   prior(normal(0, 1), class = "Intercept", dpar = "link_shape"),
+#   prior(normal(0, 0.3), class = "b", dpar = "link_shape"),
+#   
+#   # Random effects
+#   prior(exponential(1), class = "sd")
+# )
+# 
+# model_priors_fixed <- c(
+#   # b
+#   prior(normal(0, 5), class = "Intercept"),
+#   prior(normal(0, 3),   class = "b"),
+#   
+#   # hu
+#   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+#   prior(normal(0, 1), class = "b", dpar = "hu"),
+#   
+#   # Sigma
+#   prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+#   prior(normal(0, 0.3), class = "b", dpar = "sigma")
+# )
 
-model_priors_fixed <- c(
-  # b
-  prior(normal(0, 5), class = "Intercept"),
-  prior(normal(0, 3),   class = "b"),
-  
-  # hu
-  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
-  prior(normal(0, 1), class = "b", dpar = "hu"),
-  
-  # Sigma
-  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
-  prior(normal(0, 0.3), class = "b", dpar = "sigma")
-)
-
-set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
 
 ## Model fitting
@@ -1303,6 +639,29 @@ m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_popt
 # m7_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_nodens.rds")
 # 
 
+m8_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
+    hu ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
+    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 125,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m8_zln <- add_criterion(m8_zln, "loo")
+
+saveRDS(m8_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
+m8_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
 
 ```
 
