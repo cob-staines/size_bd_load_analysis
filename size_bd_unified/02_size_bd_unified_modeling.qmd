@@ -87,8 +87,8 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 
 model_priors <- c(
   # b
-  prior(normal(0, 20), class = "Intercept"),
-  prior(normal(0, 20),   class = "b"),
+  prior(normal(5, 4), class = "Intercept"),
+  prior(normal(0, 3),   class = "b"),
   
   # hu
   prior(normal(0, 2), class = "Intercept", dpar = "hu"),
@@ -156,8 +156,8 @@ null_zln <- brm(
 
 null_zln <- add_criterion(null_zln, "loo")
 
-saveRDS(null_zln, file = here("unified_models/unified_model_results_zln_null.rds"))
-null_zln = readRDS(file = here("unified_models/unified_model_results_zln_null.rds"))
+saveRDS(null_zln, file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
+null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
 # 
 # nullb_zln <- brm(
 #   bd_load_co ~ 1,
@@ -639,11 +639,48 @@ m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_popt
 # m7_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2_nodens.rds")
 # 
 
-m8_zln <- brm(
+# m8_zln <- brm(
+#   formula = bf(
+#     bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
+#     hu ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
+#     sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+#   ),
+#   data = brms_data,
+#   family = hurdle_lognormal(),
+#   prior = model_priors,
+#   sample_prior = "yes",
+#   control = list(adapt_delta = 0.98),
+#   chains = 4,
+#   iter = 2000,
+#   warmup = 1000,
+#   seed = 125,
+#   cores = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# m8_zln <- add_criterion(m8_zln, "loo")
+# 
+# saveRDS(m8_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
+# m8_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
+
+m9a_zln <- brm(
   formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
-    hu ~ 1 + life_stage_simple * taxon_capture + (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) * taxon_capture + (1 | population) + (1 | population:taxon_capture:life_stage_simple),
-    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    sigma ~ 1 + taxon_capture + 
+      (1 | population)
   ),
   data = brms_data,
   family = hurdle_lognormal(),
@@ -658,10 +695,49 @@ m8_zln <- brm(
   backend = "cmdstanr"
 )
 
-m8_zln <- add_criterion(m8_zln, "loo")
+m9a_zln <- add_criterion(m9a_zln, "loo")
 
-saveRDS(m8_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
-m8_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_rpoptls_30.rds")
+saveRDS(m9a_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
+m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
+
+
+m9b_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    sigma ~ 1 + taxon_capture + 
+      (1 | population)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 125,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m9b_zln <- add_criterion(m9b_zln, "loo")
+
+saveRDS(m9b_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_30.rds")
+m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_30.rds")
+
 
 ```
 
@@ -686,11 +762,12 @@ m8_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_
                             # m5d_zln,
                             # m5e_zln,
                             # m5f_zln,
-                            m5g_zln
+                            # m5g_zln
                             # m6_zln,
                             # m6b_zln,
                             # m6c_zln,
-                            # m6d_zln
+                            # m6d_zln,
+                            m8_zln
                             ))
 ```
 
@@ -705,7 +782,7 @@ m8_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m5g_zln
+model_select = m8_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
@@ -749,7 +826,7 @@ pp_check(model_select,
 #| fig-height: 6
 #| fig-width: 8
 
-mcmc_plot(m5g_zln, type = "dens", variable = c("prior_Intercept", "b_Intercept")) +
+mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept", "b_Intercept")) +
   xlim(-20, 20)
 
 # mcmc_plot(m5f_zln, type = "dens", variable = c("prior_b", "b_taxon_capturecolostethus_panamansis", "b_taxon_capturelithobates_blairi", 
@@ -760,7 +837,7 @@ mcmc_plot(m5g_zln, type = "dens", variable = c("prior_Intercept", "b_Intercept")
 # "b_taxon_capturesilverstoneia_flotator")) +
 #   xlim(-10, 10)
 
-mcmc_plot(m5g_zln, type = "dens", variable = c("prior_Intercept_sigma", "b_sigma_Intercept")) +
+mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept_sigma", "b_sigma_Intercept")) +
   xlim(-2, 2)
 
 # mcmc_plot(m5f_zln, type = "dens", variable = c("prior_b_sigma", "b_sigma_taxon_capturecolostethus_panamansis", "b_sigma_taxon_capturelithobates_blairi", 
@@ -771,7 +848,7 @@ mcmc_plot(m5g_zln, type = "dens", variable = c("prior_Intercept_sigma", "b_sigma
 # "b_sigma_taxon_capturesilverstoneia_flotator")) +
 #   xlim(-2, 2)
 
-mcmc_plot(m5g_zln, type = "dens", variable = c("prior_Intercept_hu", "b_hu_Intercept")) +
+mcmc_plot(model_select, type = "dens", variable = c("prior_Intercept_hu", "b_hu_Intercept")) +
   xlim(-15, 15)
 
 # mcmc_plot(m5f_zln, type = "dens", variable = c("prior_b_hu", "b_hu_life_stage_simplesubadult", "b_hu_taxon_capturecolostethus_panamansis", 
