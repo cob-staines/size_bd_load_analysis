@@ -42,109 +42,170 @@ m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_r
 
 ## including metamophs
 ```{r}
-model_select = m2_zln_raca
-adult_cutoff_mm = 50
-# model_select = m2_zln_ramu
-# model_select = m2_zln_rasi
-# adult_cutoff_mm = 40
-
-# non-metamorph: vary svl_mm, smooth is active
-nd_notmet <- tibble(
-  svl_mm          = seq(min(raca_data$svl_mm, na.rm = TRUE),
-                        max(raca_data$svl_mm, na.rm = TRUE),
-                        length.out = 200),
-  is_metamorph    = 0,
-  is_not_metamorph = 1,
-  precip_mm_30_z  = 0, precip_mm_30_z2 = 0,
-  temp_c_30_z     = 0, temp_c_30_z2    = 0
-)
-
-# metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
-nd_met <- tibble(
-  svl_mm           = mean(raca_data$svl_mm, na.rm = TRUE),  # doesn't matter
-  is_metamorph     = 1,
-  is_not_metamorph = 0,
-  precip_mm_30_z   = 0, precip_mm_30_z2 = 0,
-  temp_c_30_z      = 0, temp_c_30_z2    = 0
-)
-
-# non-metamorph
-hu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
-mu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
-
-# metamorph — keep all draws for boxplot distribution
-hu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
-mu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
-
-# non-metamorph: median + interval over svl sequence
-prev_notmet_agg <- hu_notmet |>
-  mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
-  group_by(svl_mm) |>
-  median_qi(prevalence, .width = 0.89)
-
-mu_notmet_agg <- mu_notmet |>
-  group_by(svl_mm) |>
-  median_qi(mu, .width = 0.89)
-
-# metamorph: keep raw draws for boxplot
-prev_met_draws <- hu_met |>
-  mutate(prevalence = 1 - plogis(hu))
-
-mu_met_draws <- mu_met
-
-# --- prevalence ---
-p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
-  geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
-  labs(x = NULL, y = "Bd Prevalence") +
-  ylim(0, 1) +
-  theme_classic()
-
-p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
-  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#8DA0CB", alpha = 0.3) +
-  geom_line(color = "#8DA0CB", linewidth = 1) +
-  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
-  labs(x = "SVL (mm)", y = NULL) +
-  ylim(0, 1) +
-  theme_classic() +
-  theme(
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank(),
-    axis.line.y  = element_blank()
+metamorph_svl_prev_plot = function(species_fit, species_data, cutoff_mm, species_name) {
+  # non-metamorph: vary svl_mm, smooth is active
+  nd_notmet <- tibble(
+    svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
+                          max(species_data$svl_mm, na.rm = TRUE),
+                          length.out = 200),
+    is_metamorph    = 0,
+    is_not_metamorph = 1,
+    precip_mm_30_z  = 0, precip_mm_30_z2 = 0,
+    temp_c_30_z     = 0, temp_c_30_z2    = 0
   )
-
-p_prev <- p_prev_met + p_prev_notmet +
-  plot_layout(widths = c(1, 3)) +
-  plot_annotation(title = "Smooth + fixed effect on Bd prevalence")
-
-# --- mu ---
-# get shared y range first
-mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
-
-p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
-  geom_boxplot(fill = "#FC8D62", alpha = 0.6, outlier.shape = NA) +
-  labs(x = NULL, y = "log(Bd load)") +
-  ylim(mu_ylim) +
-  theme_classic()
-
-p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
-  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
-  geom_line(color = "#FC8D62", linewidth = 1) +
-  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
-  labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
-  ylim(mu_ylim) +
-  theme_classic() +
-  theme(
-    axis.text.y  = element_blank(),
-    axis.ticks.y = element_blank(),
-    axis.line.y  = element_blank()
+  
+  # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+  nd_met <- tibble(
+    svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
+    is_metamorph     = 1,
+    is_not_metamorph = 0,
+    precip_mm_30_z   = 0, precip_mm_30_z2 = 0,
+    temp_c_30_z      = 0, temp_c_30_z2    = 0
   )
+  
+  # non-metamorph
+  hu_notmet   <- nd_notmet |> add_epred_draws(species_fit, dpar = "hu",  re_formula = NA)
+  
+  # metamorph — keep all draws for boxplot distribution
+  hu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "hu",  re_formula = NA)
+  
+  # non-metamorph: median + interval over svl sequence
+  prev_notmet_agg <- hu_notmet |>
+    mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
+    group_by(svl_mm) |>
+    median_qi(prevalence, .width = 0.89)
+  
+  # metamorph: keep raw draws for boxplot
+  prev_met_draws <- hu_met |>
+    mutate(prevalence = 1 - plogis(hu))
+  
+  # --- prevalence ---
+  p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
+    geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
+    labs(x = NULL, y = species_name) +
+    ylim(0, 1) +
+    theme_classic()
+  
+  p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
+    geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#8DA0CB", alpha = 0.3) +
+    geom_line(color = "#8DA0CB", linewidth = 1) +
+    geom_vline(xintercept = cutoff_mm, linetype = "dashed", color = "#666") +
+    labs(x = "SVL (mm)", y = NULL) +
+    ylim(0, 1) +
+    theme_classic() +
+    theme(
+      axis.text.y  = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y  = element_blank()
+    )
+  
+  p_prev <- p_prev_met + p_prev_notmet +
+    plot_layout(widths = c(1, 3)) +
+    plot_annotation(title = paste0(species_name))
+  
+ 
+  return(p_prev)
+}
 
-p_mu <- p_mu_met + p_mu_notmet +
-  plot_layout(widths = c(1, 3)) +
-  plot_annotation(title = "Smooth + fixed effect on Bd load")
+metamorph_svl_load_plot = function(species_fit, species_data, cutoff_mm, species_name) {
+  # non-metamorph: vary svl_mm, smooth is active
+  nd_notmet <- tibble(
+    svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
+                          max(species_data$svl_mm, na.rm = TRUE),
+                          length.out = 200),
+    is_metamorph    = 0,
+    is_not_metamorph = 1,
+    precip_mm_30_z  = 0, precip_mm_30_z2 = 0,
+    temp_c_30_z     = 0, temp_c_30_z2    = 0
+  )
+  
+  # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+  nd_met <- tibble(
+    svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
+    is_metamorph     = 1,
+    is_not_metamorph = 0,
+    precip_mm_30_z   = 0, precip_mm_30_z2 = 0,
+    temp_c_30_z      = 0, temp_c_30_z2    = 0
+  )
+  
+  # non-metamorph
+  mu_notmet   <- nd_notmet |> add_epred_draws(species_fit, dpar = "mu",  re_formula = NA)
+  
+  # metamorph — keep all draws for boxplot distribution
+  mu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "mu",  re_formula = NA)
+  
+  # non-metamorph: median + interval over svl sequence
+  mu_notmet_agg <- mu_notmet |>
+    group_by(svl_mm) |>
+    median_qi(mu, .width = 0.89)
+  
+  # metamorph: keep raw draws for boxplot
+  mu_met_draws <- mu_met
+  
+  # --- mu ---
+  # get shared y range first
+  mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
+  
+  p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
+    geom_boxplot(fill = "#FC8D62", alpha = 0.6, outlier.shape = NA) +
+    labs(x = NULL, y = species_name) +
+    ylim(mu_ylim) +
+    theme_classic()
+  
+  p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
+    geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
+    geom_line(color = "#FC8D62", linewidth = 1) +
+    geom_vline(xintercept = cutoff_mm, linetype = "dashed", color = "#666") +
+    labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
+    ylim(mu_ylim) +
+    theme_classic() +
+    theme(
+      axis.text.y  = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y  = element_blank()
+    )
+  
+  p_mu <- p_mu_met + p_mu_notmet +
+    plot_layout(widths = c(1, 3))
+  
+  return(p_mu)
+}
+
+raca_prev_p = metamorph_svl_prev_plot(m2_zln_raca, raca_data, 50, "Rana cascadea")
+ramu_prev_p = metamorph_svl_prev_plot(m2_zln_ramu, ramu_data, 40, "Rana muscosa")
+rasi_prev_p = metamorph_svl_prev_plot(m2_zln_rasi, rasi_data, 40, "Rana sierrae")
+
+raca_load_p = metamorph_svl_load_plot(m2_zln_raca, raca_data, 50, "Rana cascadea")
+ramu_load_p = metamorph_svl_load_plot(m2_zln_ramu, ramu_data, 40, "Rana muscosa")
+rasi_load_p = metamorph_svl_load_plot(m2_zln_rasi, rasi_data, 40, "Rana sierrae")
+
+
+ylab_dummy_prev <- ggplot() + 
+  annotate("text", x = 0.5, y = 0.5, label = "Bd prevalence", angle = 90, size = 5) +
+  theme_void() +
+  coord_fixed(ratio = 10)
+
+ylab_dummy_load <- ggplot() + 
+  annotate("text", x = 0.5, y = 0.5, label = "log(Bd load)", angle = 90, size = 5) +
+  theme_void() +
+  coord_fixed(ratio = 10)
+
+p_prev <- (ylab_dummy_prev + wrap_plots(list(raca_prev_p, ramu_prev_p, rasi_prev_p), nrow = 3)) +
+  plot_layout(widths = c(0.05, 1))
+
+p_load <- (ylab_dummy_load + wrap_plots(list(raca_load_p, ramu_load_p, rasi_load_p), nrow = 3)) +
+  plot_layout(widths = c(0.05, 1))
+
+ggsave(here("size_bd_gam", "gam_figures", "03_metamorph_svl_combined_prevalence.png"),
+       p_prev,
+       width = 8, height = 8)
+
+ggsave(here("size_bd_gam", "gam_figures", "03_metamorph_svl_combined_load.png"),
+       p_load,
+       width = 8, height = 8)
 
 p_prev
-p_mu
+p_load
 
 ```
 
