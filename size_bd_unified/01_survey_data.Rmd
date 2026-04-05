@@ -600,9 +600,10 @@ hyphy_clean = hyphy_raw[[1]] %>%
   clean_names() %>%
   filter(timepoint == 0) %>%
   # filter(timepoint == 0 | treatment == "Saline control") %>%
-  dplyr::rename(svl_mm = svl,
-                date = capture_date) %>%
-  mutate(life_stage_simple = case_when(
+  dplyr::rename(date = capture_date) %>%
+  mutate(
+    svl_mm = as.numeric(svl),
+    life_stage_simple = case_when(
     svl_mm < 27.5 ~ "subadult",
     svl_mm >= 27.5 ~ "adult",
     .default = NA),
@@ -659,7 +660,8 @@ column_check = compare_df_cols(raca_valid,
 bd_model = bind_rows(raca_valid,
                      ralu_valid,
                      usgs_valid,
-                     ribbitr_valid) %>%
+                     ribbitr_valid,
+                     hyphy_valid) %>%
   mutate(bd_load_co = if_else(bd_its_copies < 10,
                               0,
                               bd_its_copies),
