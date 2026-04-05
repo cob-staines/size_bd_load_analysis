@@ -1,0 +1,184 @@
+---
+title: "Size vs. Bd modeling: Panamá preliminary results"
+author: Cob Staines
+date: 2025-09-29
+format:
+  html:
+    toc: true
+df-print: kable
+bibliography: references.bib
+csl: ecology.csl
+---
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janitor, here, brms, cmdstanr, tidybayes, patchwork)
+
+```
+
+# Load data
+```{r}
+
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-05.RData"))
+
+raca_data = brms_data %>%
+  filter(taxon_capture == "rana_cascadae")
+ramu_data = brms_data %>%
+  filter(taxon_capture == "rana_muscosa",
+         svl_mm >= 20)
+rasi_data = brms_data %>%
+  filter(taxon_capture == "rana_sierrae",
+         svl_mm >= 20)
+
+```
+
+# Load unified model
+
+```{r}
+full_model = readRDS(file = here( "size_bd_unified/unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds"))
+
+## Run below, not yet tried!
+
+# Returns global fixed + random deviation for every taxon
+taxon_coefs <- coef(full_model, summary = TRUE)$taxon_capture
+
+# Extract precip terms for all taxa
+precip_linear_all <- taxon_coefs[, , "precip_mm_10_z"]      # rows = taxa, cols = Estimate/Est.Error/Q2.5/Q97.5
+precip_quad_all   <- taxon_coefs[, , "Iprecip_mm_10_zE2"]
+temp_linear_all   <- taxon_coefs[, , "temp_c_30_z"]
+temp_quad_all     <- taxon_coefs[, , "Itemp_c_30_zE2"]
+
+# For a specific taxon
+precip_linear_all["rana_cascadae", ]
+#   Estimate Est.Error      Q2.5     Q97.5
+#   ...
+
+
+# example for a given species
+sp_prior <- c(
+  prior(normal(precip_linear_all["rana_cascadae", "Estimate"],
+               precip_linear_all["rana_cascadae", "Est.Error"]),
+        class = "b", coef = "precip_mm_10_z"),
+  
+  prior(normal(precip_quad_all["rana_cascadae", "Estimate"],
+               precip_quad_all["rana_cascadae", "Est.Error"]),
+        class = "b", coef = "Iprecip_mm_10_zE2"),
+  
+  # repeat for temp terms and hu submodel
+)
+
+```
+
+# Modeling
+## Model setup
+```{r}
+
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+```
+
+## Model fitting
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model fitting code"
+
+# null model
+null_zln <- brm(
+  bd_load_co_density ~ 1,
+  data = brms_data,
+  family = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+null_zln <- add_criterion(null_zln, "loo")
+
+saveRDS(null_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
+null_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
+
+# m1_zln <- brm(
+#   formula  =  bf(
+#     bd_load_co_density ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
+#     hu ~ s(svl_mm, by = taxon_capture) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture),
+#     sigma ~ 1 + taxon_capture +  (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture)
+#   ),
+#   data     = brms_data,
+#   family   = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains   = 4,
+#   iter     = 2000,
+#   warmup   = 1000,
+#   seed     = 124,
+#   cores    = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# m1_zln <- add_criterion(m1_zln, "loo")
+# 
+# saveRDS(m1_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
+# m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
+
+# RACA
+m2_formula = bf(
+    bd_load_co_density ~ is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+    hu ~  is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+    sigma ~ 1 +  (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2)
+  )
+
+m2_zln_raca <- brm(
+  formula  =  m2_formula,
+  data     = raca_data,
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_raca <- add_criterion(m2_zln_raca, "loo")
+
+saveRDS(m2_zln_raca, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+
+# RAMU
+m2_zln_ramu <- brm(
+  formula  =  m2_formula,
+  data     = ramu_data,
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_ramu <- add_criterion(m2_zln_ramu, "loo")
+
+saveRDS(m2_zln_ramu, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+
+# RASI
+m2_zln_rasi <- brm(
+  formula  =  m2_formula,
+  data     = rasi_data,
+  family   = hurdle_lognormal(),
+  control = list(adapt_delta = 0.95, max_treedepth = 12),
+  chains = 4, iter = 2000, warmup = 1000,
+  seed = 124, cores = 4, backend = "cmdstanr"
+)
+
+m2_zln_rasi <- add_criterion(m2_zln_rasi, "loo")
+
+saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+
+
+
+```

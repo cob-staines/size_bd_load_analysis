@@ -1,0 +1,178 @@
+---
+title: "03_size_bd_GAM_analysis"
+output: html_document
+---
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork)
+
+```
+
+# Load data
+```{r}
+
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-05.RData"))
+
+raca_data = brms_data %>%
+  filter(taxon_capture == "rana_cascadae")
+ramu_data = brms_data %>%
+  filter(taxon_capture == "rana_muscosa",
+         svl_mm >= 20)
+rasi_data = brms_data %>%
+  filter(taxon_capture == "rana_sierrae",
+         svl_mm >= 20)
+
+```
+
+# load models
+```{r}
+m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+
+```
+
+# visualize results
+
+## including metamophs
+```{r}
+model_select = m2_zln_raca
+adult_cutoff_mm = 50
+# model_select = m2_zln_ramu
+# model_select = m2_zln_rasi
+# adult_cutoff_mm = 40
+
+# non-metamorph: vary svl_mm, smooth is active
+nd_notmet <- tibble(
+  svl_mm          = seq(min(raca_data$svl_mm, na.rm = TRUE),
+                        max(raca_data$svl_mm, na.rm = TRUE),
+                        length.out = 200),
+  is_metamorph    = 0,
+  is_not_metamorph = 1,
+  precip_mm_30_z  = 0, precip_mm_30_z2 = 0,
+  temp_c_30_z     = 0, temp_c_30_z2    = 0
+)
+
+# metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+nd_met <- tibble(
+  svl_mm           = mean(raca_data$svl_mm, na.rm = TRUE),  # doesn't matter
+  is_metamorph     = 1,
+  is_not_metamorph = 0,
+  precip_mm_30_z   = 0, precip_mm_30_z2 = 0,
+  temp_c_30_z      = 0, temp_c_30_z2    = 0
+)
+
+# non-metamorph
+hu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
+mu_notmet   <- nd_notmet |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
+
+# metamorph — keep all draws for boxplot distribution
+hu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "hu",  re_formula = NA)
+mu_met      <- nd_met    |> add_epred_draws(model_select, dpar = "mu",  re_formula = NA)
+
+# non-metamorph: median + interval over svl sequence
+prev_notmet_agg <- hu_notmet |>
+  mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
+  group_by(svl_mm) |>
+  median_qi(prevalence, .width = 0.89)
+
+mu_notmet_agg <- mu_notmet |>
+  group_by(svl_mm) |>
+  median_qi(mu, .width = 0.89)
+
+# metamorph: keep raw draws for boxplot
+prev_met_draws <- hu_met |>
+  mutate(prevalence = 1 - plogis(hu))
+
+mu_met_draws <- mu_met
+
+# --- prevalence ---
+p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
+  geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
+  labs(x = NULL, y = "Bd Prevalence") +
+  ylim(0, 1) +
+  theme_classic()
+
+p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#8DA0CB", alpha = 0.3) +
+  geom_line(color = "#8DA0CB", linewidth = 1) +
+  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
+  labs(x = "SVL (mm)", y = NULL) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank()
+  )
+
+p_prev <- p_prev_met + p_prev_notmet +
+  plot_layout(widths = c(1, 3)) +
+  plot_annotation(title = "Smooth + fixed effect on Bd prevalence")
+
+# --- mu ---
+# get shared y range first
+mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
+
+p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
+  geom_boxplot(fill = "#FC8D62", alpha = 0.6, outlier.shape = NA) +
+  labs(x = NULL, y = "log(Bd load)") +
+  ylim(mu_ylim) +
+  theme_classic()
+
+p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
+  geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
+  geom_line(color = "#FC8D62", linewidth = 1) +
+  geom_vline(xintercept = adult_cutoff_mm, linetype = "dashed", color = "#666") +
+  labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
+  ylim(mu_ylim) +
+  theme_classic() +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank()
+  )
+
+p_mu <- p_mu_met + p_mu_notmet +
+  plot_layout(widths = c(1, 3)) +
+  plot_annotation(title = "Smooth + fixed effect on Bd load")
+
+p_prev
+p_mu
+
+```
+
+# Recreate groups
+```{r}
+hu_draws_groups = hu_draws %>%
+  mutate(life_stage_simple = case_when(
+    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
+    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
+  ))
+
+mu_draws_groups = mu_draws %>%
+  mutate(life_stage_simple = case_when(
+    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
+    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
+    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
+  ))
+
+hu_groups_agg = hu_draws_groups %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  median_qi(hu, .width = c(.89))
+
+mu_groups_agg = mu_draws_groups %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  median_qi(mu, .width = c(.89))
+
+
+```
