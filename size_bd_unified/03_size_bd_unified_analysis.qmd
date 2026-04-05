@@ -8,6 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer)
 
 # load bd_model_env
+# load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
 load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
 
 bd_model_env_stats = brms_data %>%
@@ -144,7 +145,8 @@ hu_spp_lss_draws = model_select |>
     newdata    = nd_spp_lss,
     dpar       = "hu",
     re_formula = NA
-  )
+  ) %>%
+  ungroup()
 
 hu_spp_draws = hu_spp_lss_draws |>
   group_by(taxon_capture, .draw) |>
@@ -165,7 +167,7 @@ mu_spp_lss_draws = model_select |>
     newdata    = nd_spp_lss,
     dpar       = "mu",
     re_formula = NA
-  )
+  ) %>% ungroup()
 
 mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
   pivot_wider(
@@ -182,7 +184,7 @@ sigma_spp_lss_draws = model_select |>
     newdata    = nd_spp_lss,
     dpar       = "sigma",
     re_formula = NA
-  )
+  ) %>% ungroup()
 
 sigma_spp_draws = sigma_spp_lss_draws |>
   group_by(taxon_capture, .draw) |>
@@ -198,7 +200,7 @@ f_draw_agg <- function(draws, group_vars, agg_var) {
       "{agg_var}_lower_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 1],
       "{agg_var}_upper_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 2],
       "{agg_var}_median"   := median(.data[[agg_var]]),
-      .groups = "drop"
+      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
     )
 }
 
@@ -206,132 +208,161 @@ hu_spp_agg = f_draw_agg(hu_spp_draws, c("taxon_capture"), "hu")
 prevalence_spp_agg = f_draw_agg(hu_spp_draws %>%
                                     mutate(prevalence = 1 - plogis(hu)), c("taxon_capture"), "prevalence")
 sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
-mu_spp_ls_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
-hu_spp_ls_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
+mu_spp_lss_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
+hu_spp_lss_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
+
+# combine
+spp_draws = hu_spp_draws %>%
+  mutate(prevalence = 1 - plogis(hu)) %>%
+  left_join(sigma_spp_draws, by = c(".draw", "taxon_capture"))
+
+spp_lss_draws = hu_spp_lss_draws %>%
+  select(taxon_capture,
+         life_stage_simple,
+         .draw,
+         hu) %>%
+  mutate(prevalence = 1 - plogis(hu)) %>%
+  left_join(mu_spp_lss_draws %>%
+              select(taxon_capture,
+                     life_stage_simple,
+                     .draw,
+                     mu), by = c("taxon_capture", "life_stage_simple", ".draw")) %>%
+  left_join(sigma_spp_lss_draws %>%
+              select(taxon_capture,
+                     life_stage_simple,
+                     .draw,
+                     sigma), by = c("taxon_capture", "life_stage_simple", ".draw"))
+
+
+combined_agg = hu_spp_agg %>%
+  left_join(prevalence_spp_agg, by = "taxon_capture") %>%
+  left_join(sigma_spp_agg, by = "taxon_capture") %>%
+  left_join(hu_spp_lss_contrast_agg, by = "taxon_capture") %>%
+  left_join(mu_spp_lss_contrast_agg, by = c("contrast", "taxon_capture"))
 
 ```
 
 ```{r}
-# load specs
-load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_2026-03-22.RData"))
-load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_ls_2026-03-22.RData"))
-load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_2026-03-22.RData"))
-load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_ls_2026-03-22.RData"))
-load(here("size_bd_unified", "intermediates", "bd_model_unified_sigmaspecs_2026-03-22.RData"))
-
-# hu
-hu_contrasts_specs = contrast(hu_specs_ls, method = "revpairwise")
-
-hu_draws = hu_specs %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(hu = .value) %>%
-  mutate(prevalence = 1 - plogis(hu))
-
-hu_group_draws = hu_specs_ls %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(hu = .value) %>%
-  mutate(prevalence = 1 - plogis(hu))
-
-hu_group_agg = hu_group_draws %>%
-  group_by(taxon_capture) %>%
-  summarize(hdi_50 = tidybayes::hdi(hu, .width = 0.50),
-            hdi_95 = tidybayes::hdi(hu, .width = 0.95),
-            hu_median = median(hu),
-            .groups = "drop")
-
-hu_contrast_draws = hu_contrasts_specs %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(hu_subadult = .value)
-
-hu_contrast_agg = hu_contrast_draws %>%
-  group_by(taxon_capture, contrast) %>%  # check!
-  summarize(hdi_50 = tidybayes::hdi(hu_subadult, .width = 0.50),
-            hdi_95 = tidybayes::hdi(hu_subadult, .width = 0.95),
-            ratio_positive = sum(hu_subadult > 0) / n(),
-            hu_subadult_median = median(hu_subadult),
-            .groups = "drop")
-
-
-# b
-b_contrasts_specs = contrast(b_specs_ls, method = "revpairwise")
-
-b_draws = b_specs %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(b = .value)
-
-b_group_draws = b_specs_ls %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(b = .value)
-
-b_contrast_draws = b_contrasts_specs %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(b_subadult = .value)
-
-b_contrast_agg = b_contrast_draws %>%
-  group_by(taxon_capture) %>%
-  summarize(hdi_50 = tidybayes::hdi(b_subadult, .width = 0.50),
-            hdi_95 = tidybayes::hdi(b_subadult, .width = 0.95),
-            ratio_positive = sum(b_subadult > 0) / n(),
-            b_subadult_median = median(b_subadult),
-            .groups = "drop")
-
-# sigma
-sigma_draws = sigma_specs %>%
-  gather_emmeans_draws() %>%
-  dplyr::rename(sigma = .value)
-
-
-sigma_group_agg = sigma_draws %>%
-  group_by(taxon_capture) %>%
-  reframe(hdi_50 = tidybayes::hdi(sigma, .width = 0.50),
-          hdi_95 = tidybayes::hdi(sigma, .width = 0.95),
-          sigma_median = median(sigma),
-          .groups = "drop")
-
-# combine
-contrast_agg = hu_contrast_agg %>%
-  left_join(b_contrast_agg, by = c("taxon_capture"), suffix = c("_hu", "_b")) %>%
-  mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
-         net_effect_b = ratio_positive_b * 2 - 1,
-         species = get_species_name(taxon_capture))
-
-intercept_draws = hu_draws %>%
-  left_join(b_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture")) %>%
-  left_join(sigma_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture"))
-
-intercept_agg = intercept_draws %>%
-  group_by(taxon_capture) %>%
-  summarize(prevalence_median = median(prevalence),
-            hu_median = median(hu),
-            b_median = median(b),
-            sigma_median = median(sigma),
-            .groups = "drop")
-
-combined_agg = intercept_agg %>%
-  left_join(contrast_agg %>%
-              select(taxon_capture,
-                     hu_subadult_median,
-                     b_subadult_median,
-                     net_effect_hu,
-                     net_effect_b), by = "taxon_capture") %>%
-  mutate(species = get_species_name(taxon_capture))
-
-group_draws = b_group_draws %>%
-  left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
-                                   "life_stage_simple", "taxon_capture"))
-
-group_draws_agg = group_draws %>%
-  group_by(taxon_capture,
-           life_stage_simple) %>%
-  summarize(hu_median = median(hu),
-            hu_hdi = tidybayes::hdi(hu, ci = 0.89),
-            prevalence_median = median(prevalence),
-            b_median = median(b),
-            b_hdi = tidybayes::hdi(b, ci = 0.89),
-            .groups = "drop") %>%
-  mutate(prevalence_hdi_1 = 1 - plogis(hu_hdi[, 2]),
-         prevalence_hdi_2 = 1 - plogis(hu_hdi[, 1]))
-         
+# # load specs
+# load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_2026-03-22.RData"))
+# load(here("size_bd_unified", "intermediates", "bd_model_unified_bspecs_ls_2026-03-22.RData"))
+# load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_2026-03-22.RData"))
+# load(here("size_bd_unified", "intermediates", "bd_model_unified_huspecs_ls_2026-03-22.RData"))
+# load(here("size_bd_unified", "intermediates", "bd_model_unified_sigmaspecs_2026-03-22.RData"))
+# 
+# # hu
+# hu_contrasts_specs = contrast(hu_specs_ls, method = "revpairwise")
+# 
+# hu_draws = hu_specs %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(hu = .value) %>%
+#   mutate(prevalence = 1 - plogis(hu))
+# 
+# hu_group_draws = hu_specs_ls %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(hu = .value) %>%
+#   mutate(prevalence = 1 - plogis(hu))
+# 
+# hu_group_agg = hu_group_draws %>%
+#   group_by(taxon_capture) %>%
+#   summarize(hdi_50 = tidybayes::hdi(hu, .width = 0.50),
+#             hdi_95 = tidybayes::hdi(hu, .width = 0.95),
+#             hu_median = median(hu),
+#             .groups = "drop")
+# 
+# hu_contrast_draws = hu_contrasts_specs %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(hu_subadult = .value)
+# 
+# hu_contrast_agg = hu_contrast_draws %>%
+#   group_by(taxon_capture, contrast) %>%  # check!
+#   summarize(hdi_50 = tidybayes::hdi(hu_subadult, .width = 0.50),
+#             hdi_95 = tidybayes::hdi(hu_subadult, .width = 0.95),
+#             ratio_positive = sum(hu_subadult > 0) / n(),
+#             hu_subadult_median = median(hu_subadult),
+#             .groups = "drop")
+# 
+# 
+# # b
+# b_contrasts_specs = contrast(b_specs_ls, method = "revpairwise")
+# 
+# b_draws = b_specs %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(b = .value)
+# 
+# b_group_draws = b_specs_ls %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(b = .value)
+# 
+# b_contrast_draws = b_contrasts_specs %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(b_subadult = .value)
+# 
+# b_contrast_agg = b_contrast_draws %>%
+#   group_by(taxon_capture) %>%
+#   summarize(hdi_50 = tidybayes::hdi(b_subadult, .width = 0.50),
+#             hdi_95 = tidybayes::hdi(b_subadult, .width = 0.95),
+#             ratio_positive = sum(b_subadult > 0) / n(),
+#             b_subadult_median = median(b_subadult),
+#             .groups = "drop")
+# 
+# # sigma
+# sigma_draws = sigma_specs %>%
+#   gather_emmeans_draws() %>%
+#   dplyr::rename(sigma = .value)
+# 
+# 
+# sigma_group_agg = sigma_draws %>%
+#   group_by(taxon_capture) %>%
+#   reframe(hdi_50 = tidybayes::hdi(sigma, .width = 0.50),
+#           hdi_95 = tidybayes::hdi(sigma, .width = 0.95),
+#           sigma_median = median(sigma),
+#           .groups = "drop")
+# 
+# # combine
+# contrast_agg = hu_contrast_agg %>%
+#   left_join(b_contrast_agg, by = c("taxon_capture"), suffix = c("_hu", "_b")) %>%
+#   mutate(net_effect_hu = ratio_positive_hu * 2 - 1,
+#          net_effect_b = ratio_positive_b * 2 - 1,
+#          species = get_species_name(taxon_capture))
+# 
+# intercept_draws = hu_draws %>%
+#   left_join(b_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture")) %>%
+#   left_join(sigma_draws, by = c(".chain", ".iteration", ".draw", "taxon_capture"))
+# 
+# intercept_agg = intercept_draws %>%
+#   group_by(taxon_capture) %>%
+#   summarize(prevalence_median = median(prevalence),
+#             hu_median = median(hu),
+#             b_median = median(b),
+#             sigma_median = median(sigma),
+#             .groups = "drop")
+# 
+# combined_agg = intercept_agg %>%
+#   left_join(contrast_agg %>%
+#               select(taxon_capture,
+#                      hu_subadult_median,
+#                      b_subadult_median,
+#                      net_effect_hu,
+#                      net_effect_b), by = "taxon_capture") %>%
+#   mutate(species = get_species_name(taxon_capture))
+# 
+# group_draws = b_group_draws %>%
+#   left_join(hu_group_draws, by = c(".chain", ".iteration", ".draw", 
+#                                    "life_stage_simple", "taxon_capture"))
+# 
+# group_draws_agg = group_draws %>%
+#   group_by(taxon_capture,
+#            life_stage_simple) %>%
+#   summarize(hu_median = median(hu),
+#             hu_hdi = tidybayes::hdi(hu, ci = 0.89),
+#             prevalence_median = median(prevalence),
+#             b_median = median(b),
+#             b_hdi = tidybayes::hdi(b, ci = 0.89),
+#             .groups = "drop") %>%
+#   mutate(prevalence_hdi_1 = 1 - plogis(hu_hdi[, 2]),
+#          prevalence_hdi_2 = 1 - plogis(hu_hdi[, 1]))
+#          
 ```
 
 ## Obsevations and predictions
@@ -402,7 +433,7 @@ ggplot(obs_data, aes(y = bd_prevalence, x = life_stage_simple, color = life_stag
   scale_color_brewer(palette = "Set2")
 
 # modeled
-ggplot(group_draws, aes(y = prevalence, x = life_stage_simple, fill = life_stage_simple)) +
+ggplot(spp_lss_draws, aes(y = prevalence, x = life_stage_simple, fill = life_stage_simple)) +
   geom_violin() +
   theme_minimal() +
   facet_wrap("taxon_capture") +
@@ -578,7 +609,7 @@ ggplot(group_draws_agg, aes(y = prevalence_median, ymin = prevalence_hdi_1, ymax
 # mu_spp_ls_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
 # hu_spp_ls_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
 
-p_cascade_hu_contrast_linpred = ggplot(hu_spp_ls_contrast_agg, aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(get_species_name(taxon_capture), hu_contrast_median))) +
+p_cascade_hu_contrast_linpred = ggplot(hu_spp_lss_contrast_agg, aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(get_species_name(taxon_capture), hu_contrast_median))) +
   geom_vline(xintercept = 0, color = "#555") +
   geom_rect(aes(xmin = -hu_contrast_lower_50, xmax = -hu_contrast_upper_50), height = 0.2, color = "#000") +
   geom_pointrange() +
@@ -596,7 +627,7 @@ p_cascade_hu_contrast_linpred = ggplot(hu_spp_ls_contrast_agg, aes(x = -hu_contr
 #        x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
 #        y = "Species")
 
-p_cascade_mu_contrast_linpred = ggplot(mu_spp_ls_contrast_agg, aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(get_species_name(taxon_capture), -mu_contrast_median))) +
+p_cascade_mu_contrast_linpred = ggplot(mu_spp_lss_contrast_agg, aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(get_species_name(taxon_capture), -mu_contrast_median))) +
   geom_vline(xintercept = 0, color = "#555") +
   geom_rect(aes(xmin = mu_contrast_lower_50, xmax = mu_contrast_upper_50), height = 0.2, color = "#000") +
   geom_pointrange() +
