@@ -5,7 +5,7 @@ format: html
 
 # Load data & models
 ```{r}
-librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow)
 
 # load bd_model_env
 # load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
@@ -877,18 +877,6 @@ ggplot(density_mat_all, aes(x = density,
 #| fig-height: 6
 #| fig-width: 8
 
-# 15-day
-# ggplot(brms_data, aes(x = temp_c_15_day_mean, y = precip_mm_15_day_sum, color = life_stage_simple)) +
-#   geom_point(alpha = 0.1) +
-#   stat_ellipse() +
-#   facet_wrap(. ~ taxon_capture) +
-#   xlim(-5, 40) +
-#   ylim(0, 200) +
-#   labs(x = "15-day temperature mean (degC)", 
-#        y = "15-day precipitation total (mm)",
-#        title = "Temperature v. precipitation") +
-#   theme_minimal()
-
 # 10 day precip, 30-day temp by species
 ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_10_day_sum, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
@@ -931,15 +919,6 @@ ggplot(brms_data, aes(x = temp_c_30_sp_z, y = precip_mm_30_sp_z, color = taxon_c
        title = "Temperature v. precipitation") +
   theme_minimal()
 
-
-# ggplot(brms_data, aes(x = temp_c_30_sp_z2, y = precip_mm_30_sp_z2, color = life_stage_simple)) +
-#   geom_point(alpha = 0.1) +
-#   stat_ellipse() +
-#   facet_wrap(. ~ taxon_capture) +
-#   labs(x = "30-day temperature mean (degC)", 
-#        y = "30-day precipitation total (mm)",
-#        title = "Temperature v. precipitation") +
-#   theme_minimal()
 ```
 
 ## Climate
@@ -1000,8 +979,29 @@ mu_agg_precip = mu_draws_precip |>
   median_qi(mu) %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
+agg_precip = hu_agg_precip %>%
+  dplyr::rename(prevalence_lower = .lower,
+                prevalence_upper = .upper,
+                prevalence_width = .width) %>%
+  select(taxon_capture,
+         precip_mm_10_day_sum,
+         prevalence,
+         prevalence_lower,
+         prevalence_upper,
+         prevalence_width) %>%
+  left_join(mu_agg_precip%>%
+              dplyr::rename(mu_lower = .lower,
+                            mu_upper = .upper,
+                            mu_width = .width) %>%
+              select(taxon_capture,
+                     precip_mm_10_day_sum,
+                     mu,
+                     mu_lower,
+                     mu_upper,
+                     mu_width), by = c("taxon_capture", "precip_mm_10_day_sum"))
+
 # visualize
-p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = .lower, ymax = .upper)) +
+p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = prevalence_lower, ymax = prevalene_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1010,7 +1010,7 @@ p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalen
        x = "10-day lag precipitation [mm]",
        y = "Bd prevalence [-]")
 
-p_precip_mu = ggplot(mu_agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = .lower, ymax = .upper)) +
+p_precip_mu = ggplot(mu_agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = mu_lower, ymax = mu_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1075,8 +1075,29 @@ mu_agg_temp = mu_draws_temp |>
   median_qi(mu) %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
+agg_temp = hu_agg_temp %>%
+  dplyr::rename(prevalence_lower = .lower,
+                prevalence_upper = .upper,
+                prevalence_width = .width) %>%
+  select(taxon_capture,
+         temp_c_30_day_mean,
+         prevalence,
+         prevalence_lower,
+         prevalence_upper,
+         prevalence_width) %>%
+  left_join(mu_agg_temp %>%
+              dplyr::rename(mu_lower = .lower,
+                            mu_upper = .upper,
+                            mu_width = .width) %>%
+              select(taxon_capture,
+                     temp_c_30_day_mean,
+                     mu,
+                     mu_lower,
+                     mu_upper,
+                     mu_width), by = c("taxon_capture", "temp_c_30_day_mean"))
+
 # visualize
-p_temp_prev = ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = .lower, ymax = .upper)) +
+p_temp_prev = ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1086,7 +1107,7 @@ p_temp_prev = ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ym
        x = "30-day lag max daily temperature [C]",
        y = "Bd prevalence [-]")
 
-p_temp_mu = ggplot(mu_agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = .lower, ymax = .upper)) +
+p_temp_mu = ggplot(mu_agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = mu_lower, ymax = mu_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1105,5 +1126,20 @@ ggsave(here("size_bd_unified", "unified_figures", "03_temp_mu.png"),
 
 p_temp_prev
 p_temp_mu
+
+```
+
+# Export Essential Data
+```{r}
+# define manuscript destination dir
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/data/01_basic/")
+
+# save essential data
+write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
+write_parquet(spp_lss_draws, paste0(manuscript_data_dir, "unified_03_b_spp_lss_draws.parquet"))
+write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_copmbined_effects_agg.csv"))
+write_parquet(agg_precip, paste0(manuscript_data_dir, "unified_03_d_precipitation_agg.parquet"))
+write_parquet(agg_temp, paste0(manuscript_data_dir, "unified_03_e_temperature_agg.parquet"))
 
 ```
