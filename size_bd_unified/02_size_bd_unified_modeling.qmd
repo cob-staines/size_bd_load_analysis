@@ -37,7 +37,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, bayesplot, cmdstanr, bayestestR, rio)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr, bayestestR, rio)
 
 ```
 
@@ -767,7 +767,8 @@ m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2
                             # m6b_zln,
                             # m6c_zln,
                             # m6d_zln,
-                            m8_zln
+                            # m8_zln,
+                            m9a_zln
                             ))
 ```
 
@@ -782,7 +783,7 @@ m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m8_zln
+model_select = m9a_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
@@ -799,7 +800,7 @@ VarCorr(model_select)
 #| fig-width: 8
 
 color_scheme_set("viridis")
-model_select = m5g_zln
+# model_select = m5g_zln
 
 
 pp_check(model_select,
