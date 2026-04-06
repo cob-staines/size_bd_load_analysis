@@ -22,6 +22,10 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 ```{r}
 env_agg = read_csv(here("data", "unified_env_agg.csv"))
 
+# to_life_stage_simple = function(df, taxa, group_name, svl_min, svl_max) {
+#   df_out = df
+# }
+
 ```
 
 ## RACA
@@ -72,7 +76,7 @@ raca_valid = raca_clean %>%
          project)
 ```
 
-# RAMU/RASI
+# RIBBiTR
 ```{r}
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -95,9 +99,7 @@ bd_sample = db_sample %>%
   left_join(db_site, by = "site_id") %>%
   left_join(db_region, by = "region_id") %>%
   left_join(db_country, by = "country_id") %>%
-  filter(sample_type == "bd",
-         taxon_capture %in% c("rana_muscosa",
-                              "rana_sierrae")) %>%
+  filter(sample_type == "bd") %>%
   inner_join(db_bd %>%
               filter(!is.na(bd_detected)) %>%
               group_by(sample_id) %>%
@@ -111,22 +113,77 @@ site_year_pop = read.csv(here("data", "sn_resilience_trajectory_classification_p
   mutate(site = as.character(site))
 
 # define life stage simple
-bd_life_stage = bd_sample %>%
-  filter(life_stage %in% c("adult",
+bd_life_stage_ranarasi = bd_sample %>%
+  filter(taxon_capture %in% c("rana_muscosa",
+                              "rana_sierrae"),
+         life_stage %in% c("adult",
                            "subadult",
                            NA) |
            tad_stage >= 44) %>%
   mutate(svl_mm = if_else(!is.na(tad_stage) & is.na(svl_mm), 25, svl_mm),
          life_stage_simple = case_when(
-           !is.na(tad_stage) | svl_mm < 30 ~ "metamorph",
+           !is.na(tad_stage) | (svl_mm >= 20) & svl_mm < 30 ~ "metamorph",
            (svl_mm >= 40) ~ "adult",
-           (svl_mm < 40) ~ "subadult",
+           (svl_mm >= 20) & (svl_mm < 40) ~ "subadult",
            .default = NA),
-         svl_mm = if_else(life_stage_simple == "metamorph" & is.na(svl_mm), 25, svl_mm),
-         year = year(date)) %>%
-  filter(!is.na(life_stage_simple))
+         svl_mm = if_else(life_stage_simple == "metamorph" & is.na(svl_mm), 25, svl_mm)) %>%
+  filter(!is.na(life_stage_simple)) %>%
+  mutate(year = year(date))
 
-ranarasi_valid = bd_life_stage %>%
+bd_life_stage_panama = bd_sample %>%
+  filter(taxon_capture %in% c("colostethus_panamansis",
+                              "lithobates_warszewitschii",
+                              "silverstoneia_flotator"),
+         life_stage != "tadpole") %>%
+  mutate(life_stage_simple = case_when(
+    life_stage == "metamorphosed" ~ "metamorph",
+    ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 18.8) & (svl_mm < 50)) ~ "adult",
+    ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 10) & (svl_mm < 18.8)) ~ "subadult",
+    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 35) & (svl_mm < 100)) ~ "adult",
+    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 10) & (svl_mm < 35)) ~ "subadult",
+    ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 15.1) & (svl_mm < 25)) ~ "adult",
+    ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 8) & (svl_mm < 15.1)) ~ "subadult",
+    .default = NA),
+    svl_mm = case_when(
+      taxon_capture == "colostethus_panamansis" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 12,
+      taxon_capture == "lithobates_warszewitschii" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 20,
+      taxon_capture == "silverstoneia_flotator" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 10,
+      .default = svl_mm),
+    population = region) %>%
+  filter(!is.na(svl_mm),
+         !is.na(life_stage_simple)) %>%
+  mutate(year = year(date))
+
+bd_life_stage_nae = bd_sample %>%
+  filter(taxon_capture %in% c("rana_catesbeiana",
+                              "rana_pipiens",
+                              "rana_clamitans",
+                              "pseudacris_crucifer"),
+         !(life_stage %in% c("larva", "larvae", "tadpole"))) %>%
+  mutate(life_stage_simple = case_when(
+    life_stage == "metamorph" ~ "metamorph",
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 20) & (svl_mm < 40)) ~ "adult",
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 5) & (svl_mm < 20)) ~ "subadult",
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 95) & (svl_mm < 200)) ~ "adult",
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 10) & (svl_mm < 95)) ~ "subadult",
+    ((taxon_capture == "rana_clamitans") & (svl_mm >= 60) & (svl_mm < 110)) ~ "adult",
+    ((taxon_capture == "rana_clamitans") & (svl_mm >= 10) & (svl_mm < 60)) ~ "subadult",
+    ((taxon_capture == "rana_pipiens") & (svl_mm >= 51) & (svl_mm < 100)) ~ "adult",
+    ((taxon_capture == "rana_pipiens") & (svl_mm >= 10) & (svl_mm < 51)) ~ "subadult",
+    .default = NA),
+    svl_mm = case_when(
+      taxon_capture == "pseudacris_crucifer" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 13,
+      taxon_capture == "rana_catesbeiana" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 30,
+      taxon_capture == "rana_clamitans" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 28,
+      taxon_capture == "rana_pipiens" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 25,
+      .default = svl_mm),
+    population = site) %>%
+  filter(!is.na(svl_mm),
+         !is.na(life_stage_simple)) %>%
+  mutate(year = year(date))
+
+
+ranarasi_valid = bd_life_stage_ranarasi %>%
   filter(site %in% site_year_pop$site) %>%
   select(sample_id,
          bd_its1_copies_per_swab,
@@ -148,8 +205,51 @@ ranarasi_valid = bd_life_stage %>%
   collect() %>%
   left_join(site_year_pop, by = c("site", "year")) %>%
   filter(!is.na(bd_its1_copies_per_swab)) %>%
-  mutate(project = "MLRG")
+  mutate(year = year(date))
 
+panama_valid = bd_life_stage_panama %>%
+  select(sample_id,
+         bd_its1_copies_per_swab,
+         sample_name,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         tad_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         date,
+         year,
+         site,
+         site_id,
+         population,
+         region,
+         country) %>%
+  collect() %>%
+  filter(!is.na(bd_its1_copies_per_swab))
+
+nae_valid = bd_life_stage_nae %>%
+  select(sample_id,
+         bd_its1_copies_per_swab,
+         sample_name,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         tad_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         date,
+         year,
+         site,
+         site_id,
+         population,
+         region,
+         country) %>%
+  collect() %>%
+  filter(!is.na(bd_its1_copies_per_swab))
 
 ```
 
@@ -157,14 +257,18 @@ ranarasi_valid = bd_life_stage %>%
 # Combine data
 ```{r}
 col_compare = compare_df_cols(ranarasi_valid,
-                              raca_valid)
+                              raca_valid,
+                              panama_valid,
+                              nae_valid)
 
 brms_data = bind_rows(ranarasi_valid,
-                      raca_valid) %>%
+                      raca_valid,
+                      panama_valid,
+                      nae_valid) %>%
   left_join(env_agg %>%
               select(date,
                      site,
-                     precip_mm_30_day_sum,
+                     precip_mm_10_day_sum,
                      temp_c_30_day_mean), by = c("site", "date")) %>%
   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")),
          is_metamorph = as.numeric(life_stage_simple == "metamorph"),
@@ -175,13 +279,11 @@ brms_data = bind_rows(ranarasi_valid,
          bd_detected_co = bd_load_co > 0,
          bd_load_co_density = bd_load_co / svl_mm) %>%
   mutate(
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)),
-    precip_mm_30_z2 = as.numeric(scale(precip_mm_30_day_sum ^ 2, center = TRUE, scale = TRUE)),
-    temp_c_30_z2 = as.numeric(scale(temp_c_30_day_mean ^ 2, center = TRUE, scale = TRUE)))
+    precip_mm_10_z = as.numeric(scale(precip_mm_10_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)))
 
 # check for good alignment with environmental data
-env_alignment_check = any(is.na(brms_data$precip_mm_30_day_sum)) | any(is.na(brms_data$temp_c_30_day_mean))
+env_alignment_check = any(is.na(brms_data$precip_mm_10_day_sum)) | any(is.na(brms_data$temp_c_30_day_mean))
 
 save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))
 
@@ -192,6 +294,6 @@ save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_ga
 
 ggplot(brms_data, aes(x = svl_mm, color = life_stage_simple)) +
   geom_histogram() +
-  facet_wrap("taxon_capture")
-
+  facet_wrap("taxon_capture",
+             scale = "free")
 ```

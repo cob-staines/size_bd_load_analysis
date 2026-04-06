@@ -23,60 +23,167 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-05.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-06.RData"))
+
+species_list = brms_data %>%
+  select(taxon_capture) %>%
+           distinct() %>%
+  arrange(taxon_capture)
 
 raca_data = brms_data %>%
   filter(taxon_capture == "rana_cascadae")
 ramu_data = brms_data %>%
-  filter(taxon_capture == "rana_muscosa",
-         svl_mm >= 20)
+  filter(taxon_capture == "rana_muscosa")
 rasi_data = brms_data %>%
-  filter(taxon_capture == "rana_sierrae",
-         svl_mm >= 20)
+  filter(taxon_capture == "rana_sierrae")
+racb_data = brms_data %>%
+  filter(taxon_capture == "rana_catesbeiana")
+rapi_data = brms_data %>%
+  filter(taxon_capture == "rana_pipiens")
+racl_data = brms_data %>%
+  filter(taxon_capture == "rana_clamitans")
+pscr_data = brms_data %>%
+  filter(taxon_capture == "pseudacris_crucifer")
+copa_data = brms_data %>%
+  filter(taxon_capture == "colostethus_panamansis")
+liwa_data = brms_data %>%
+  filter(taxon_capture == "lithobates_warszewitschii")
+sifl_data = brms_data %>%
+  filter(taxon_capture == "silverstoneia_flotator")
 
 ```
 
 # Load unified model
 
 ```{r}
-full_model = readRDS(file = here( "size_bd_unified/unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds"))
+# m9a_zln
+unified_model = readRDS(file = here("size_bd_unified", "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds"))
 
-## Run below, not yet tried!
+# hu
 
-# Returns global fixed + random deviation for every taxon
-taxon_coefs <- coef(full_model, summary = TRUE)$taxon_capture
+taxon_linear_hu <- spread_draws(unified_model,
+    b_hu_precip_mm_10_z,
+    b_hu_temp_c_30_z,
+    r_taxon_capture__hu[taxon_capture, term]
+  ) |>
+  filter(taxon_capture %in% species_list$taxon_capture) |>
+  pivot_wider(names_from = term, values_from = r_taxon_capture__hu) |>
+  mutate(
+    precip_linear_total = b_hu_precip_mm_10_z + precip_mm_10_z,
+    temp_linear_total   = b_hu_temp_c_30_z + temp_c_30_z
+  ) |>
+  group_by(taxon_capture) |>
+  summarise(
+    precip_linear_hu_mean = mean(precip_linear_total),
+    precip_linear_hu_sd   = sd(precip_linear_total),
+    temp_linear_hu_mean   = mean(temp_linear_total),
+    temp_linear_hu_sd     = sd(temp_linear_total)
+  )
 
-# Extract precip terms for all taxa
-precip_linear_all <- taxon_coefs[, , "precip_mm_10_z"]      # rows = taxa, cols = Estimate/Est.Error/Q2.5/Q97.5
-precip_quad_all   <- taxon_coefs[, , "Iprecip_mm_10_zE2"]
-temp_linear_all   <- taxon_coefs[, , "temp_c_30_z"]
-temp_quad_all     <- taxon_coefs[, , "Itemp_c_30_zE2"]
+fixed_quad_hu <- spread_draws(unified_model,
+    b_hu_Iprecip_mm_10_zE2,
+    b_hu_Itemp_c_30_zE2
+  ) |>
+  summarise(
+    precip_quad_hu_mean = mean(b_hu_Iprecip_mm_10_zE2),
+    precip_quad_hu_sd   = sd(b_hu_Iprecip_mm_10_zE2),
+    temp_quad_hu_mean   = mean(b_hu_Itemp_c_30_zE2),
+    temp_quad_hu_sd     = sd(b_hu_Itemp_c_30_zE2)
+  )
 
-# For a specific taxon
-precip_linear_all["rana_cascadae", ]
-#   Estimate Est.Error      Q2.5     Q97.5
-#   ...
+# b
+taxon_weather_hu = taxon_linear_hu %>%
+  cross_join(fixed_quad_hu)
 
+taxon_linear_b <- spread_draws(unified_model,
+    b_precip_mm_10_z,
+    b_temp_c_30_z,
+    r_taxon_capture[taxon_capture, term]
+  ) |>
+  filter(taxon_capture %in% species_list$taxon_capture) |>
+  pivot_wider(names_from = term, values_from = r_taxon_capture) |>
+  mutate(
+    precip_linear_total = b_precip_mm_10_z + precip_mm_10_z,
+    temp_linear_total   = b_temp_c_30_z + temp_c_30_z
+  ) |>
+  group_by(taxon_capture) |>
+  summarise(
+    precip_linear_b_mean = mean(precip_linear_total),
+    precip_linear_b_sd   = sd(precip_linear_total),
+    temp_linear_b_mean   = mean(temp_linear_total),
+    temp_linear_b_sd     = sd(temp_linear_total)
+  )
 
-# example for a given species
-sp_prior <- c(
-  prior(normal(precip_linear_all["rana_cascadae", "Estimate"],
-               precip_linear_all["rana_cascadae", "Est.Error"]),
-        class = "b", coef = "precip_mm_10_z"),
-  
-  prior(normal(precip_quad_all["rana_cascadae", "Estimate"],
-               precip_quad_all["rana_cascadae", "Est.Error"]),
-        class = "b", coef = "Iprecip_mm_10_zE2"),
-  
-  # repeat for temp terms and hu submodel
-)
+fixed_quad_b <- spread_draws(unified_model,
+    b_Iprecip_mm_10_zE2,
+    b_Itemp_c_30_zE2
+  ) |>
+  summarise(
+    precip_quad_b_mean = mean(b_Iprecip_mm_10_zE2),
+    precip_quad_b_sd   = sd(b_Iprecip_mm_10_zE2),
+    temp_quad_b_mean   = mean(b_Itemp_c_30_zE2),
+    temp_quad_b_sd     = sd(b_Itemp_c_30_zE2)
+  )
 
+taxon_weather_b = taxon_linear_b %>%
+  cross_join(fixed_quad_b)
+
+taxon_weather = taxon_weather_hu %>%
+  left_join(taxon_weather_b, by = "taxon_capture")
 ```
 
 # Modeling
 ## Model setup
 ```{r}
+# build prior
 
+build_spp_prior <- function(species, taxon_weather) {
+  
+  spp_weather <- taxon_weather |> filter(taxon_capture == species)
+  
+  # Extract all values first as plain numerics
+  pl_b_m  <- spp_weather$precip_linear_b_mean
+  pl_b_s  <- spp_weather$precip_linear_b_sd
+  pq_b_m  <- spp_weather$precip_quad_b_mean
+  pq_b_s  <- spp_weather$precip_quad_b_sd
+  tl_b_m  <- spp_weather$temp_linear_b_mean
+  tl_b_s  <- spp_weather$temp_linear_b_sd
+  tq_b_m  <- spp_weather$temp_quad_b_mean
+  tq_b_s  <- spp_weather$temp_quad_b_sd
+
+  pl_hu_m <- spp_weather$precip_linear_hu_mean
+  pl_hu_s <- spp_weather$precip_linear_hu_sd
+  pq_hu_m <- spp_weather$precip_quad_hu_mean
+  pq_hu_s <- spp_weather$precip_quad_hu_sd
+  tl_hu_m <- spp_weather$temp_linear_hu_mean
+  tl_hu_s <- spp_weather$temp_linear_hu_sd
+  tq_hu_m <- spp_weather$temp_quad_hu_mean
+  tq_hu_s <- spp_weather$temp_quad_hu_sd
+
+  sp_prior <- c(
+    # mu submodel (class = "b")
+    prior_string(paste0("normal(", pl_b_m, ",", pl_b_s, ")"),
+                 class = "b", coef = "precip_mm_10_z"),
+    prior_string(paste0("normal(", pq_b_m, ",", pq_b_s, ")"),
+                 class = "b", coef = "Iprecip_mm_10_zE2"),
+    prior_string(paste0("normal(", tl_b_m, ",", tl_b_s, ")"),
+                 class = "b", coef = "temp_c_30_z"),
+    prior_string(paste0("normal(", tq_b_m, ",", tq_b_s, ")"),
+                 class = "b", coef = "Itemp_c_30_zE2"),
+
+    # hu submodel (class = "b", dpar = "hu")
+    prior_string(paste0("normal(", pl_hu_m, ",", pl_hu_s, ")"),
+                 class = "b", dpar = "hu", coef = "precip_mm_10_z"),
+    prior_string(paste0("normal(", pq_hu_m, ",", pq_hu_s, ")"),
+                 class = "b", dpar = "hu", coef = "Iprecip_mm_10_zE2"),
+    prior_string(paste0("normal(", tl_hu_m, ",", tl_hu_s, ")"),
+                 class = "b", dpar = "hu", coef = "temp_c_30_z"),
+    prior_string(paste0("normal(", tq_hu_m, ",", tq_hu_s, ")"),
+                 class = "b", dpar = "hu", coef = "Itemp_c_30_zE2")
+  )
+  
+  return(sp_prior)
+}
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
@@ -88,23 +195,23 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 #| code-summary: "Show model fitting code"
 
 # null model
-null_zln <- brm(
-  bd_load_co_density ~ 1,
-  data = brms_data,
-  family = hurdle_lognormal(),
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains = 4,
-  iter = 2000,
-  warmup = 1000,
-  seed = 124,
-  cores = 4,
-  backend = "cmdstanr"
-)
-
-null_zln <- add_criterion(null_zln, "loo")
-
-saveRDS(null_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
-null_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
+# null_zln <- brm(
+#   bd_load_co_density ~ 1,
+#   data = brms_data,
+#   family = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains = 4,
+#   iter = 2000,
+#   warmup = 1000,
+#   seed = 124,
+#   cores = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# null_zln <- add_criterion(null_zln, "loo")
+# 
+# saveRDS(null_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
+# null_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rds"))
 
 # m1_zln <- brm(
 #   formula  =  bf(
@@ -127,58 +234,110 @@ null_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_null.rd
 # 
 # saveRDS(m1_zln, file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
 # m1_zln = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m1.rds"))
+# 
+# # RACA
+# m2_formula = bf(
+#     bd_load_co_density ~ is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+#     hu ~  is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
+#     sigma ~ 1 +  (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2)
+#   )
+# 
+# m2_zln_raca <- brm(
+#   formula  =  m2_formula,
+#   data     = raca_data,
+#   family   = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains = 4, iter = 2000, warmup = 1000,
+#   seed = 124, cores = 4, backend = "cmdstanr"
+# )
+# 
+# m2_zln_raca <- add_criterion(m2_zln_raca, "loo")
+# 
+# saveRDS(m2_zln_raca, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+# m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
+# 
+# # RAMU
+# m2_zln_ramu <- brm(
+#   formula  =  m2_formula,
+#   data     = ramu_data,
+#   family   = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains = 4, iter = 2000, warmup = 1000,
+#   seed = 124, cores = 4, backend = "cmdstanr"
+# )
+# 
+# m2_zln_ramu <- add_criterion(m2_zln_ramu, "loo")
+# 
+# saveRDS(m2_zln_ramu, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+# m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
+# 
+# # RASI
+# m2_zln_rasi <- brm(
+#   formula  =  m2_formula,
+#   data     = rasi_data,
+#   family   = hurdle_lognormal(),
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains = 4, iter = 2000, warmup = 1000,
+#   seed = 124, cores = 4, backend = "cmdstanr"
+# )
+# 
+# m2_zln_rasi <- add_criterion(m2_zln_rasi, "loo")
+# 
+# saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
+# m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
 
-# RACA
-m2_formula = bf(
-    bd_load_co_density ~ is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
-    hu ~  is_metamorph + s(svl_mm, by = is_not_metamorph) + (1 | population:taxon_capture) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2),
-    sigma ~ 1 +  (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2)
+
+m3_formula = bf(
+  bd_load_co_density ~ 1 +
+    is_metamorph + s(svl_mm, by = is_not_metamorph) +
+    (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) + 
+    (1 | population:life_stage_simple),
+  hu ~ 1 +
+    is_metamorph + s(svl_mm, by = is_not_metamorph) +
+    (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) + 
+    (1 | population:life_stage_simple),
+  sigma ~ 1 +
+    (1 | population)
+)
+
+model_svl_by_species = function(model_data, taxon_weather) {
+  # check model_data
+  species_name = unique(model_data$taxon_capture)
+  if (length(species_name) > 1) {
+    stop("Multiple taxon_capture values found in model_data, aborting.")
+  }
+  cat(paste0("Modeling Bd vs SVL for: ", species_name), "\n")
+  
+  m3_spp_prior = build_spp_prior(species_name, taxon_weather)
+  
+  m3_zln <- brm(
+    formula  =  m3_formula,
+    data     = model_data,
+    family   = hurdle_lognormal(),
+    prior = m3_spp_prior,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    chains = 4, iter = 2000, warmup = 1000,
+    seed = 124, cores = 4, backend = "cmdstanr"
   )
+  
+  cat("Adding LOO...\n")
+  m3_zln <- add_criterion(m3_zln, "loo")
+  
+  cat("Saving model...\n")
+  saveRDS(m3_zln, file = here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", species_name, ".rds")))
+  cat("Done.\n")
+}
 
-m2_zln_raca <- brm(
-  formula  =  m2_formula,
-  data     = raca_data,
-  family   = hurdle_lognormal(),
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains = 4, iter = 2000, warmup = 1000,
-  seed = 124, cores = 4, backend = "cmdstanr"
-)
-
-m2_zln_raca <- add_criterion(m2_zln_raca, "loo")
-
-saveRDS(m2_zln_raca, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
-m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
-
-# RAMU
-m2_zln_ramu <- brm(
-  formula  =  m2_formula,
-  data     = ramu_data,
-  family   = hurdle_lognormal(),
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains = 4, iter = 2000, warmup = 1000,
-  seed = 124, cores = 4, backend = "cmdstanr"
-)
-
-m2_zln_ramu <- add_criterion(m2_zln_ramu, "loo")
-
-saveRDS(m2_zln_ramu, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
-m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
-
-# RASI
-m2_zln_rasi <- brm(
-  formula  =  m2_formula,
-  data     = rasi_data,
-  family   = hurdle_lognormal(),
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains = 4, iter = 2000, warmup = 1000,
-  seed = 124, cores = 4, backend = "cmdstanr"
-)
-
-m2_zln_rasi <- add_criterion(m2_zln_rasi, "loo")
-
-saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
-m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
-
+model_svl_by_species(copa_data, taxon_weather)
+model_svl_by_species(liwa_data, taxon_weather)
+model_svl_by_species(pscr_data, taxon_weather)
+model_svl_by_species(raca_data, taxon_weather)
+model_svl_by_species(racb_data, taxon_weather)
+model_svl_by_species(racl_data, taxon_weather)
+model_svl_by_species(ramu_data, taxon_weather)
+model_svl_by_species(rapi_data, taxon_weather)
+model_svl_by_species(rasi_data, taxon_weather)
+model_svl_by_species(sifl_data, taxon_weather)
 
 
 ```
