@@ -27,6 +27,13 @@ bd_model_env_stats = brms_data %>%
   arrange(country,
           taxon_capture)
 
+bd_model_env_stats_sub = bd_model_env_stats %>%
+  select(taxon_capture,
+         country,
+         regions,
+         adult_n,
+         subadult_n)
+
 # load models
 null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
 m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
