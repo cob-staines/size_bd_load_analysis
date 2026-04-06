@@ -14,44 +14,8 @@ librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork)
 
 ```
 
-# Load data
-```{r}
-
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-06.RData"))
-
-species_list = brms_data %>%
-  select(taxon_capture) %>%
-           distinct()
-
-raca_data = brms_data %>%
-  filter(taxon_capture == "rana_cascadae")
-ramu_data = brms_data %>%
-  filter(taxon_capture == "rana_muscosa")
-rasi_data = brms_data %>%
-  filter(taxon_capture == "rana_sierrae")
-racb_data = brms_data %>%
-  filter(taxon_capture == "rana_catesbeiana")
-rapi_data = brms_data %>%
-  filter(taxon_capture == "rana_pipiens")
-racl_data = brms_data %>%
-  filter(taxon_capture == "rana_clamitans")
-pscr_data = brms_data %>%
-  filter(taxon_capture == "pseudacris_crucifer")
-copa_data = brms_data %>%
-  filter(taxon_capture == "colostethus_panamansis")
-liwa_data = brms_data %>%
-  filter(taxon_capture == "lithobates_warszewitschii")
-sifl_data = brms_data %>%
-  filter(taxon_capture == "silverstoneia_flotator")
-
-```
-
 # load models
 ```{r}
-# m2_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_raca.rds"))
-# m2_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_ramu.rds"))
-# m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
-
 m3_zln_copa = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_colostethus_panamansis.rds"))
 m3_zln_liwa = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_lithobates_warszewitschii.rds"))
 m3_zln_pscr = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_pseudacris_crucifer.rds"))
