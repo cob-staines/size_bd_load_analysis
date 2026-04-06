@@ -9,7 +9,7 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rs
 
 # load bd_model_env
 # load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
-load(here("data", "bd_model_env_unified_2026-03-22.RData")) 
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
 
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
@@ -29,9 +29,9 @@ bd_model_env_stats = brms_data %>%
 
 # load models
 null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
-m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
 
-model_select = m5g_zln
+model_select = m9a_zln
 ```
 
 ## Define analysis functions
@@ -135,8 +135,18 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
 ### Linpred Draws
 ```{r}
 
+# define linpred data
+nd_env_subadult = model_select$data %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarize(precip_mm_10_z = median(precip_mm_10_z),
+            temp_c_30_z = median(temp_c_30_z),
+            .groups = "drop") %>%
+  filter(life_stage_simple == "subadult")
+
 nd_spp_lss = model_select$data |>
-  distinct(taxon_capture, life_stage_simple)
+  distinct(taxon_capture, life_stage_simple) %>%
+  left_join(nd_env_subadult %>%
+              select(-life_stage_simple), by = "taxon_capture")
 
 
 # hu contrast
@@ -368,14 +378,14 @@ combined_agg = hu_spp_agg %>%
 ## Obsevations and predictions
 ```{r}
 
-# epred draws
-newdata_basic = expand_grid(taxon_capture = sort(unique(brms_data$taxon_capture)),
-                            life_stage_simple = c("subadult",
-                                                  "adult")) %>%
-  mutate(precip_mm_30_z = 0,
-         precip_mm_30_z2 = 0,
-         temp_c_30_z = 0,
-         temp_c_30_z2 = 0)
+# # epred draws
+# newdata_basic = expand_grid(taxon_capture = sort(unique(brms_data$taxon_capture)),
+#                             life_stage_simple = c("subadult",
+#                                                   "adult")) %>%
+#   mutate(precip_mm_30_z = 0,
+#          precip_mm_30_z2 = 0,
+#          temp_c_30_z = 0,
+#          temp_c_30_z2 = 0)
 
 # # way too big, limit to 50 draws!
 # epred_original = epred_draws(model_select,
@@ -385,7 +395,7 @@ newdata_basic = expand_grid(taxon_capture = sort(unique(brms_data$taxon_capture)
 #   dplyr::rename(bd_load_density_epred = .epred)
 
 epred_fixed = epred_draws(model_select,
-                          newdata = newdata_basic,
+                          newdata = nd_spp_lss,
                           re_formula = NA) %>%
   dplyr::rename(bd_load_density_epred = .epred)
 
@@ -488,28 +498,28 @@ ggplot(epred_fixed, aes(y = bd_load_density_epred, x = life_stage_simple, fill =
 #| fig-width: 12
 
 
-# visualize draws
-ggplot(group_draws, aes(x = prevalence, y = b, color = life_stage_simple)) +
+# scatterplot draws
+ggplot(spp_lss_draws, aes(x = prevalence, y = mu, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 # single parameter distributions
-ggplot(group_draws, aes(y = prevalence, x = life_stage_simple, color = life_stage_simple)) +
+ggplot(spp_lss_draws, aes(y = prevalence, x = life_stage_simple, color = life_stage_simple)) +
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
-ggplot(group_draws, aes(y = b, x = life_stage_simple, color = life_stage_simple)) +
+ggplot(spp_lss_draws, aes(y = mu, x = life_stage_simple, color = life_stage_simple)) +
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) +
   theme_minimal() +
   facet_wrap("taxon_capture") +
   scale_color_brewer(palette = "Set2")
 
 # visualize contrasts
-ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
+ggplot(hu_spp_lss_contrast_draws, aes(x = hu_contrast)) +
   stat_halfeye(fill = "#66c2a5",
                .width = c(0.5, 0.95),
                point_interval = mode_hdi) +
@@ -522,7 +532,7 @@ ggplot(hu_contrast_draws, aes(x = hu_subadult)) +
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
-ggplot(b_contrast_draws, aes(x = b_subadult)) +
+ggplot(mu_spp_lss_contrast_draws, aes(x = mu_contrast)) +
     stat_halfeye(fill = "#8da0cb",
                .width = c(0.5, 0.95),
                point_interval = mode_hdi) +
@@ -535,8 +545,8 @@ ggplot(b_contrast_draws, aes(x = b_subadult)) +
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
-# probability of positive effect
-p_net_effect_scatter = ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effect_b)) +
+# net effect scatter
+p_net_effect_scatter = ggplot(combined_agg, aes(x = -hu_contrast_net_effect, y = mu_contrast_net_effect)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
@@ -548,8 +558,8 @@ p_net_effect_scatter = ggplot(contrast_agg, aes(x = -net_effect_hu, y = net_effe
   theme_minimal() +
   labs(
        title = "Net Subadult Effect (Subadult - Adult)",
-       x = "Contrast of log odds of Bd detection\n(subadult - adult) [-]",
-       y = "Contrast of log Bd load density\n(subadult - adult) [-]") +
+       x = "Net contrast of log odds of Bd detection\n(subadult - adult) [-]",
+       y = "Net contrast of log Bd load density\n(subadult - adult) [-]") +
   scale_color_brewer(palette = "Set2")
 
 ggsave(here("size_bd_unified", "unified_figures", "03_net_effect_scatter.png"),
@@ -558,7 +568,8 @@ ggsave(here("size_bd_unified", "unified_figures", "03_net_effect_scatter.png"),
 
 p_net_effect_scatter
 
-ggplot(combined_agg, aes(x = -hu_subadult_median, y = b_subadult_median)) +
+# median effect scatter of contrast
+ggplot(combined_agg, aes(x = -hu_contrast_median, y = mu_contrast_median)) +
   geom_vline(xintercept = 0, color = "#aaa") +
   geom_hline(yintercept = 0, color = "#aaa") + 
   geom_point() +
@@ -567,10 +578,11 @@ ggplot(combined_agg, aes(x = -hu_subadult_median, y = b_subadult_median)) +
   theme_minimal() +
   labs(
        title = "Median Subadult Effect (Subadult - Adult)",
-       x = "Bd Prevalence (log scale) [-]",
-       y = "Bd Load Density (logit scale) [-]") +
+       x = "Median contrast of log odds of Bd detection\n(subadult - adult) [-]",
+       y = "Median contrast of log Bd load density\n(subadult - adult) [-]") +
   scale_color_brewer(palette = "Set2")
 
+# median effect scatter
 ggplot(combined_agg, aes(x = prevalence_median, y = sigma_median)) +
   geom_point() +
   geom_text_repel(aes(label = taxon_capture),
@@ -583,7 +595,7 @@ ggplot(combined_agg, aes(x = prevalence_median, y = sigma_median)) +
        ) +
   scale_color_brewer(palette = "Set2")
 
-ggplot(combined_agg, aes(x = hu_subadult_median, y = hu_median)) +
+ggplot(combined_agg, aes(x = hu_contrast_median, y = hu_median)) +
   geom_point() +
   geom_text_repel(aes(label = taxon_capture),
                   color = "#888") +
@@ -594,11 +606,6 @@ ggplot(combined_agg, aes(x = hu_subadult_median, y = hu_median)) +
        y = "Median hu [-]"
        ) +
   scale_color_brewer(palette = "Set2")
-
-ggplot(group_draws_agg, aes(y = prevalence_median, ymin = prevalence_hdi_1, ymax = prevalence_hdi_2, x = taxon_capture, color = life_stage_simple)) +
-  geom_pointrange(position = position_dodge(width = 0.7)) +
-  theme_minimal() +
-  coord_flip()
 
 ```
 
@@ -710,8 +717,8 @@ p_cascade_sigma_linpred
 simple_cor = cor_mat(combined_agg %>%
                        select(hu_median,
                               sigma_median,
-                              hu_subadult_median,
-                              b_subadult_median), method = "spearman")
+                              hu_contrast_median,
+                              mu_contrast_median), method = "spearman")
 
 cor_get_pval(simple_cor)
 
@@ -760,10 +767,19 @@ species_list_j = bd_model_env_stats %>%
 
 # Prune to species list
 jp_pruned = keep.tip(jp_raw, species_list_j$jp_sn)
+
 combined_agg_j = combined_agg %>%
   left_join(species_list_j %>%
               select(taxon_capture,
-                     jp_sn), by = "taxon_capture")
+                     jp_sn), by = "taxon_capture") %>%
+  select(taxon_capture,
+         jp_sn,
+         hu_median,
+         prevalence_median,
+         sigma_median,
+         hu_contrast_median,
+         mu_contrast_median) %>%
+  distinct()
 
 # Ccheck plot
 plotTree(jp_pruned, fsize = 0.8)
@@ -776,199 +792,9 @@ table(sapply(1:jp_pruned$Nnode, function(n) {
 
 ```
 
-<!-- ### Create -->
-<!-- ```{r} -->
-<!-- gene_marker <- "16S" -->
-<!-- species_list = bd_model_env_stats %>% -->
-<!--   mutate(species = get_species_name(taxon_capture)) %>% -->
-<!--   pull(species) -->
-
-<!-- taxon_list = bd_model_env_stats %>% -->
-<!--   pull(taxon_capture) -->
-
-<!-- fetch_sequence_reproducible <- function(species, marker, max_seqs = 10,  -->
-<!--                                         min_length = 100, -->
-<!--                                         target_min = 400, -->
-<!--                                         target_max = 700) { -->
-<!--   query <- paste0(species, "[Organism] AND (", marker, "[Title] OR ",  -->
-<!--                   marker, "[All Fields])") -->
-<!--   search <- entrez_search(db = "nucleotide", term = query, retmax = max_seqs) -->
-
-<!--   if (length(search$ids) == 0) { -->
-<!--     message("No sequence found for: ", species) -->
-<!--     return(NULL) -->
-<!--   } -->
-
-<!--   seqs <- entrez_fetch(db = "nucleotide", id = search$ids, rettype = "fasta") -->
-
-<!--   tmp <- tempfile(fileext = ".fasta") -->
-<!--   writeLines(seqs, tmp) -->
-
-<!--   dna <- tryCatch( -->
-<!--     read.dna(tmp, format = "fasta"), -->
-<!--     error = function(e) { message("Failed to parse FASTA for: ", species); return(NULL) } -->
-<!--   ) -->
-
-<!--   if (is.null(dna)) return(NULL) -->
-<!--   if (is.matrix(dna)) dna <- as.list(dna) -->
-
-<!--   # Filter by minimum length -->
-<!--   lengths <- sapply(dna, length) -->
-<!--   dna <- dna[lengths >= min_length] -->
-
-<!--   if (length(dna) == 0) { -->
-<!--     message("No sequences above min_length for: ", species) -->
-<!--     return(NULL) -->
-<!--   } -->
-
-<!--   lengths <- sapply(dna, length) -->
-
-<!--   # Try preferred length range first -->
-<!--   in_range <- dna[lengths >= target_min & lengths <= target_max] -->
-
-<!--   if (length(in_range) > 0) { -->
-<!--     range_lengths <- sapply(in_range, length) -->
-<!--     selected <- in_range[which.max(range_lengths)] -->
-<!--     label <- "preferred range" -->
-<!--   } else { -->
-<!--     # Fall back to longest available -->
-<!--     selected <- dna[which.max(lengths)] -->
-<!--     label <- "fallback longest" -->
-<!--   } -->
-
-<!--   # Log the selected accession for reproducibility -->
-<!--   message(species, " [", label, "]: ",  -->
-<!--           sapply(selected, length), "bp — ", names(selected)) -->
-
-<!--   return(selected) -->
-<!-- } -->
-
-<!-- # Run and capture selection log -->
-<!-- raw_seqs <- lapply(species_list, function(sp) { -->
-<!--   Sys.sleep(0.4) -->
-<!--   fetch_sequence_reproducible(sp, marker = gene_marker, max_seqs = 50) -->
-<!-- }) -->
-<!-- names(raw_seqs) <- species_list -->
-<!-- raw_seqs <- Filter(Negate(is.null), raw_seqs) -->
-
-<!-- # After fetching, decode and save immediately -->
-<!-- decode_dnabin <- function(x) { -->
-<!--   tmp <- tempfile(fileext = ".fasta") -->
-<!--   write.dna(x, tmp, format = "fasta") -->
-<!--   lines <- readLines(tmp) -->
-<!--   seq_lines <- lines[!grepl("^>", lines)] -->
-<!--   seq_string <- paste(seq_lines, collapse = "") -->
-<!--   gsub("[[:space:]]", "", seq_string) -->
-<!-- } -->
-
-<!-- # Decode all sequences -->
-<!-- combined_char <- sapply(names(raw_seqs), function(sp) { -->
-<!--   decode_dnabin(raw_seqs[[sp]]) -->
-<!-- }) -->
-<!-- names(combined_char) <- names(raw_seqs) -->
-
-<!-- # Sanity check before alignment -->
-<!-- substr(combined_char[1], 1, 50)  # should show ACGTs now -->
-
-<!-- # Save as FASTA for reuse — no need to re-fetch next time -->
-<!-- fasta_lines <- unlist(lapply(names(combined_char), function(sp) { -->
-<!--   c(paste0(">", sp), combined_char[[sp]]) -->
-<!-- })) -->
-<!-- writeLines(fasta_lines, here("size_bd_unified", "intermediates", "selected_sequences.fasta")) -->
-<!-- message("Sequences saved to selected_sequences.fasta") -->
-
-<!-- # To reload next time instead of re-fetching: -->
-<!-- # dna_saved <- read.dna(here("size_bd_unified", "intermediates", "selected_sequences.fasta"), format = "fasta") -->
-<!-- # combined_char <- sapply(as.character(dna_saved), paste, collapse = "") -->
-<!-- # names(combined_char) <- taxon_list -->
-
-<!-- # Align -->
-<!-- aligned <- AlignSeqs(DNAStringSet(combined_char)) -->
-
-<!-- # --- 3. BUILD TREE --- -->
-<!-- phydat <- as.phyDat(aligned) -->
-
-<!-- dist_mat <- dist.ml(phydat, model = "JC69") -->
-
-<!-- nj_tree <- NJ(dist_mat) -->
-
-<!-- fit <- pml(nj_tree, phydat) -->
-<!-- fit_opt <- optim.pml(fit, -->
-<!--                      model         = "GTR", -->
-<!--                      optInv        = TRUE, -->
-<!--                      optGamma      = TRUE, -->
-<!--                      rearrangement = "NNI") -->
-
-<!-- tr_phylo <- fit_opt$tree -->
-
-<!-- # --- 4. ROOT --- -->
-<!-- tr_rooted <- midpoint(tr_phylo) -->
-
-<!-- # --- 5. QUICK SANITY CHECKS --- -->
-<!-- summary(tr_rooted$edge.length) -->
-<!-- is.ultrametric(tr_rooted)  # expected FALSE for ML tree -->
-<!-- # plot(tr_rooted, cex = 0.6) -->
-
-<!-- # Optional: compare topology to your original OTL tree -->
-<!-- ggtree::ggtree(tr_rooted, layout = "rectangular") + -->
-<!--   ggtree::geom_tiplab(size = 3, align = FALSE) + -->
-<!--   ggtree::theme_tree2() + -->
-<!--   scale_x_continuous(expand = expansion(mult = c(0, 0.3))) -->
-
-<!-- # Now has real branch lengths! -->
-<!-- summary(tr_rooted$edge.length) -->
-<!-- is.ultrametric(tr_rooted) -->
-
-<!-- phylo_covar = vcv.phylo(tr_rooted, corr = TRUE) -->
-
-<!-- saveRDS(phylo_covar, here("size_bd_unified", "intermediates", "phylo_covar.rds")) -->
-
-<!-- write.tree(tr_rooted, here("size_bd_unified", "intermediates", "phylo_tree.nwk")) -->
-<!-- ``` -->
-
 ### Analyze
 ```{r}
 tr_rooted = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
-
-# hu_sub_effect_named <- setNames(-combined_agg$net_effect_hu, combined_agg$species)
-# b_sub_effect_named  <- setNames(combined_agg$net_effect_b,  combined_agg$species)
-# hu_sub_med_named <- setNames(-combined_agg$hu_subadult_median, combined_agg$species)
-# b_sub_med_named  <- setNames(combined_agg$b_subadult_median,  combined_agg$species)
-# hu_med_named <- setNames(-combined_agg$hu_median, combined_agg$species)
-# b_med_named  <- setNames(combined_agg$b_median,  combined_agg$species)
-# prev_med_named <- setNames(combined_agg$prevalence_median, combined_agg$species)
-# sigma_med_named  <- setNames(combined_agg$sigma_median,  combined_agg$species)
-
-
-# blomberg_k_hu_sub_effect = phylosig(tr_rooted, hu_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_b_sub_effect = phylosig(tr_rooted, b_sub_effect_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_hu_sub_med = phylosig(tr_rooted, hu_sub_med_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_b_sub_med = phylosig(tr_rooted, b_sub_med_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_hu_med = phylosig(tr_rooted, hu_med_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_b_med = phylosig(tr_rooted, b_med_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_prev_med = phylosig(tr_rooted, prev_med_named, method = "K", test = TRUE, nsim = 1000)
-# blomberg_k_sigma_med = phylosig(tr_rooted, sigma_med_named, method = "K", test = TRUE, nsim = 1000)
-
-# tr_rooted$tip.label
-
-# plots
-# hu_sub_effect_map = contMap(jp_pruned, hu_sub_effect_named,  title = "hu net effect", fsize = 0.6)
-# b_sub_effect_map = contMap(jp_pruned, b_sub_effect_named,   title = "b net_effect", fsize = 0.6)
-# hu_sub_med_map = contMap(jp_pruned, hu_sub_med_named,  title = "hu net median", fsize = 0.6)
-# b_sub_med_map = contMap(jp_pruned, b_sub_med_named,   title = "b net_median", fsize = 0.6)
-# hu_med_map = contMap(jp_pruned, hu_med_named,  title = "hu median", fsize = 0.6)
-# b_med_map = contMap(jp_pruned, b_med_named,   title = "b median", fsize = 0.6)
-# prev_med_map = contMap(jp_pruned, prev_med_named,  title = "prevalence median effect", fsize = 0.6)
-# sigma_med_map = contMap(jp_pruned, sigma_med_named,   title = "sigma median effect", fsize = 0.6)
-
-# hu_sub_effect_map <- setMap(hu_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# b_sub_effect_map <- setMap(b_sub_effect_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# hu_sub_med_map <- setMap(hu_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# b_sub_med_map <- setMap(b_sub_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# hu_med_map <- setMap(hu_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# b_med_map <- setMap(b_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# prev_med_map <- setMap(prev_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
-# sigma_med_map <- setMap(sigma_med_map, colors = colorRampPalette(brewer.pal(9, "PRGn"))(100))
 
 # calculate blomberg K
 blomberg_k = function(tree, var_values, species) {
@@ -976,6 +802,32 @@ blomberg_k = function(tree, var_values, species) {
   return(blomberg_k_sigma_med = phylosig(tree, set_named, method = "K", test = TRUE, nsim = 1000))
 }
 
+pagel_lambda = function(tree, var_values, species) {
+  set_named = setNames(var_values, species)
+  return(blomberg_k_sigma_med = phylosig(tree, set_named, method = "lambda", test = TRUE, nsim = 1000))
+}
+
+# blomberg k
+hu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$jp_sn)
+mu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$jp_sn)
+prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
+sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
+
+hu_contrast_med_k
+mu_contrast_med_k
+prev_med_k
+sigma_med_k
+
+# pagel lambda
+hu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$jp_sn)
+mu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$jp_sn)
+prev_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
+sigma_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
+
+hu_contrast_med_lambda
+mu_contrast_med_lambda
+prev_med_lambda
+sigma_med_lambda
 
 # define color maps
 sym_div_cont_map = function(tree, var_values, species, center, p_title, style = "div") {
@@ -997,64 +849,57 @@ sym_div_cont_map = function(tree, var_values, species, center, p_title, style = 
   return(map_2)
 }
 
-hu_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_subadult_median, combined_agg_j$jp_sn)
-b_sub_med_k = blomberg_k(jp_pruned, combined_agg_j$b_subadult_median, combined_agg_j$jp_sn)
-# b_med_k = blomberg_k(jp_pruned, combined_agg_j$b_median, combined_agg_j$jp_sn)
-hu_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_median, combined_agg_j$jp_sn)
-prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
-sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
-
-hu_sub_med_map = sym_div_cont_map(jp_pruned,
-                                  combined_agg_j$hu_subadult_median,
+p_hu_contrast_med_map = sym_div_cont_map(jp_pruned,
+                                  combined_agg_j$hu_contrast_median,
                                   combined_agg_j$jp_sn,
                                   0,
                                   "Bd prevalence (hu): median subadult effect")
 
-b_sub_med_map = sym_div_cont_map(jp_pruned,
-                                 combined_agg_j$b_subadult_median,
+p_mu_contrast_med_map = sym_div_cont_map(jp_pruned,
+                                 combined_agg_j$mu_contrast_median,
                                  combined_agg_j$jp_sn,
                                  0,
                                  "Bd log load (mu): median subadult effect")
 
-# b_med_map = sym_div_cont_map(jp_pruned,
-#                               combined_agg_j$b_median,
-#                               combined_agg_j$jp_sn,
-#                               4.135,
-#                               "Median Bd log load (mu)")
-# 
-# hu_med_map = sym_div_cont_map(jp_pruned,
-#                               combined_agg_j$hu_median,
-#                               combined_agg_j$jp_sn,
-#                               0,
-#                               "Median Bd prevalence (hu)")
-
-prev_med_map = sym_div_cont_map(jp_pruned,
+p_prev_med_map = sym_div_cont_map(jp_pruned,
                                 combined_agg_j$prevalence_median,
                                 combined_agg_j$jp_sn,
                                 0.5,
                                 "Median Bd prevalence")
 
-sigma_med_map = sym_div_cont_map(jp_pruned,
+p_sigma_med_map = sym_div_cont_map(jp_pruned,
                                  combined_agg_j$sigma_median,
                                  combined_agg_j$jp_sn,
                                  0.8822,
                                  "Median Bd load dispersion (sigma)")
 
+png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_hu_contrast.png"),
+    width = 6, height = 8, units = "in", res = 300)
+plot(p_hu_contrast_med_map)
+dev.off()
 
-hu_sub_med_k
-b_sub_med_k
-# hu_med_k
-prev_med_k
-sigma_med_k
+png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_mu_contrast.png"),
+    width = 6, height = 8, units = "in", res = 300)
+plot(p_mu_contrast_med_map)
+dev.off()
 
-# plot(hu_sub_effect_map)
-# plot(b_sub_effect_map)
-plot(hu_sub_med_map)
-plot(b_sub_med_map)
-# plot(hu_med_map)
-# plot(b_med_map)
-plot(prev_med_map)
-plot(sigma_med_map)
+
+png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_prevalence.png"),
+    width = 6, height = 8, units = "in", res = 300)
+plot(p_prev_med_map)
+dev.off()
+
+
+png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_sigma.png"),
+    width = 6, height = 8, units = "in", res = 300)
+plot(p_sigma_med_map)
+dev.off()
+
+
+plot(p_hu_contrast_med_map)
+plot(p_mu_contrast_med_map)
+plot(p_prev_med_map)
+plot(p_sigma_med_map)
 
 ```
 
@@ -1068,11 +913,10 @@ plot(sigma_med_map)
 
 # m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_env2.rds")
 
-choice_model = m5g_zln
 
 model_data = brms_data
 
-draws_all = collect_draws(choice_model) %>%
+draws_all = collect_draws(model_select) %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
 density_mat_all = density_mat(log(0.5), 20, 100, draws_all) %>%
@@ -1086,97 +930,6 @@ obs_stats_all = sample_stats(model_data) %>%
 
 ```
 
-::: {.panel-tabset}
-### Observed Prevalence
-```{r}
-#| echo: false
-#| warning: false
-#| fig-width: 12
-#| fig-height: 6
-# observed prevalence
-ggplot(obs_stats_all, aes(y = bd_prevalence, x = species, color = life_stage_simple)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
-                width = 0.2,
-                position = position_dodge(width = 0.5)) +
-  theme_minimal() +
-  ggtitle("Observed prevalence") +
-  xlab("Species") +
-  ylab("Bd prevalence [-]\n(with 95% CI)") +
-  labs(color = "Life stage") +
-  geom_text(aes(label = paste0("n=", n),  y = label_y),
-          position = position_dodge(width = 0.5)) +
-  ylim(0, 1) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-```
-
-### Modeled Prevalence 
-```{r}
-#| echo: false
-#| warning: false
-#| fig-width: 12
-#| fig-height: 6
-# model prevalence
-ggplot(draws_all, aes(prevalence, x = species, color = life_stage_simple)) +
-  geom_boxplot(coef = NULL) + 
-  theme_minimal() +
-  ggtitle("Modeled prevalence") +
-  xlab("Species") +
-  ylab("Bd prevalence [-]\n") +
-  labs(color = "Life stage") +
-  ylim(0, 1) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-```
-
-### Observed Bd load
-```{r}
-#| echo: false
-#| warning: false
-#| fig-width: 12
-#| fig-height: 6
-# obsevation bd load
-ggplot(model_data %>%
-         mutate(species = get_species_name(taxon_capture, newline = TRUE)) %>%
-         filter(bd_load_co > 0), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
-  geom_boxplot() + 
-  theme_minimal() +
-  ggtitle("Observed Bd-positive load") +
-  xlab("Species") +
-  ylab("log(Bd load density) [-]") +
-  labs(color = "Life stage") +
-  geom_text(
-    data = obs_stats_all,
-    aes(
-      x = species,
-      y = max(model_data$log_bd_load_co_density) * label_y * 1.05,
-      label = paste0("n=", n_pos),
-      group = life_stage_simple
-    ),
-    position = position_dodge(width = 0.75),
-    vjust = 0
-  ) +
-  ylim(log(0.5), 19) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-```
-
-### Modeled Bd load
-```{r}
-#| echo: false
-#| warning: false
-#| fig-width: 12
-#| fig-height: 6
-# modeled bd load
-ggplot(sim_load_all %>%
-         filter(log_bd_load_co_density > 0.5), aes(log_bd_load_co_density, x = species, color = life_stage_simple)) +
-  geom_boxplot() + 
-  theme_minimal() +
-  ggtitle("Modeled Bd-positive load") +
-  xlab("Species") +
-  ylab("log(Bd load density) [-]") +
-  labs(color = "Life stage") +
-  ylim(log(0.5), 20) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-```
 
 ### Modeled Bd load PDF
 ```{r}
@@ -1294,7 +1047,19 @@ ggplot(density_mat_all, aes(x = density,
 #        title = "Temperature v. precipitation") +
 #   theme_minimal()
 
-# 30-day by species
+# 10 day precip, 30-day temp by species
+ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_10_day_sum, color = life_stage_simple)) +
+  geom_point(alpha = 0.1) +
+  stat_ellipse() +
+  facet_wrap(. ~ taxon_capture) +
+  xlim(-5, 40) +
+  ylim(0, 200) +
+  labs(x = "10-day temperature mean (degC)", 
+       y = "30-day precipitation total (mm)",
+       title = "Temperature v. precipitation") +
+  theme_minimal()
+
+# 30 day precip, 30-day temp by species
 ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
   stat_ellipse() +
@@ -1335,312 +1100,168 @@ ggplot(brms_data, aes(x = temp_c_30_sp_z, y = precip_mm_30_sp_z, color = taxon_c
 #   theme_minimal()
 ```
 
-## Tempurature effects
+## Climate
+
+### Precip
 ```{r}
-#| eval: true
-#| code-fold: true
-#| code-summary: "Show temperature effects code"
-#| fig-height: 6
-#| fig-width: 8
 
-select_model = m5f_zln
-# select_model = m6_zln
+apply_scale <- function(x_new, sc_obj) {
+  (x_new - attr(sc_obj, "scaled:center")) / attr(sc_obj, "scaled:scale")
+}
 
-climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
+remove_scale = function(x_sc, sc_obj) {
+  x_sc * attr(sc_obj, "scaled:scale") + attr(sc_obj, "scaled:center")
+}
 
-# Temperature dependence
-temp_range = seq(-5, 45, length.out = 100)
+precip_10_sc = scale(brms_data$precip_mm_10_day_sum)
+temp_30_sc = scale(brms_data$temp_c_30_day_mean)
 
-temp_grid = expand_grid(temp_c_15_day_mean = temp_range, .draw = 1:nrow(climate_draws)) %>%
-  mutate(temp_c_30_day_mean = temp_c_15_day_mean) %>%
-  left_join(climate_draws, by = ".draw") %>%
+# define sequences over real-world ranges
+precip_seq <- seq(min(brms_data$precip_mm_10_day_sum),
+                  max(brms_data$precip_mm_10_day_sum),
+                  length.out = 100)
+
+# scale them using the original parameters
+nd_precip <- model_select$data |>
+  distinct(taxon_capture, life_stage_simple) |>
+  cross_join(tibble(precip_mm_10_day_sum = precip_seq)) |>
   mutate(
-    temp_c_15_z = (temp_c_15_day_mean - brms_scales$temp_c_15_day_mean_mean) / brms_scales$temp_c_15_day_mean_sd,
-    temp_c_15_z2 = (temp_c_15_day_mean^2 - brms_scales$temp_c_15_day_mean2_mean) / brms_scales$temp_c_15_day_mean2_sd,
-    temp_c_30_z = (temp_c_30_day_mean - brms_scales$temp_c_30_day_mean_mean) / brms_scales$temp_c_30_day_mean_sd,
-    temp_c_30_z2 = (temp_c_30_day_mean^2 - brms_scales$temp_c_30_day_mean2_mean) / brms_scales$temp_c_30_day_mean2_sd,
-    b_pred = b_temp_c_30_z * temp_c_30_z + b_temp_c_30_z2 * temp_c_30_z2 + b_Intercept,
-    hu_pred = b_hu_temp_c_15_z * temp_c_15_z + b_hu_temp_c_15_z2 * temp_c_15_z2 + b_hu_Intercept
-  ) %>%
-  group_by(temp_c_15_day_mean) %>%
-  summarise(
-    b_mean = mean(b_pred),
-    b_med = median(b_pred),
-    b_lower_95 = quantile(b_pred, 0.025),
-    b_upper_95 = quantile(b_pred, 0.975),
-    b_lower_89 = quantile(b_pred, 0.055),
-    b_upper_89 = quantile(b_pred, 0.945),
-    hu_mean = mean(hu_pred),
-    hu_med = median(hu_pred),
-    hu_lower_95 = quantile(hu_pred, 0.025),
-    hu_upper_95 = quantile(hu_pred, 0.975),
-    hu_lower_89 = quantile(hu_pred, 0.055),
-    hu_upper_89 = quantile(hu_pred, 0.945),
-    p_mean = plogis(mean(hu_pred)),
-    p_med = plogis(median(hu_pred)),
-    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
-    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
-    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
-    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
-    .groups = "drop"
-  ) %>%
-  dplyr::rename(temp_c = temp_c_15_day_mean)
-
-# prevalence
-ggplot(temp_grid, aes(x = temp_c)) +
-  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = p_mean), linewidth = 1) +
-  labs(x = "15-day mean temperature (degC)", 
-       y = "Probability of Bd detection",
-       title = "Bd prevalence v. temperature") +
-  theme_minimal()
-
-# load
-ggplot(temp_grid, aes(x = temp_c)) +
-  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = b_mean), linewidth = 1) +
-  labs(x = "30-day mean temperature (degC)", 
-       y = "log(+ Bd load)",
-       title = "Bd load v. temperature") +
-  theme_minimal()
-```
-
-## Precipitation effects
-```{r}
-#| eval: true
-#| code-fold: true
-#| code-summary: "Show precipitation effects code"
-#| fig-height: 6
-#| fig-width: 8
-# precipitation depencence
-
-daily_precip_range = seq(0, 20, length.out = 100)
-
-precip_grid = expand_grid(daily_precip = daily_precip_range, .draw = 1:nrow(climate_draws)) %>%
-  mutate(precip_mm_15_day_sum = daily_precip * 15,
-         precip_mm_30_day_sum = daily_precip * 30) %>%
-  left_join(climate_draws, by = ".draw") %>%
-  mutate(
-    precip_mm_15_z = (precip_mm_15_day_sum - brms_scales$precip_mm_15_day_sum_mean) / brms_scales$precip_mm_15_day_sum_sd,
-    precip_mm_15_z2 = (precip_mm_15_day_sum^2 - brms_scales$precip_mm_15_day_sum2_mean) / brms_scales$precip_mm_15_day_sum2_sd,
-    precip_mm_30_z = (precip_mm_30_day_sum - brms_scales$precip_mm_30_day_sum_mean) / brms_scales$precip_mm_30_day_sum_sd,
-    precip_mm_30_z2 = (precip_mm_30_day_sum^2 - brms_scales$precip_mm_30_day_sum2_mean) / brms_scales$precip_mm_30_day_sum2_sd,
-    b_pred = b_precip_mm_30_z * precip_mm_30_z + b_precip_mm_30_z2 * precip_mm_30_z2 + b_Intercept,
-    hu_pred = b_hu_precip_mm_15_z * precip_mm_15_z + b_hu_precip_mm_15_z2 * precip_mm_15_z2 + b_hu_Intercept
-  ) %>%
-  group_by(daily_precip,
-           precip_mm_15_day_sum,
-           precip_mm_30_day_sum) %>%
-  summarise(
-    b_mean = mean(b_pred),
-    b_med = median(b_pred),
-    b_lower_95 = quantile(b_pred, 0.025),
-    b_upper_95 = quantile(b_pred, 0.975),
-    b_lower_89 = quantile(b_pred, 0.055),
-    b_upper_89 = quantile(b_pred, 0.945),
-    hu_mean = mean(hu_pred),
-    hu_med = median(hu_pred),
-    hu_lower_95 = quantile(hu_pred, 0.025),
-    hu_upper_95 = quantile(hu_pred, 0.975),
-    hu_lower_89 = quantile(hu_pred, 0.055),
-    hu_upper_89 = quantile(hu_pred, 0.945),
-    p_mean = plogis(mean(hu_pred)),
-    p_med = plogis(median(hu_pred)),
-    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
-    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
-    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
-    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
-    .groups = "drop"
+    temp_c_30_day_mean   = remove_scale(0, temp_30_sc),
+    precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
+    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc)
   )
 
-# prevalence
-ggplot(precip_grid, aes(x = precip_mm_15_day_sum)) +
-  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = p_mean), linewidth = 1) +
-  labs(x = "15-day total precipitation (mm)", 
-       y = "Probability of Bd detection",
-       title = "Bd prevalence v. precipitation") +
-  theme_minimal()
-
-# load
-ggplot(precip_grid, aes(x = precip_mm_30_day_sum)) +
-  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = b_mean), linewidth = 1) +
-  labs(x = "30-day total precipitation (mm)", 
-       y = "log(+ Bd load)",
-       title = "Bd load v. precipitation") +
-  theme_minimal()
-
-```
-
-## Tempurature effects (scaled by species climate)
-```{r}
-#| eval: true
-#| code-fold: true
-#| code-summary: "Show temperature effects code"
-#| fig-height: 6
-#| fig-width: 8
-
-
-select_model = m6_zln
-
-# fixed effects
-climate_draws = spread_draws(select_model, `b_temp_c.*|b_precip_mm.*|b_hu_temp_c.*|b_hu_precip_mm.*|b_Intercept|b_hu_Intercept`, regex = TRUE)
-
-# Temperature dependence
-temp_range = seq(-3, 3, length.out = 100)
-
-# taxa = brms_data %>%
-#   select(taxon_capture) %>%
-#   distinct() %>%
-#   pull(taxon_capture) %>%
-#   sort()
-
-## Stumped by how to back-calculate the temp_z2 values from the temp_z values... I think this has to be done on a species-by-species basis...
-
-temp_grid = expand_grid(temp_z_15_mean = temp_range,
-                        .draw = 1:nrow(climate_draws)) %>%
-  mutate(temp_z_30_mean = temp_z_15_mean) %>%
-  left_join(climate_draws, by = ".draw") %>%
-  mutate(
-    temp_c_15_z = (temp_c_15_day_mean - brms_scales$temp_c_15_day_mean_mean) / brms_scales$temp_c_15_day_mean_sd,
-    temp_c_15_z2 = (temp_c_15_day_mean^2 - brms_scales$temp_c_15_day_mean2_mean) / brms_scales$temp_c_15_day_mean2_sd,
-    temp_c_30_z = (temp_c_30_day_mean - brms_scales$temp_c_30_day_mean_mean) / brms_scales$temp_c_30_day_mean_sd,
-    temp_c_30_z2 = (temp_c_30_day_mean^2 - brms_scales$temp_c_30_day_mean2_mean) / brms_scales$temp_c_30_day_mean2_sd,
-    b_pred = b_temp_c_30_sp_z * temp_c_30_z + b_temp_c_30_sp_z2 * temp_c_30_z2 + b_Intercept,
-    hu_pred = b_hu_temp_c_15_sp_z * temp_c_15_z + b_hu_temp_c_15_sp_z2 * temp_c_15_z2 + b_hu_Intercept
-  ) %>%
-  group_by(temp_c_15_day_mean) %>%
-  summarise(
-    b_mean = mean(b_pred),
-    b_med = median(b_pred),
-    b_lower_95 = quantile(b_pred, 0.025),
-    b_upper_95 = quantile(b_pred, 0.975),
-    b_lower_89 = quantile(b_pred, 0.055),
-    b_upper_89 = quantile(b_pred, 0.945),
-    hu_mean = mean(hu_pred),
-    hu_med = median(hu_pred),
-    hu_lower_95 = quantile(hu_pred, 0.025),
-    hu_upper_95 = quantile(hu_pred, 0.975),
-    hu_lower_89 = quantile(hu_pred, 0.055),
-    hu_upper_89 = quantile(hu_pred, 0.945),
-    p_mean = plogis(mean(hu_pred)),
-    p_med = plogis(median(hu_pred)),
-    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
-    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
-    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
-    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
-    .groups = "drop"
-  ) %>%
-  dplyr::rename(temp_c = temp_c_15_day_mean)
-
-# prevalence
-ggplot(temp_grid, aes(x = temp_c)) +
-  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = p_mean), linewidth = 1) +
-  labs(x = "15-day mean temperature (degC)", 
-       y = "Probability of Bd detection",
-       title = "Bd prevalence v. temperature") +
-  theme_minimal()
-
-# load
-ggplot(temp_grid, aes(x = temp_c)) +
-  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = b_mean), linewidth = 1) +
-  labs(x = "30-day mean temperature (degC)", 
-       y = "log(+ Bd load)",
-       title = "Bd load v. temperature") +
-  theme_minimal()
-```
-
-## Precipitation effects (scaled by species climate)
-```{r}
-#| eval: true
-#| code-fold: true
-#| code-summary: "Show precipitation effects code"
-#| fig-height: 6
-#| fig-width: 8
-# precipitation depencence
-
-daily_precip_range = seq(0, 20, length.out = 100)
-
-precip_grid = expand_grid(daily_precip = daily_precip_range, .draw = 1:nrow(climate_draws)) %>%
-  mutate(precip_mm_15_day_sum = daily_precip * 15,
-         precip_mm_30_day_sum = daily_precip * 30) %>%
-  left_join(climate_draws, by = ".draw") %>%
-  mutate(
-    precip_mm_15_z = (precip_mm_15_day_sum - brms_scales$precip_mm_15_day_sum_mean) / brms_scales$precip_mm_15_day_sum_sd,
-    precip_mm_15_z2 = (precip_mm_15_day_sum^2 - brms_scales$precip_mm_15_day_sum2_mean) / brms_scales$precip_mm_15_day_sum2_sd,
-    precip_mm_30_z = (precip_mm_30_day_sum - brms_scales$precip_mm_30_day_sum_mean) / brms_scales$precip_mm_30_day_sum_sd,
-    precip_mm_30_z2 = (precip_mm_30_day_sum^2 - brms_scales$precip_mm_30_day_sum2_mean) / brms_scales$precip_mm_30_day_sum2_sd,
-    b_pred = b_precip_mm_30_z * precip_mm_30_z + b_precip_mm_30_z2 * precip_mm_30_z2 + b_Intercept,
-    hu_pred = b_hu_precip_mm_15_z * precip_mm_15_z + b_hu_precip_mm_15_z2 * precip_mm_15_z2 + b_hu_Intercept
-  ) %>%
-  group_by(daily_precip,
-           precip_mm_15_day_sum,
-           precip_mm_30_day_sum) %>%
-  summarise(
-    b_mean = mean(b_pred),
-    b_med = median(b_pred),
-    b_lower_95 = quantile(b_pred, 0.025),
-    b_upper_95 = quantile(b_pred, 0.975),
-    b_lower_89 = quantile(b_pred, 0.055),
-    b_upper_89 = quantile(b_pred, 0.945),
-    hu_mean = mean(hu_pred),
-    hu_med = median(hu_pred),
-    hu_lower_95 = quantile(hu_pred, 0.025),
-    hu_upper_95 = quantile(hu_pred, 0.975),
-    hu_lower_89 = quantile(hu_pred, 0.055),
-    hu_upper_89 = quantile(hu_pred, 0.945),
-    p_mean = plogis(mean(hu_pred)),
-    p_med = plogis(median(hu_pred)),
-    p_lower_95 = plogis(quantile(hu_pred, 0.025)),
-    p_upper_95 = plogis(quantile(hu_pred, 0.975)),
-    p_lower_89 = plogis(quantile(hu_pred, 0.055)),
-    p_upper_89 = plogis(quantile(hu_pred, 0.945)),
-    .groups = "drop"
+# hu
+hu_draws_precip <- model_select |>
+  epred_draws(
+    newdata    = nd_precip,
+    dpar       = "hu",
+    re_formula = ~ (1 | taxon_capture:life_stage_simple)
   )
 
-# prevalence
-ggplot(precip_grid, aes(x = precip_mm_15_day_sum)) +
-  geom_ribbon(aes(ymin = p_lower_89, ymax = p_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = p_lower_95, ymax = p_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = p_mean), linewidth = 1) +
-  labs(x = "15-day total precipitation (mm)", 
-       y = "Probability of Bd detection",
-       title = "Bd prevalence v. precipitation") +
-  theme_minimal()
+hu_agg_precip = hu_draws_precip |>
+  mutate(prevalence = 1 - plogis(hu)) |>
+  group_by(taxon_capture, precip_mm_10_day_sum) |>
+  median_qi(prevalence) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
-# load
-ggplot(precip_grid, aes(x = precip_mm_30_day_sum)) +
-  geom_ribbon(aes(ymin = b_lower_89, ymax = b_upper_89), 
-              fill = "steelblue", alpha = 0.3) +
-  geom_ribbon(aes(ymin = b_lower_95, ymax = b_upper_95), 
-              fill = "steelblue", alpha = 0.2) +
-  geom_line(aes(y = b_mean), linewidth = 1) +
-  labs(x = "30-day total precipitation (mm)", 
-       y = "log(+ Bd load)",
-       title = "Bd load v. precipitation") +
-  theme_minimal()
+# mu
+mu_draws_precip <- model_select |>
+  epred_draws(
+    newdata    = nd_precip,
+    dpar       = "mu",
+    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+  )
+
+mu_agg_precip = mu_draws_precip |>
+  group_by(taxon_capture, precip_mm_10_day_sum) |>
+  median_qi(mu) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+# visualize
+p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = .lower, ymax = .upper)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_wrap("species") +
+  theme_minimal() +
+  labs(title = "Bd Prevalence vs. Precipitation",
+       x = "10-day lag precipitation [mm]",
+       y = "Bd prevalence [-]")
+
+p_precip_mu = ggplot(mu_agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = .lower, ymax = .upper)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_wrap("species") +
+  theme_minimal() +
+  labs(title = "Bd Load vs. Precipitation",
+       x = "10-day lag precipitation [mm]",
+       y = "log(Bd load) [-]")
+
+ggsave(here("size_bd_unified", "unified_figures", "03_precip_prevalence.png"),
+       p_precip_prev,
+       width = 8, height = 8)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_precip_mu.png"),
+       p_precip_mu,
+       width = 8, height = 8)
+
+p_precip_prev
+p_precip_mu
+
+```
+
+### Temp
+```{r}
+temp_seq   <- seq(min(brms_data$temp_c_30_day_mean),
+                  max(brms_data$temp_c_30_day_mean),
+                  length.out = 100)
+
+nd_temp <- model_select$data |>
+  distinct(taxon_capture, life_stage_simple) |>
+  cross_join(tibble(temp_c_30_day_mean = temp_seq)) |>
+  mutate(
+    precip_mm_10_day_sum   = remove_scale(0, precip_10_sc),
+    precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
+    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc),
+  )
+
+
+# hu
+hu_draws_temp <- model_select |>
+  epred_draws(
+    newdata    = nd_temp,
+    dpar       = "hu",
+    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+  )
+
+hu_agg_temp = hu_draws_temp |>
+  mutate(prevalence = 1 - plogis(hu)) |>
+  group_by(taxon_capture, temp_c_30_day_mean) |>
+  median_qi(prevalence) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+# mu
+mu_draws_temp <- model_select |>
+  epred_draws(
+    newdata    = nd_temp,
+    dpar       = "mu",
+    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+  )
+
+mu_agg_temp = mu_draws_temp |>
+  group_by(taxon_capture, temp_c_30_day_mean) |>
+  median_qi(mu) %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
+
+# visualize
+p_temp_prev = ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = .lower, ymax = .upper)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_wrap("species") +
+  theme_minimal() +
+  ylim(0, 1) +
+  labs(title = "Bd Prevalence vs. Temperature",
+       x = "30-day lag max daily temperature [C]",
+       y = "Bd prevalence [-]")
+
+p_temp_mu = ggplot(mu_agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = .lower, ymax = .upper)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.3) +
+  facet_wrap("species") +
+  theme_minimal() +
+  labs(title = "Bd Load vs. Temperature",
+       x = "30-day lag max daily temperature [C]",
+       y = "log(Bd load) [-]")
+
+ggsave(here("size_bd_unified", "unified_figures", "03_temp_prevalence.png"),
+       p_temp_prev,
+       width = 8, height = 8)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_temp_mu.png"),
+       p_temp_mu,
+       width = 8, height = 8)
+
+p_temp_prev
+p_temp_mu
 
 ```
