@@ -10,30 +10,47 @@ output: html_document
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork)
+librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork, arrow)
 
 ```
 
 # load models
 ```{r}
-m3_zln_copa = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_colostethus_panamansis.rds"))
-m3_zln_liwa = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_lithobates_warszewitschii.rds"))
-m3_zln_pscr = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_pseudacris_crucifer.rds"))
-m3_zln_raca = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_cascadae.rds"))
-m3_zln_racb = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_catesbeiana.rds"))
-m3_zln_racl = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_clamitans.rds"))
-m3_zln_ramu = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_muscosa.rds"))
-m3_zln_rapi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_pipiens.rds"))
-m3_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_rana_sierrae.rds"))
-m3_zln_sifl = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m3_silverstoneia_flotator.rds"))
+
+# taxon names
+taxon_list = list("colostethus_panamansis",
+                  "lithobates_warszewitschii",
+                  "pseudacris_crucifer",
+                  "rana_cascadae",
+                  "rana_catesbeiana",
+                  "rana_clamitans",
+                  "rana_muscosa",
+                  "rana_pipiens",
+                  "rana_sierrae",
+                  "silverstoneia_flotator")
+
+# list of all models
+model_list = map(taxon_list, ~readRDS(file = here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", .x, ".rds"))))
+
+# subadult cutoffs
+co_list = c(18.8,
+            35,
+            20,
+            50,
+            95,
+            60,
+            40,
+            51,
+            40,
+            15.1)
 
 ```
 
 # visualize results
 
-## including metamophs
+## epred draws with svl
 ```{r}
-metamorph_svl_prev_plot = function(species_fit, cutoff_mm, species_name) {
+metamorph_svl_prev_epred = function(species_fit, cutoff_mm, taxon_capture) {
   species_data = species_fit$data
   
   # model for median subadult weather
@@ -47,6 +64,40 @@ metamorph_svl_prev_plot = function(species_fit, cutoff_mm, species_name) {
     summarize(temp_30_med = median(temp_c_30_z)) %>%
     pull(temp_30_med)
   
+  # check if at least one metamorph in sample data
+  life_stage_counts = species_data %>%
+    group_by(life_stage_simple) %>%
+    count()
+  
+  # draws for metamorph
+  if ("metamorph" %in% life_stage_counts$life_stage_simple) {
+    # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+    nd_met <- tibble(
+      svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
+      is_metamorph     = 1,
+      is_not_metamorph = 0,
+      precip_mm_10_z  = precip_10_z_subadult_med,
+      precip_mm_10_z2 = precip_10_z_subadult_med ^ 2,
+      temp_c_30_z     = temp_30_z_subadult_med,
+      temp_c_30_z2    = temp_30_z_subadult_med ^ 2
+    )
+    
+    # metamorph — keep all draws for boxplot distribution
+    hu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "hu",  re_formula = NA)
+    
+    # aggregate metamorph stats
+    prev_met_agg = hu_met |>
+      mutate(prevalence = 1 - plogis(hu)) |>
+      median_qi(prevalence, .width = c(0.5, 0.95)) |>
+      pivot_wider(id_cols = c(svl_mm, prevalence, is_metamorph),
+                  names_from = .width,
+                  values_from = c(.lower, .upper))
+  } else {
+    prev_met_agg = tibble(is_metamorph = 1)
+  }
+  
+  
+  # draws for post-metamorphs
   nd_notmet <- tibble(
     svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
                           max(species_data$svl_mm, na.rm = TRUE),
@@ -59,62 +110,28 @@ metamorph_svl_prev_plot = function(species_fit, cutoff_mm, species_name) {
     temp_c_30_z2    = temp_30_z_subadult_med ^ 2
   )
   
-  # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
-  nd_met <- tibble(
-    svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
-    is_metamorph     = 1,
-    is_not_metamorph = 0,
-    precip_mm_10_z  = precip_10_z_subadult_med,
-    precip_mm_10_z2 = precip_10_z_subadult_med ^ 2,
-    temp_c_30_z     = temp_30_z_subadult_med,
-    temp_c_30_z2    = temp_30_z_subadult_med ^ 2
-  )
-  
-  # non-metamorph
   hu_notmet   <- nd_notmet |> add_epred_draws(species_fit, dpar = "hu",  re_formula = NA)
   
-  # metamorph — keep all draws for boxplot distribution
-  hu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "hu",  re_formula = NA)
-  
-  # non-metamorph: median + interval over svl sequence
+  # post-metamorph: median + interval over svl sequence
   prev_notmet_agg <- hu_notmet |>
     mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
     group_by(svl_mm) |>
-    median_qi(prevalence, .width = 0.89)
+    median_qi(prevalence, .width = c(0.5, 0.95)) |>
+    pivot_wider(id_cols = c(svl_mm, prevalence),
+                names_from = .width,
+                values_from = c(.lower, .upper)) %>%
+    mutate(is_metamorph = 0)
   
-  # metamorph: keep raw draws for boxplot
-  prev_met_draws <- hu_met |>
-    mutate(prevalence = 1 - plogis(hu))
+  # aggregate post-metamorph stats
+  prev_agg = bind_rows(prev_met_agg,
+                       prev_notmet_agg) %>%
+    mutate(taxon_capture = taxon_capture,
+           svl_mm_cutoff = cutoff_mm)
   
-  # --- prevalence ---
-  p_prev_met <- ggplot(prev_met_draws, aes(x = "metamorph", y = prevalence)) +
-    geom_boxplot(fill = "#8DA0CB", alpha = 0.6, outlier.shape = NA) +
-    labs(x = NULL, y = species_name) +
-    ylim(0, 1) +
-    theme_classic()
-  
-  p_prev_notmet <- ggplot(prev_notmet_agg, aes(x = svl_mm, y = prevalence)) +
-    geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#8DA0CB", alpha = 0.3) +
-    geom_line(color = "#8DA0CB", linewidth = 1) +
-    geom_vline(xintercept = cutoff_mm, linetype = "dashed", color = "#666") +
-    labs(x = "SVL (mm)", y = NULL) +
-    ylim(0, 1) +
-    theme_classic() +
-    theme(
-      axis.text.y  = element_blank(),
-      axis.ticks.y = element_blank(),
-      axis.line.y  = element_blank()
-    )
-  
-  p_prev <- p_prev_met + p_prev_notmet +
-    plot_layout(widths = c(1, 3)) +
-    plot_annotation(title = paste0(species_name))
-  
- 
-  return(p_prev)
+  return(prev_agg)
 }
 
-metamorph_svl_load_plot = function(species_fit, cutoff_mm, species_name) {
+metamorph_svl_load_epred = function(species_fit, cutoff_mm, taxon_capture) {
   species_data = species_fit$data
   
   # model for median subadult weather
@@ -128,23 +145,46 @@ metamorph_svl_load_plot = function(species_fit, cutoff_mm, species_name) {
     summarize(temp_30_med = median(temp_c_30_z)) %>%
     pull(temp_30_med)
   
+  # check if at least 1 positive metamorph
+  life_stage_counts_positive = species_data %>%
+    filter(bd_load_co_density > 0) %>%
+    group_by(life_stage_simple) %>%
+    count()
+  
+  # draws for metamorph
+  if ("metamorph" %in% life_stage_counts_positive$life_stage_simple) {
+    
+    # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
+    nd_met <- tibble(
+      svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
+      is_metamorph     = 1,
+      is_not_metamorph = 0,
+      precip_mm_10_z  = precip_10_z_subadult_med,
+      precip_mm_10_z2 = precip_10_z_subadult_med ^ 2,
+      temp_c_30_z     = temp_30_z_subadult_med,
+      temp_c_30_z2    = temp_30_z_subadult_med ^ 2
+    )
+    
+    # metamorph
+    mu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "mu",  re_formula = NA)
+    
+    # metamorph: keep raw draws for boxplot
+    mu_met_agg = mu_met |>
+      median_qi(mu, .width = c(0.5, 0.95)) |>
+      pivot_wider(id_cols = c(svl_mm, mu, is_metamorph),
+                  names_from = .width,
+                  values_from = c(.lower, .upper))
+  } else {
+    mu_met_agg = tibble(is_metamorph = 1)
+  }
+  
+  # post-metamorphs
   nd_notmet <- tibble(
     svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
                           max(species_data$svl_mm, na.rm = TRUE),
                           length.out = 200),
     is_metamorph    = 0,
     is_not_metamorph = 1,
-    precip_mm_10_z  = precip_10_z_subadult_med,
-    precip_mm_10_z2 = precip_10_z_subadult_med ^ 2,
-    temp_c_30_z     = temp_30_z_subadult_med,
-    temp_c_30_z2    = temp_30_z_subadult_med ^ 2
-  )
-  
-  # metamorph: svl_mm is irrelevant (smooth is off), use a dummy value
-  nd_met <- tibble(
-    svl_mm           = mean(species_data$svl_mm, na.rm = TRUE),  # doesn't matter
-    is_metamorph     = 1,
-    is_not_metamorph = 0,
     precip_mm_10_z  = precip_10_z_subadult_med,
     precip_mm_10_z2 = precip_10_z_subadult_med ^ 2,
     temp_c_30_z     = temp_30_z_subadult_med,
@@ -154,119 +194,192 @@ metamorph_svl_load_plot = function(species_fit, cutoff_mm, species_name) {
   # non-metamorph
   mu_notmet   <- nd_notmet |> add_epred_draws(species_fit, dpar = "mu",  re_formula = NA)
   
-  # metamorph — keep all draws for boxplot distribution
-  mu_met      <- nd_met    |> add_epred_draws(species_fit, dpar = "mu",  re_formula = NA)
-  
-  # non-metamorph: median + interval over svl sequence
+    # non-metamorph: median + interval over svl sequence
   mu_notmet_agg <- mu_notmet |>
     group_by(svl_mm) |>
-    median_qi(mu, .width = 0.89)
+    median_qi(mu, .width = c(0.5, 0.95)) |>
+    pivot_wider(id_cols = c(svl_mm, mu),
+                names_from = .width,
+                values_from = c(.lower, .upper)) %>%
+    mutate(is_metamorph = 0)
+    
+  mu_agg = bind_rows(mu_met_agg,
+                     mu_notmet_agg) %>%
+    mutate(taxon_capture = taxon_capture,
+           svl_mm_cutoff = cutoff_mm)
   
-  # metamorph: keep raw draws for boxplot
-  mu_met_draws <- mu_met
-  
-  # --- mu ---
-  # get shared y range first
-  mu_ylim <- range(c(mu_notmet_agg$.lower, mu_notmet_agg$.upper))
-  
-  p_mu_met <- ggplot(mu_met_draws, aes(x = "metamorph", y = mu)) +
-    geom_boxplot(fill = "#FC8D62", alpha = 0.6, outlier.shape = NA) +
-    labs(x = NULL, y = species_name) +
-    ylim(mu_ylim) +
-    theme_classic()
-  
-  p_mu_notmet <- ggplot(mu_notmet_agg, aes(x = svl_mm, y = mu)) +
-    geom_ribbon(aes(ymin = .lower, ymax = .upper), fill = "#FC8D62", alpha = 0.3) +
-    geom_line(color = "#FC8D62", linewidth = 1) +
-    geom_vline(xintercept = cutoff_mm, linetype = "dashed", color = "#666") +
-    labs(x = "Post-metamorphic SVL (mm)", y = NULL) +
-    ylim(mu_ylim) +
-    theme_classic() +
-    theme(
-      axis.text.y  = element_blank(),
-      axis.ticks.y = element_blank(),
-      axis.line.y  = element_blank()
-    )
-  
-  p_mu <- p_mu_met + p_mu_notmet +
-    plot_layout(widths = c(1, 3))
-  
-  return(p_mu)
+  return(mu_agg)
 }
 
-copa_prev_p = metamorph_svl_prev_plot(m3_zln_copa, 18.8, "Colostethus\npanamansis")
-copa_load_p = metamorph_svl_load_plot(m3_zln_copa, 18.8, "Colostethus\npanamansis")
+prev_agg_all = pmap(list(model_list, co_list, taxon_list), metamorph_svl_prev_epred) %>%
+  list_rbind()
 
-liwa_prev_p = metamorph_svl_prev_plot(m3_zln_liwa, 35, "Lithobates\nwarszewitschii")
-liwa_load_p = metamorph_svl_load_plot(m3_zln_liwa, 35, "Lithobates\nwarszewitschii")
+mu_agg_all = pmap(list(model_list, co_list, taxon_list), metamorph_svl_load_epred) %>%
+  list_rbind()
 
-pscr_prev_p = metamorph_svl_prev_plot(m3_zln_pscr, 20, "Pseudacris\ncrucifer")
-pscr_load_p = metamorph_svl_load_plot(m3_zln_pscr, 20, "Pseudacris\ncrucifer")
+svl_agg_all = prev_agg_all %>%
+  left_join(mu_agg_all, by = c("taxon_capture", "is_metamorph", "svl_mm", "svl_mm_cutoff"), suffix = c("_prevalence", "_mu")) %>%
+  rename(prevalence_0.5_lower = .lower_0.5_prevalence,
+         prevalence_0.5_upper = .upper_0.5_prevalence,
+         prevalence_0.95_lower = .lower_0.95_prevalence,
+         prevalence_0.95_upper = .upper_0.95_prevalence,
+         mu_0.5_lower = .lower_0.5_mu,
+         mu_0.5_upper = .upper_0.5_mu,
+         mu_0.95_lower = .lower_0.95_mu,
+         mu_0.95_upper = .upper_0.95_mu) %>%
+  select(taxon_capture,
+         is_metamorph,
+         svl_mm,
+         svl_mm_cutoff,
+         everything())
 
-raca_prev_p = metamorph_svl_prev_plot(m3_zln_raca, 50, "Rana\ncascadae")
-raca_load_p = metamorph_svl_load_plot(m3_zln_raca, 50, "Rana\ncascadae")
+```
 
-racb_prev_p = metamorph_svl_prev_plot(m3_zln_racb, 95, "Rana\ncatesbeiana")
-racb_load_p = metamorph_svl_load_plot(m3_zln_racb, 95, "Rana\ncatesbeiana")
+## export data to manuscript
+```{r}
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
 
-racl_prev_p = metamorph_svl_prev_plot(m3_zln_racl, 60, "Rana\nclamitans")
-racl_load_p = metamorph_svl_load_plot(m3_zln_racl, 60, "Rana\nclamitans")
+write_parquet(svl_agg_all, paste0(manuscript_data_dir, "GAM_03_a_svl_agg.parquet"))
 
-#
-ramu_prev_p = metamorph_svl_prev_plot(m3_zln_ramu, 40, "Rana\nmuscosa")
-ramu_load_p = metamorph_svl_load_plot(m3_zln_racl, 40, "Rana\nmuscosa")
+```
 
-rapi_prev_p = metamorph_svl_prev_plot(m3_zln_rapi, 51, "Rana\npipiens")
-rapi_load_p = metamorph_svl_load_plot(m3_zln_rapi, 51, "Rana\npipiens")
+## visualize
+```{r}
+metamorph_svl_prev_plot = function(svl_agg) {
+  all_spp = svl_agg %>%
+    select(taxon_capture,
+           svl_mm_cutoff) %>%
+    distinct() %>%
+    arrange(taxon_capture) %>%
+    mutate(species_name = gsub("_", "\n", str_to_sentence(taxon_capture)))
+  
+  prev_range = svl_agg %>%
+    summarize(min = min(prevalence_0.95_lower, na.rm = TRUE),
+              max = max(prevalence_0.95_upper, na.rm = TRUE))
+  
+  # preallocate
+  plotlist = list()
+  
+  for (ii in 1:nrow(all_spp)) {
+    spp_agg = svl_agg %>%
+      filter(taxon_capture == all_spp$taxon_capture[ii])
+    
+    # --- prevalence ---
+    p_prev_met = ggplot(spp_agg %>%
+                          filter(is_metamorph == 1), aes(x = "metamorph", lower = prevalence_0.5_lower, upper = prevalence_0.5_upper, middle = prevalence,
+                                                         ymin = prevalence_0.95_lower, ymax = prevalence_0.95_upper)) +
+      geom_boxplot(stat = "identity", fill = "#8DA0CB", alpha = 0.72, outlier.shape = NA) +
+      labs(x = NULL, y = all_spp$species_name[ii]) +
+      ylim(prev_range$min, prev_range$max) +
+      theme_classic()
+    
+    p_prev_notmet = ggplot(spp_agg %>%
+                             filter(is_metamorph == 0), aes(x = svl_mm, y = prevalence)) +
+      geom_ribbon(aes(ymin = prevalence_0.5_lower, ymax = prevalence_0.5_upper), fill = "#8DA0CB", alpha = 0.6) +
+      geom_ribbon(aes(ymin = prevalence_0.95_lower, ymax = prevalence_0.95_upper), fill = "#8DA0CB", alpha = 0.3) +
+      geom_line(color = "#000", linewidth = 1) +
+      geom_vline(xintercept = spp_agg$svl_mm_cutoff[1], linetype = "dashed", color = "#666") +
+      labs(x = "SVL (mm)", y = NULL) +
+      coord_cartesian(ylim = c(prev_range$min, prev_range$max)) +
+      theme_classic() +
+      theme(
+        axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line.y  = element_blank()
+      )
+    
+    p_prev = p_prev_met + p_prev_notmet +
+      plot_layout(widths = c(1, 3))
+    
+    plotlist = c(plotlist,
+                 p_prev)
+  }
+ 
+  return(plotlist)
+}
 
-rasi_prev_p = metamorph_svl_prev_plot(m3_zln_rasi, 40, "Rana\nsierrae")
-rasi_load_p = metamorph_svl_load_plot(m3_zln_rasi, 40, "Rana\nsierrae")
+metamorph_svl_load_plot = function(svl_agg) {
+  all_spp = svl_agg %>%
+    select(taxon_capture,
+           svl_mm_cutoff) %>%
+    distinct() %>%
+    arrange(taxon_capture) %>%
+    mutate(species_name = gsub("_", "\n", str_to_sentence(taxon_capture)))
+  
+  load_range = svl_agg %>%
+    filter(is_metamorph == 0) %>%
+    summarize(min = min(mu_0.5_lower, na.rm = TRUE),
+              max = max(mu_0.5_upper, na.rm = TRUE))
+  
+  # preallocate
+  plotlist = list()
+  
+  for (ii in 1:nrow(all_spp)) {
+    spp_agg = svl_agg %>%
+      filter(taxon_capture == all_spp$taxon_capture[ii])
+    
+    # --- load ---
+    p_mu_met = ggplot(spp_agg %>%
+                          filter(is_metamorph == 1),
+                        aes(x = "metamorph", lower = mu_0.5_lower, upper = mu_0.5_upper, middle = mu,
+                            ymin = mu_0.95_lower, ymax = mu_0.95_upper)) +
+      geom_boxplot(stat = "identity", fill = "#FC8D62", alpha = 0.72, outlier.shape = NA) +
+      labs(x = NULL, y = all_spp$species_name[ii]) +
+      coord_cartesian(ylim = c(load_range$min, load_range$max)) +
+      theme_classic()
+    
+    p_mu_notmet = ggplot(spp_agg %>%
+                             filter(is_metamorph == 0), aes(x = svl_mm, y = mu)) +
+      geom_ribbon(aes(ymin = mu_0.5_lower, ymax = mu_0.5_upper), fill = "#FC8D62", alpha = 0.6) +
+      geom_ribbon(aes(ymin = mu_0.95_lower, ymax = mu_0.95_upper), fill = "#FC8D62", alpha = 0.3) +
+      geom_line(color = "#000", linewidth = 1) +
+      geom_vline(xintercept = spp_agg$svl_mm_cutoff[1], linetype = "dashed", color = "#666") +
+      labs(x = "SVL (mm)", y = NULL) +
+      coord_cartesian(ylim = c(load_range$min, load_range$max)) +
+      theme_classic() +
+      theme(
+        axis.text.y  = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line.y  = element_blank()
+      )
+    
+    p_mu = p_mu_met + p_mu_notmet +
+      plot_layout(widths = c(1, 3))
+    
+    plotlist = c(plotlist,
+                 p_mu)
+  }
+ 
+  return(plotlist)
+}
 
-sifl_prev_p = metamorph_svl_prev_plot(m3_zln_sifl, 15.1, "Silverstoneia\nflotator")
-sifl_load_p = metamorph_svl_load_plot(m3_zln_sifl, 15.1, "Silverstoneia\nflotator")
+prev_plot_list = metamorph_svl_prev_plot(svl_agg_all)
+load_plot_list = metamorph_svl_load_plot(svl_agg_all)
 
-
-ylab_dummy_prev <- ggplot() + 
+ylab_dummy_prev = ggplot() + 
   annotate("text", x = 0.5, y = 0.5, label = "Bd prevalence", angle = 90, size = 5) +
   theme_void() +
   coord_fixed(ratio = 10)
 
-ylab_dummy_load <- ggplot() + 
+ylab_dummy_load = ggplot() + 
   annotate("text", x = 0.5, y = 0.5, label = "log(Bd load)", angle = 90, size = 5) +
   theme_void() +
   coord_fixed(ratio = 10)
 
-p_prev <- (ylab_dummy_prev + wrap_plots(list(copa_prev_p,
-                                             liwa_prev_p,
-                                             pscr_prev_p,
-                                             raca_prev_p,
-                                             racb_prev_p,
-                                             racl_prev_p,
-                                             ramu_prev_p,
-                                             rapi_prev_p,
-                                             rasi_prev_p,
-                                             sifl_prev_p), nrow = 10)) +
+p_prev = (ylab_dummy_prev + wrap_plots(prev_plot_list, nrow = length(taxon_list))) +
   plot_layout(widths = c(0.05, 1))
 
-p_load <- (ylab_dummy_load + wrap_plots(list(copa_load_p,
-                                             liwa_load_p,
-                                             pscr_load_p,
-                                             raca_load_p,
-                                             racb_load_p,
-                                             racl_load_p,
-                                             ramu_load_p,
-                                             rapi_load_p,
-                                             rasi_load_p,
-                                             sifl_load_p), nrow = 10)) +
+p_load = (ylab_dummy_load + wrap_plots(load_plot_list, nrow = length(taxon_list))) +
   plot_layout(widths = c(0.05, 1))
 
 ggsave(here("size_bd_gam", "gam_figures", "03_metamorph_svl_combined_m3_prevalence.png"),
        p_prev,
-       width = 8, height = 20)
+       width = 8, height = length(taxon_list) * 2)
 
 ggsave(here("size_bd_gam", "gam_figures", "03_metamorph_svl_combined_m3_load.png"),
        p_load,
-       width = 8, height = 20)
+       width = 8, height = length(taxon_list) * 2)
 
 p_prev
 p_load
