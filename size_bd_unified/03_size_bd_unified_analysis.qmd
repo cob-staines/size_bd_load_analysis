@@ -1133,12 +1133,12 @@ p_temp_mu
 ```{r}
 # define manuscript destination dir
 repo_dir = gsub("size_bd_load_analysis", "", here())
-manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/data/01_basic/")
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
 
 # save essential data
 write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
 write_parquet(spp_lss_draws, paste0(manuscript_data_dir, "unified_03_b_spp_lss_draws.parquet"))
-write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_copmbined_effects_agg.csv"))
+write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_combined_effects_agg.csv"))
 write_parquet(agg_precip, paste0(manuscript_data_dir, "unified_03_d_precipitation_agg.parquet"))
 write_parquet(agg_temp, paste0(manuscript_data_dir, "unified_03_e_temperature_agg.parquet"))
 
