@@ -452,15 +452,15 @@ bd_life_stage = bd_population %>%
     # Heyer, W. R., and R. B. Cocroft. 1986
     ((taxon_capture == "hylodes_phyllodes") & (svl_mm >= 27.5)) ~ "adult",
     ((taxon_capture == "hylodes_phyllodes") & (svl_mm < 27.5)) ~ "subadult",
-    # Kwet, A., and M. Solé. 2005
+    # Kwet, A., and M. Solé. 2005 (21)
     ((taxon_capture == "ischnocnema_henselii") & (svl_mm >= 23.0)) ~ "adult",
     ((taxon_capture == "ischnocnema_henselii") & (svl_mm < 23.0)) ~ "subadult",
     # Kwet, A., and M. Solé. 2005
     ((taxon_capture == "brachycephalus_pitanga") & (svl_mm >= 10.8)) ~ "adult",
     ((taxon_capture == "brachycephalus_pitanga") & (svl_mm <10.8)) ~ "subadult",
+    
     ((taxon_capture == "boana_faber") & (svl_mm >= 70)) ~ "adult",
     ((taxon_capture == "boana_faber") & (svl_mm < 70)) ~ "subadult",
-   
     # country == "brazil" & life_stage == "adult" ~ "adult",
     # country == "brazil" & life_stage %in% c("subadult", "juvenile") ~ "subadult",
     
