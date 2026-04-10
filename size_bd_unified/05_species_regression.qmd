@@ -23,6 +23,9 @@ spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_0
 # load life history
 ls_in = read_csv(here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
 
+ls_clean = ls_in %>%
+  mutate(log_habitat_breadth = log(habitat_breadth))
+
 # phylogenetic tree
 jp_phylo_tree = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
 jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = FALSE)
@@ -81,8 +84,21 @@ metrics_agg = spp_agg %>%
   left_join(spp_contrast_agg, by = "taxon_capture")
 
 metrics_ls = metrics_agg %>%
-  left_join(ls_in, by = "taxon_capture")
+  left_join(ls_clean, by = "taxon_capture")
 
+```
+
+# checks
+```{r}
+# Names in your covariance matrix
+mat_names = rownames(jp_phylo_cov)
+
+# Names in your data
+data_names = unique(metrics_ls$taxon_capture)
+
+# Check for mismatches
+setdiff(data_names, mat_names)  # in data but not matrix
+setdiff(mat_names, data_names)  # in matrix but not data
 ```
 
 # Model
@@ -93,8 +109,8 @@ m1_lspr = brm(
   mvbf(
     hu_mean | mi(hu_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
     hu_contrast_mean | mi(hu_contrast_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    mu_contrast_mean | mi(b_contrast_sd)  ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    sigma_mean | mi(sigma_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    mu_contrast_mean | mi(mu_contrast_sd)  ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    sigma_mean | mi(sigma_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A))
   ),
   data  = metrics_ls,
   data2 = list(A = jp_phylo_cov),
@@ -107,20 +123,72 @@ m1_lspr = brm(
   backend = "cmdstanr"
 )
 
-m1_lspr <- add_criterion(m1_lspr, "loo")
+m1_lspr = add_criterion(m1_lspr, "loo")
 
 saveRDS(m1_lspr, file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
 m1_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
 
+m1b_lspr = brm(
+  mvbf(
+    hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A))
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m1b_lspr = add_criterion(m1b_lspr, "loo")
+
+saveRDS(m1b_lspr, file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
+m1b_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
+
+```
+
+# model comparison
+```{r}
+(loo_comp_out = loo_compare(m1_lspr,
+                            m1b_lspr))
+
+bayes_R2(m1b_lspr)
 ```
 
 # model evaluation
 ```{r}
-model_select = fit_mv
+model_select = m1b_lspr
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
+VarCorr(m1_lspr)
+hyp <- paste("sd_taxon_capture__Intercept^2 /",
+             "(sd_taxon_capture__Intercept^2 + sigma^2) = 0")
+hypothesis(m1_lspr, hyp, class = NULL)
 
+hyp_hu = paste("sd_taxon_capture__humean_Intercept^2 /",
+             "(sd_taxon_capture__humean_Intercept^2 + sigma_humean^2) = 0")
+hyp_mu_contrast = paste("sd_taxon_capture__mucontrastmean_Intercept^2 /",
+             "(sd_taxon_capture__mucontrastmean_Intercept^2 + sigma_mucontrastmean^2) = 0")
+hyp_hu_contrast = paste("sd_taxon_capture__hucontrastmean_Intercept^2 /",
+             "(sd_taxon_capture__hucontrastmean_Intercept^2 + sigma_hucontrastmean^2) = 0")
+hyp_sigma = paste("sd_taxon_capture__sigmamean_Intercept^2 /",
+             "(sd_taxon_capture__sigmamean_Intercept^2 + sigma_sigmamean^2) = 0")
+
+ht_hu_contrast = hypothesis(m1b_lspr, hyp_hu_contrast, class = NULL)
+ht_mu_contrast = hypothesis(m1b_lspr, hyp_mu_contrast, class = NULL)
+ht_hu = hypothesis(m1b_lspr, hyp_hu, class = NULL)
+ht_sigma = hypothesis(m1b_lspr, hyp_sigma, class = NULL)
+
+ht_hu_contrast
+ht_mu_contrast
+ht_hu
+ht_sigma
 ```
 
 # visualize
