@@ -1,0 +1,173 @@
+---
+title: "05_species_meta_regression"
+format: html
+---
+
+# Setup
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio, janitor)
+
+```
+
+# Load models and data
+```{r}
+# load linpred draws
+spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
+
+# load life history
+ls_in = read_csv(here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
+
+# phylogenetic tree
+jp_phylo_tree = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
+jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = FALSE)
+
+```
+
+### Phylogenetic mixed model
+```{r}
+peace = fit_phylo = brm(
+  hu_contrast_median ~ 1 + (1 | gr(taxon_capture, cov = A)),
+  data = combined_agg_arranged,
+  data2 = list(A = A),
+  family = gaussian(),
+  control = list(adapt_delta = 0.99, max_treedepth = 15)
+)
+
+summary(peace)
+
+```
+
+# calculate metrics
+```{r}
+spp_lss_agg = spp_lss_draws %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarise(hu_lss_mean = mean(hu),
+            mu_lss_mean = mean(mu),
+            sigma_lss_mean = mean(sigma),
+            hu_lss_sd = sd(hu),
+            mu_lss_sd = sd(mu),
+            sigma_lss_sd = sd(sigma),
+            .groups = "drop")
+
+spp_agg = spp_lss_agg %>%
+  group_by(taxon_capture) %>%
+  summarise(hu_mean = mean(hu_lss_mean),
+            hu_sd = mean(hu_lss_sd),
+            sigma_mean = mean(sigma_lss_mean),
+            sigma_sd = mean(sigma_lss_sd))
+
+spp_contrast_agg = spp_lss_draws %>%
+  pivot_wider(id_cols = c("taxon_capture", ".draw"),
+              names_from = "life_stage_simple",
+              values_from = c("hu", "mu", "sigma")) %>%
+  mutate(contrast = "subadult - adult",
+         hu_contrast = hu_subadult - hu_adult,
+         mu_contrast = mu_subadult - mu_adult) %>%
+  group_by(taxon_capture) %>%
+  summarise(contrast = dplyr::first(contrast),
+            hu_contrast_mean = mean(hu_contrast),
+            hu_contrast_sd = sd(hu_contrast),
+            mu_contrast_mean = mean(mu_contrast),
+            mu_contrast_sd = sd(mu_contrast),
+            .groups = "drop")
+
+metrics_agg = spp_agg %>%
+  left_join(spp_contrast_agg, by = "taxon_capture")
+
+metrics_ls = metrics_agg %>%
+  left_join(ls_in, by = "taxon_capture")
+
+```
+
+# Model
+```{r}
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+m1_lspr = brm(
+  mvbf(
+    hu_mean | mi(hu_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    hu_contrast_mean | mi(hu_contrast_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    mu_contrast_mean | mi(b_contrast_sd)  ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    sigma_mean | mi(sigma_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  # control = list(adapt_delta = 0.99, max_treedepth = 15),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 124,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m1_lspr <- add_criterion(m1_lspr, "loo")
+
+saveRDS(m1_lspr, file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
+m1_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
+
+```
+
+# model evaluation
+```{r}
+model_select = fit_mv
+summary(model_select)
+plot((model_select), ask = FALSE)
+plot(conditional_effects(model_select), ask = FALSE)
+
+```
+
+# visualize
+```{r}
+fit_mv %>%
+  gather_draws(`b_.*`, regex = TRUE) %>%
+  filter(!grepl("Intercept", .variable)) %>%
+  separate(.variable, into = c("prefix", "response", "term"),
+           sep = "_", extra = "merge") %>%
+  ggplot(aes(x = .value, y = term, color = response, fill = response)) +
+  stat_halfeye(alpha = 0.6, .width = c(0.5, 0.89)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ response, scales = "free_x") +
+  theme_classic() +
+  labs(x = "Posterior estimate", y = NULL,
+       title = "Fixed effects across responses")
+```
+
+# explore specific groups
+```{r}
+# Example: IUCN category effect on hu_mean
+iucn_grid <- expand_grid(
+    iucn_redlist_category = unique(meta_summary$iucn_redlist_category),
+    development_stage     = "larval",          # hold constant
+    pop_trend_present     = "stable",                # hold at reference
+    max_svl_mm            = median(meta_summary$max_svl_mm)
+  ) %>%
+  mutate(
+    hu_sd             = 0.01,
+    hu_subadult_sd    = 0.01,
+    b_subadult_sd     = 0.01,
+    sigma_sd          = 0.01
+  )
+
+# re_formula = NA marginalizes over phylogenetic RE
+iucn_draws <- iucn_grid %>%
+  add_epred_draws(fit_mv,
+                  re_formula = NA,
+                  resp = "husubadultmean")
+
+iucn_draws %>%
+  group_by(iucn_redlist_category) %>%
+  median_qi(.epred, .width = c(0.5, 0.89)) %>%
+  ggplot(aes(x = iucn_redlist_category, y = .epred,
+             ymin = .lower, ymax = .upper)) +
+  geom_pointrange() +
+  theme_classic()
+
+
+```
