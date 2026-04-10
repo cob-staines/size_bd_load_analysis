@@ -4,14 +4,23 @@ format: html
 ---
 
 ```{r}
-librarian::shelf(tidyverse, here, iucnredlist)
+librarian::shelf(tidyverse, here, iucnredlist, rio, janitor)
 
-load(here("data", "bd_model_env_unified_2026-03-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%
   distinct() %>%
   mutate(sn = str_to_sentence(gsub("_", " ", taxon_capture)),
+         sn = recode_values(taxon_capture,
+                               "hyla_cinerea" ~ "Dryophytes cinereus",
+                               "hyla_versicolor" ~ "Dryophytes versicolor",
+                               "rana_catesbeiana" ~ "Aquarana catesbeianus",
+                               "rana_clamitans" ~ "Aquarana clamitans",
+                               "rana_pipiens" ~ "Lithobates pipiens",
+                               "rana_sylvatica" ~ "Lithobates sylvaticus",
+                            default = sn
+         ),
          genus = str_split_fixed(sn, " ", 2)[,1],
          species = str_split_fixed(sn, " ", 2)[,2]) %>%
   arrange(sn)
@@ -61,6 +70,9 @@ cat("\tLooking up species IDs\n")
   
 iucn_assessment_clean = iucn_assessment %>%
   distinct()
+
+species_missing = species_list %>%
+  anti_join(iucn_assessment_clean, by = c("genus" = "genus_q", "species" = "species_q"))
 # fetch assessment data
 cat("\tQuerying local taxa occurences\n")
 iucn_assessment_data = assessment_data_many(api,
@@ -85,10 +97,41 @@ habitats_clean = habitats %>%
          species_q,
          redlist_code,
          everything()) %>%
+  mutate(code_base = as.integer(gsub("_\\d+", "", code))) %>%
+  filter(suitability == "Suitable",
+         code_base <= 13) %>%
+  mutate(aquatic = (code_base %in% c(5))) %>%
   arrange(genus_q,
           species_q,
           code)
 
-write_csv(habitats_clean, here("size_bd_unified", "intermediates", "iucn_habitat_use.csv"))
+habitats_agg = habitats_clean %>%
+  group_by(genus_q,
+           species_q) %>%
+  summarize(habitat_breadth = n(),
+            aquatic_index = sum(aquatic) / n(),
+            .groups = "drop") %>%
+  right_join(species_list, by = c("species_q" = "species", "genus_q" = "genus")) %>%
+  select(taxon_capture,
+         habitat_breadth,
+         aquatic_index)
 
+write_csv(habitats_agg, here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
+
+```
+
+# query Greenberg et al. 2017
+```{r}
+gb_data = import_list(here("data", "doi_10_5061_dryad_t54h6__v20170724", "Greenberg_Evol_Appl_full_dataset.xls"))
+gb_full = gb_data[[1]] %>%
+  clean_names()
+gb_raw = gb_data[[2]] %>%
+  clean_names()
+
+gb_aligned = species_list %>%
+  left_join(gb_raw, by = c("genus", "species")) %>%
+  select(genus,
+         species,
+         ageat_maturity_yrs,
+         source_28)
 ```
