@@ -8,7 +8,6 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow)
 
 # load bd_model_env
-# load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
 load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
@@ -39,48 +38,10 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 
 # load models
 null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
-m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
+m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_p10t30.rds")
+# m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p10t30.rds")
 
 model_select = m9a_zln
-```
-# cutoff lengths
-```{r}
-size_co = tibble(taxon_capture = c("ambystoma_mavortium",
-                                   "anaxyrus_americanus",
-                                   "anaxyrus_canorus", 
-                                   "anaxyrus_fowleri",
-                                   "atelopus_varius",
-                                   "colostethus_panamansis", 
-                                   "craugastor_crassidigitus",
-                                   "craugastor_fitzingeri",
-                                   "espadarana_prosoblepon", 
-                                   "hyla_cinerea",
-                                   "hyla_versicolor",
-                                   "hylodes_phyllodes",
-                                   "ischnocnema_henselii", 
-                                   "lithobates_blairi",
-                                   "lithobates_chiricahuensis",
-                                   "lithobates_palustris", 
-                                   "lithobates_sphenocephalus",
-                                   "lithobates_warszewitschii",
-                                   "notophthalmus_viridescens", 
-                                   "pseudacris_crucifer",
-                                   "pseudacris_regilla",
-                                   "rana_cascadae", 
-                                   "rana_catesbeiana",
-                                   "rana_clamitans",
-                                   "rana_luteiventris",
-                                   "rana_muscosa", 
-                                   "rana_pipiens",
-                                   "rana_sierrae",
-                                   "rana_sylvatica",
-                                   "rhaebo_haematiticus", 
-                                   "rhinella_marina",
-                                   "sachatamia_albomaculata",
-                                   "scaphiopus_holbrookii", 
-                                   "silverstoneia_flotator",
-                                   "smilisca_sila",
-                                   "spea_multiplicata"))
 ```
 
 ## Define analysis functions
@@ -240,6 +201,7 @@ spp_lss_draws = hu_spp_lss_draws %>%
                      .draw,
                      sigma), by = c("taxon_capture", "life_stage_simple", ".draw"))
 
+write_parquet(spp_lss_draws, here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
 combined_agg = hu_spp_agg %>%
   left_join(prevalence_spp_agg, by = "taxon_capture") %>%
@@ -682,32 +644,9 @@ jp_pruned$tip.label = new_tips
 
 jp_pruned$tip.label
 
+# save data
+
 write.tree(jp_pruned, file = here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
-
-```
-
-### Phylogenetic mixed model
-```{r}
-
-librarian::shelf(brms)
-
-tr_rooted = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
-
-
-combined_agg_arranged = tibble(taxon_capture = tr_rooted$tip.label) %>%
-  left_join(combined_agg_single, by = "taxon_capture")
-
-A = ape::vcv.phylo(tr_rooted, corr = TRUE)
-
-peace = fit_phylo = brm(
-  hu_contrast_median ~ 1 + (1 | gr(taxon_capture, cov = A)),
-  data = combined_agg_arranged,
-  data2 = list(A = A),
-  family = gaussian(),
-  control = list(adapt_delta = 0.99, max_treedepth = 15)
-)
-
-summary(peace)
 
 ```
 
@@ -1083,7 +1022,7 @@ agg_precip = hu_agg_precip %>%
 p_precip_prev = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
-  facet_wrap("species") +
+  facet_wrap("taxon_capture") +
   theme_minimal() +
   labs(title = "Bd Prevalence vs. Precipitation",
        x = "10-day lag precipitation [mm]",
@@ -1092,7 +1031,7 @@ p_precip_prev = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence,
 p_precip_mu = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = mu_lower, ymax = mu_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
-  facet_wrap("species") +
+  facet_wrap("taxon_capture") +
   theme_minimal() +
   labs(title = "Bd Load vs. Precipitation",
        x = "10-day lag precipitation [mm]",
@@ -1176,20 +1115,20 @@ agg_temp = hu_agg_temp %>%
                      mu_width), by = c("taxon_capture", "temp_c_30_day_mean"))
 
 # visualize
-p_temp_prev = ggplot(hu_agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
+p_temp_prev = ggplot(agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
-  facet_wrap("species") +
+  facet_wrap("taxon_capture") +
   theme_minimal() +
   ylim(0, 1) +
   labs(title = "Bd Prevalence vs. Temperature",
        x = "30-day lag max daily temperature [C]",
        y = "Bd prevalence [-]")
 
-p_temp_mu = ggplot(mu_agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = mu_lower, ymax = mu_upper)) +
+p_temp_mu = ggplot(agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = mu_lower, ymax = mu_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
-  facet_wrap("species") +
+  facet_wrap("taxon_capture") +
   theme_minimal() +
   labs(title = "Bd Load vs. Temperature",
        x = "30-day lag max daily temperature [C]",
