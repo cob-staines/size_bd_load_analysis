@@ -15,4 +15,5 @@ papers/
 *.RDataTmp*
 *_files/
 /data/*
+*/intermediates/*
 python/environmental_timeseries_pull/chirts_era5/
