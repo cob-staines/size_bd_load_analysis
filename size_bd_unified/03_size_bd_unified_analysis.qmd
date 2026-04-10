@@ -9,7 +9,9 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rs
 
 # load bd_model_env
 # load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData"))
+
+size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
@@ -25,7 +27,8 @@ bd_model_env_stats = brms_data %>%
             subadult_n_pos = sum(life_stage_simple == "subadult" & bd_detected_co),
             .groups = "drop") %>%
   arrange(country,
-          taxon_capture)
+          taxon_capture) %>%
+  left_join(size_cutoff, by = "taxon_capture")
 
 bd_model_env_stats_sub = bd_model_env_stats %>%
   select(taxon_capture,
@@ -39,6 +42,45 @@ null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_res
 m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds")
 
 model_select = m9a_zln
+```
+# cutoff lengths
+```{r}
+size_co = tibble(taxon_capture = c("ambystoma_mavortium",
+                                   "anaxyrus_americanus",
+                                   "anaxyrus_canorus", 
+                                   "anaxyrus_fowleri",
+                                   "atelopus_varius",
+                                   "colostethus_panamansis", 
+                                   "craugastor_crassidigitus",
+                                   "craugastor_fitzingeri",
+                                   "espadarana_prosoblepon", 
+                                   "hyla_cinerea",
+                                   "hyla_versicolor",
+                                   "hylodes_phyllodes",
+                                   "ischnocnema_henselii", 
+                                   "lithobates_blairi",
+                                   "lithobates_chiricahuensis",
+                                   "lithobates_palustris", 
+                                   "lithobates_sphenocephalus",
+                                   "lithobates_warszewitschii",
+                                   "notophthalmus_viridescens", 
+                                   "pseudacris_crucifer",
+                                   "pseudacris_regilla",
+                                   "rana_cascadae", 
+                                   "rana_catesbeiana",
+                                   "rana_clamitans",
+                                   "rana_luteiventris",
+                                   "rana_muscosa", 
+                                   "rana_pipiens",
+                                   "rana_sierrae",
+                                   "rana_sylvatica",
+                                   "rhaebo_haematiticus", 
+                                   "rhinella_marina",
+                                   "sachatamia_albomaculata",
+                                   "scaphiopus_holbrookii", 
+                                   "silverstoneia_flotator",
+                                   "smilisca_sila",
+                                   "spea_multiplicata"))
 ```
 
 ## Define analysis functions
@@ -565,10 +607,10 @@ p_cascade_sigma_linpred
 # correlation analysis
 ```{r}
 simple_cor = cor_mat(combined_agg_single %>%
-                       select(hu_median,
-                              sigma_median,
-                              hu_contrast_median,
-                              mu_contrast_median), method = "spearman")
+                       select(hu_contrast_median,
+                              mu_contrast_median,
+                              hu_median,
+                              sigma_median), method = "spearman")
 
 cor_get_pval(simple_cor)
 
@@ -623,7 +665,7 @@ combined_agg_j = combined_agg_single %>%
               select(taxon_capture,
                      jp_sn), by = "taxon_capture")
 
-# Ccheck plot
+# Check plot
 plotTree(jp_pruned, fsize = 0.8)
 
 is.binary(jp_pruned)
@@ -632,11 +674,48 @@ table(sapply(1:jp_pruned$Nnode, function(n) {
   length(Children(jp_pruned, n + Ntip(jp_pruned)))
 }))
 
+new_tips = tibble(jp_sn = jp_pruned$tip.label) %>%
+  left_join(species_list_j, by = "jp_sn") %>%
+  pull(taxon_capture)
+
+jp_pruned$tip.label = new_tips
+
+jp_pruned$tip.label
+
+write.tree(jp_pruned, file = here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
+
+```
+
+### Phylogenetic mixed model
+```{r}
+
+librarian::shelf(brms)
+
+tr_rooted = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
+
+
+combined_agg_arranged = tibble(taxon_capture = tr_rooted$tip.label) %>%
+  left_join(combined_agg_single, by = "taxon_capture")
+
+A = ape::vcv.phylo(tr_rooted, corr = TRUE)
+
+peace = fit_phylo = brm(
+  hu_contrast_median ~ 1 + (1 | gr(taxon_capture, cov = A)),
+  data = combined_agg_arranged,
+  data2 = list(A = A),
+  family = gaussian(),
+  control = list(adapt_delta = 0.99, max_treedepth = 15)
+)
+
+summary(peace)
+
 ```
 
 ### Analyze
 ```{r}
 tr_rooted = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
+
+tr_rooted$tip.label
 
 # calculate blomberg K
 blomberg_k = function(tree, var_values, species) {
@@ -1001,7 +1080,7 @@ agg_precip = hu_agg_precip %>%
                      mu_width), by = c("taxon_capture", "precip_mm_10_day_sum"))
 
 # visualize
-p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = prevalence_lower, ymax = prevalene_upper)) +
+p_precip_prev = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1010,7 +1089,7 @@ p_precip_prev = ggplot(hu_agg_precip, aes(x = precip_mm_10_day_sum, y = prevalen
        x = "10-day lag precipitation [mm]",
        y = "Bd prevalence [-]")
 
-p_precip_mu = ggplot(mu_agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = mu_lower, ymax = mu_upper)) +
+p_precip_mu = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = mu_lower, ymax = mu_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
   facet_wrap("species") +
@@ -1141,5 +1220,7 @@ write_parquet(spp_lss_draws, paste0(manuscript_data_dir, "unified_03_b_spp_lss_d
 write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_combined_effects_agg.csv"))
 write_parquet(agg_precip, paste0(manuscript_data_dir, "unified_03_d_precipitation_agg.parquet"))
 write_parquet(agg_temp, paste0(manuscript_data_dir, "unified_03_e_temperature_agg.parquet"))
+
+write.tree(jp_pruned, file = here(manuscript_data_dir, "jp_tree_pruned.nwk"))
 
 ```
