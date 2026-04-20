@@ -51,7 +51,7 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr,
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData")) 
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-20.RData")) 
 
 # checks
 sum(is.na(brms_data$bd_load_co_density))
@@ -494,29 +494,29 @@ null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_res
 ## I think I should drop the (1|population) terms and keep only the (1|population:taxon_capture:life_stage_simple) terms... maybe? Or does the fact that they are not neatly nested mean this not trully redundant?
 ##
 ##
-m5g_zln <- brm(
-  formula = bf(
-    bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
-    hu ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
-    sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
-  ),
-  data = brms_data,
-  family = hurdle_lognormal(),
-  prior = model_priors,
-  sample_prior = "yes",
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  chains = 4,
-  iter = 2000,
-  warmup = 1000,
-  seed = 124,
-  cores = 4,
-  backend = "cmdstanr"
-)
-
-m5g_zln <- add_criterion(m5g_zln, "loo")
-
-saveRDS(m5g_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
-m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+# m5g_zln <- brm(
+#   formula = bf(
+#     bd_load_co_density ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+#     hu ~ 1 + life_stage_simple * taxon_capture + (1 | population) + (1 + precip_mm_30_z + precip_mm_30_z2 + temp_c_30_z + temp_c_30_z2 | taxon_capture:life_stage_simple) + (1 | population:taxon_capture:life_stage_simple),
+#     sigma ~ 1 + taxon_capture +  (1 | population) + (1 | population:taxon_capture)
+#   ),
+#   data = brms_data,
+#   family = hurdle_lognormal(),
+#   prior = model_priors,
+#   sample_prior = "yes",
+#   control = list(adapt_delta = 0.95, max_treedepth = 12),
+#   chains = 4,
+#   iter = 2000,
+#   warmup = 1000,
+#   seed = 124,
+#   cores = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# m5g_zln <- add_criterion(m5g_zln, "loo")
+# 
+# saveRDS(m5g_zln, file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
+# m5g_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_poptls2env2_30.rds")
 # 
 # m6_zln <- brm(
 #   formula = bf(
@@ -738,6 +738,44 @@ m9b_zln <- add_criterion(m9b_zln, "loo")
 saveRDS(m9b_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p10t30.rds")
 m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p10t30.rds")
 
+m9b_30_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_30_z + I(precip_mm_30_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_30_z + I(precip_mm_30_z^2) + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_30_z + I(precip_mm_30_z^2) + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_30_z + I(precip_mm_30_z^2) + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    sigma ~ 1 + taxon_capture + 
+      (1 | population)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 125,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m9b_30_zln <- add_criterion(m9b_30_zln, "loo")
+
+saveRDS(m9b_30_zln, file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p30t30.rds")
+m9b_30_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p30t30.rds")
+
+# quadratic in temp, linear in precip
 m9c_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
@@ -775,6 +813,44 @@ m9c_zln <- add_criterion(m9c_zln, "loo")
 saveRDS(m9c_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptls_p10t30.rds")
 m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptls_p10t30.rds")
 
+# quadratic temp, linear precip, year
+m9d_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    sigma ~ 1 + taxon_capture + 
+      (1 | population:year)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 125,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m9d_zln <- add_criterion(m9d_zln, "loo")
+
+saveRDS(m9d_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
+m9d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
+
 
 ```
 
@@ -806,7 +882,9 @@ m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_
                             # m6d_zln,
                             # m8_zln,
                             m9a_zln,
-                            m9b_zln
+                            m9b_zln,
+                            # m9b_30_zln
+                            m9c_zln
                             ))
 ```
 
@@ -821,12 +899,13 @@ m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m9b_zln
+model_select = m9c_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
 VarCorr(model_select)
+bayes_R2(model_select)
 ```
 
 ### Posterios predictive checks
@@ -834,8 +913,8 @@ VarCorr(model_select)
 #| eval: true
 #| code-fold: true
 #| code-summary: "Show model checks code (fixed effects)"
-#| fig-height: 6
-#| fig-width: 8
+#| fig-height: 10
+#| fig-width: 10
 
 color_scheme_set("viridis")
 # model_select = m5g_zln
@@ -854,6 +933,10 @@ pp_check(model_select,
 #          ndraws = 100) +
 #   scale_x_log10()
 
+peace = pp_check(model_select, group = "taxon_capture", type = "dens_overlay_grouped")
+
+peace +
+  scale_x_log10()
 
 ```
 
