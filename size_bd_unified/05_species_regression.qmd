@@ -11,7 +11,7 @@ format: html
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio, janitor)
+librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio, janitor, ape)
 
 ```
 
@@ -32,17 +32,14 @@ jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = FALSE)
 
 ```
 
-### Phylogenetic mixed model
+# visualize metrics
 ```{r}
-peace = fit_phylo = brm(
-  hu_contrast_median ~ 1 + (1 | gr(taxon_capture, cov = A)),
-  data = combined_agg_arranged,
-  data2 = list(A = A),
-  family = gaussian(),
-  control = list(adapt_delta = 0.99, max_treedepth = 15)
-)
+ggplot(spp_lss_draws, aes(x = hu)) +
+  geom_histogram()
 
-summary(peace)
+ggplot(spp_lss_draws, aes(x = sigma)) +
+  geom_histogram()
+
 
 ```
 
@@ -150,6 +147,33 @@ m1b_lspr = add_criterion(m1b_lspr, "loo")
 saveRDS(m1b_lspr, file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
 m1b_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
 
+# lognormal for sigma
+m1c_lspr = brm(
+  mvbf(
+    bf(hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+       family = lognormal())
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m1c_lspr = add_criterion(m1c_lspr, "loo")
+
+saveRDS(m1c_lspr, file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
+m1c_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
+
 ```
 
 # model comparison
@@ -189,6 +213,37 @@ ht_hu_contrast
 ht_mu_contrast
 ht_hu
 ht_sigma
+```
+# ppcheck
+```{r}
+pp_check(model_select,
+         resp = "humean",
+         type = "dens_overlay",
+         prefix = "ppc",
+         ndraws = 100) +
+  scale_x_log10()
+
+pp_check(model_select,
+         resp = "hucontrastmean",
+         type = "dens_overlay",
+         prefix = "ppc",
+         ndraws = 100) +
+  scale_x_log10()
+
+pp_check(model_select,
+         resp = "mucontrastmean",
+         type = "dens_overlay",
+         prefix = "ppc",
+         ndraws = 100) +
+  scale_x_log10()
+
+pp_check(model_select,
+         resp = "sigmamean",
+         type = "dens_overlay",
+         prefix = "ppc",
+         ndraws = 100) +
+  scale_x_log10()
+
 ```
 
 # visualize
