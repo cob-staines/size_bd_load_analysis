@@ -116,6 +116,7 @@ habitats_agg = habitats_clean %>%
          habitat_breadth,
          aquatic_index)
 
+
 write_csv(habitats_agg, here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
 
 ```
