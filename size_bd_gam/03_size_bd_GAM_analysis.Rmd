@@ -30,7 +30,7 @@ taxon_list = list("colostethus_panamansis",
                   "silverstoneia_flotator")
 
 # list of all models
-model_list = map(taxon_list, ~readRDS(file = here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", .x, ".rds"))))
+model_list = purrr::map(taxon_list, ~readRDS(file = here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", .x, ".rds"))))
 
 # subadult cutoffs
 co_list = c(18.8,
@@ -241,6 +241,15 @@ repo_dir = gsub("size_bd_load_analysis", "", here())
 manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
 
 write_parquet(svl_agg_all, paste0(manuscript_data_dir, "GAM_03_a_svl_agg.parquet"))
+
+```
+
+## R2
+```{r}
+models_r2 = purrr::map(model_list, bayes_R2)
+
+models_r2
+taxon_list
 
 ```
 
