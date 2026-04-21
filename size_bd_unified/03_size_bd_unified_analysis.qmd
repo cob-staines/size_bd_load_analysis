@@ -8,7 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-20.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
@@ -40,9 +40,10 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # null_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_null.rds"))
 # m9a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_p10t30.rds")
 # m9b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p10t30.rds")
-m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptls_p10t30.rds")
+# m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptls_p10t30.rds")
+m9d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
 
-model_select = m9c_zln
+model_select = m9d_zln
 ```
 
 ## Define analysis functions
@@ -656,7 +657,7 @@ simple_cor = cor_mat(combined_agg_single %>%
                               mu_contrast_median,
                               hu_median,
                               sigma_median), method = "spearman")
-
+simple_cor
 cor_get_pval(simple_cor)
 
 
@@ -667,7 +668,17 @@ cor_get_pval(simple_cor)
 ### Jetz & Pyron 2018
 https://datadryad.org/dataset/doi:10.5061/dryad.cc3n6j5#usage
 ```{r}
-jp_raw = read.tree(file = here("data", "amph_shl_new_Consensus_7238.tre"))
+jp_all = read.nexus(file = here("data", "tree-pruner-a1f34500-26bc-45a2-a777-afe418ddad90", "output.nex"))
+
+jp_sample_100 = jp_all[sample(1000, 100)]
+
+consensus_100 = consensus(jp_sample_100)
+
+jp_raw = consensus.edges(jp_sample_100, consensus.tree = consensus_100)
+
+# plot(jp_raw)
+
+# jp_raw = read.tree(file = here("data", "amph_shl_new_Consensus_7238.tre"))
 
 # preview alignment
 jk_species_list = bd_model_env_stats %>%
@@ -788,10 +799,10 @@ pagel_lambda = function(tree, var_values, species) {
 }
 
 # blomberg k
-hu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$jp_sn)
-mu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$jp_sn)
-prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
-sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
+hu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$taxon_capture)
+mu_contrast_med_k = blomberg_k(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$taxon_capture)
+prev_med_k = blomberg_k(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$taxon_capture)
+sigma_med_k = blomberg_k(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$taxon_capture)
 
 hu_contrast_med_k
 mu_contrast_med_k
@@ -799,10 +810,10 @@ prev_med_k
 sigma_med_k
 
 # pagel lambda
-hu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$jp_sn)
-mu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$jp_sn)
-prev_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$jp_sn)
-sigma_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$jp_sn)
+hu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$hu_contrast_median, combined_agg_j$taxon_capture)
+mu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$mu_contrast_median, combined_agg_j$taxon_capture)
+prev_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$prevalence_median, combined_agg_j$taxon_capture)
+sigma_med_lambda = pagel_lambda(jp_pruned, combined_agg_j$sigma_median, combined_agg_j$taxon_capture)
 
 hu_contrast_med_lambda
 mu_contrast_med_lambda
@@ -831,25 +842,25 @@ sym_div_cont_map = function(tree, var_values, species, center, p_title, style = 
 
 p_hu_contrast_med_map = sym_div_cont_map(jp_pruned,
                                   combined_agg_j$hu_contrast_median,
-                                  combined_agg_j$jp_sn,
+                                  combined_agg_j$taxon_capture,
                                   0,
                                   "Bd prevalence (hu): median subadult effect")
 
 p_mu_contrast_med_map = sym_div_cont_map(jp_pruned,
                                  combined_agg_j$mu_contrast_median,
-                                 combined_agg_j$jp_sn,
+                                 combined_agg_j$taxon_capture,
                                  0,
                                  "Bd log load (mu): median subadult effect")
 
 p_prev_med_map = sym_div_cont_map(jp_pruned,
                                 combined_agg_j$prevalence_median,
-                                combined_agg_j$jp_sn,
+                                combined_agg_j$taxon_capture,
                                 0.5,
                                 "Median Bd prevalence")
 
 p_sigma_med_map = sym_div_cont_map(jp_pruned,
                                  combined_agg_j$sigma_median,
-                                 combined_agg_j$jp_sn,
+                                 combined_agg_j$taxon_capture,
                                  0.8822,
                                  "Median Bd load dispersion (sigma)")
 
@@ -1041,15 +1052,6 @@ ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = 
 
 # 30 day collective
 ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = taxon_capture)) +
-  geom_point(alpha = 0.1) +
-  stat_ellipse() +
-  labs(x = "30-day temperature mean (degC)", 
-       y = "30-day precipitation total (mm)",
-       title = "Temperature v. precipitation") +
-  theme_minimal()
-
-# 30 day collective, scaled to climate by species
-ggplot(brms_data, aes(x = temp_c_30_sp_z, y = precip_mm_30_sp_z, color = taxon_capture)) +
   geom_point(alpha = 0.1) +
   stat_ellipse() +
   labs(x = "30-day temperature mean (degC)", 
@@ -1270,7 +1272,7 @@ p_temp_mu
 # Populations
 ```{r}
 #| fig-width: 10
-#| fig-height: 15
+#| fig-height: 10
 
 f_draw_agg <- function(draws, group_vars, agg_var) {
   
@@ -1303,7 +1305,8 @@ pop_coords = brms_data %>%
 nd_pop_env = model_select$data |>
   group_by(taxon_capture, life_stage_simple) |>
   summarise(precip_mm_10_z = median(precip_mm_10_z),
-            temp_c_30_z = median(temp_c_30_z)) %>%
+            temp_c_30_z = median(temp_c_30_z),
+            .groups = "drop") %>%
   filter(life_stage_simple == "subadult") %>%
   select(-life_stage_simple)
 
@@ -1358,7 +1361,7 @@ mu_pop_contrast_agg = f_draw_agg(mu_pop_contrast_draws %>%
 mu_pop_adult_agg = f_draw_agg(mu_pop_contrast_draws %>%
                                 filter(!is.na(adult)) %>%
                                 dplyr::rename(mu_adult = adult), c("taxon_capture", "population", "contrast"), "mu_adult")
-mu_pop_subadult_agg = f_draw_agg(hu_pop_contrast_draws %>%
+mu_pop_subadult_agg = f_draw_agg(mu_pop_contrast_draws %>%
                                    filter(!is.na(subadult)) %>%
                                 dplyr::rename(mu_subadult = subadult), c("taxon_capture", "population", "contrast"), "mu_subadult")
 
@@ -1368,7 +1371,8 @@ pop_agg_combined = hu_pop_contrast_agg %>%
   left_join(mu_pop_contrast_agg, by = c("taxon_capture", "population", "contrast")) %>%
   left_join(mu_pop_adult_agg, by = c("taxon_capture", "population", "contrast")) %>%
   left_join(mu_pop_subadult_agg, by = c("taxon_capture", "population", "contrast")) %>%
-  left_join(pop_coords, by = "population")
+  left_join(pop_coords, by = "population") %>%
+  mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
 pop_agg_stats = pop_agg_combined %>%
   group_by(taxon_capture) %>%
@@ -1377,7 +1381,7 @@ pop_agg_stats = pop_agg_combined %>%
             contrast_n = sum(!is.na(hu_contrast_median)))
 
 pop_agg_stats_select = pop_agg_stats %>%
-  filter(contrast_n >= 12)
+  filter(contrast_n >= 0)
 
 ggplot(pop_agg_combined %>%
          filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_contrast_median, y = mu_contrast_median, color = taxon_capture)) +
@@ -1394,13 +1398,66 @@ ggplot(pop_agg_combined %>%
                   size = 3) +
   facet_wrap("taxon_capture")
 
-ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_contrast_net_effect, y = mu_contrast_net_effect, color = taxon_capture)) +
+p_scatter_hu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
+         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_adult_median, y = -hu_subadult_median)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
   geom_point() +
   geom_text_repel(aes(label = population),
                   color = "#333",
                   size = 3) +
-  facet_wrap("taxon_capture")
+  facet_wrap("species") +
+  labs(title = "Adult v. Subadult Prevalence by Population",
+       x = "Adult median log(Bd detection odds)",
+       y = "Subadult median log(Bd detection odds)") +
+  theme_minimal()
+
+p_scatter_hu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
+         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+         arrange(desc(taxon_capture)), aes(x = -hu_adult_median, y = -hu_subadult_median, color = species)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point() +
+  geom_text_repel(aes(label = population),
+                  color = "#333",
+                  size = 3) +
+  labs(title = "Adult v. Subadult Prevalence by Population",
+       x = "Adult median log(Bd detection odds)",
+       y = "Subadult median log(Bd detection odds)") +
+  theme_minimal()
+
+p_scatter_mu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
+         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = mu_adult_median, y = mu_subadult_median)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point() +
+  geom_text_repel(aes(label = population),
+                  color = "#333",
+                  size = 3) +
+  facet_wrap("species") +
+  labs(title = "Adult v. Subadult Load by Population",
+       x = "Adult median log(Bd load)",
+       y = "Subadult median log(Bd load)") +
+  theme_minimal()
+
+p_scatter_mu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
+         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+         arrange(desc(taxon_capture)), aes(x = mu_adult_median, y = mu_subadult_median, color = species)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point() +
+  geom_text_repel(aes(label = population),
+                  color = "#333",
+                  size = 3) +
+  labs(title = "Adult v. Subadult Load by Population",
+       x = "Adult median log(Bd load)",
+       y = "Subadult median log(Bd load)") +
+  theme_minimal()
+
 
 p_cascade_hu_contrast_linpred_pop_sn = ggplot(pop_agg_combined %>%
                                                 filter(taxon_capture %in% c("rana_muscosa",
@@ -1482,7 +1539,75 @@ cor_get_pval(pop_cor)
 
 p_cascade_hu_contrast_linpred_pop_sn
 p_cascade_mu_contrast_linpred_pop_sn
+p_cascade_hu_contrast_linpred_pop_sn_lat
+p_cascade_mu_contrast_linpred_pop_sn_lat
 
+p_scatter_hu_life_stage_linpred_pop
+p_scatter_hu_life_stage_linpred_pop_sn
+p_scatter_mu_life_stage_linpred_pop
+p_scatter_mu_life_stage_linpred_pop_sn
+
+ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult.png"),
+       p_scatter_hu_life_stage_linpred_pop,
+       width = 10, height = 10)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult_sn.png"),
+       p_scatter_hu_life_stage_linpred_pop_sn,
+       width = 10, height = 10)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult.png"),
+       p_scatter_mu_life_stage_linpred_pop,
+       width = 10, height = 10)
+
+ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult_sn.png"),
+       p_scatter_mu_life_stage_linpred_pop_sn,
+       width = 10, height = 10)
+
+
+```
+## map
+```{r}
+library(leaflet)
+library(RColorBrewer)
+library(mapview)
+
+pop_agg_contrast = pop_agg_combined %>%
+  filter(!is.na(hu_contrast_median),
+         taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+  mutate(species = get_species_name(taxon_capture))
+
+hu_abs_max = max(abs(pop_agg_contrast$hu_contrast_median))
+mu_abs_max = max(abs(pop_agg_contrast$mu_contrast_median))
+
+pal_hu = colorNumeric("RdYlBu", domain = c(-hu_abs_max, hu_abs_max), reverse = TRUE)
+hu_map = leaflet(pop_agg_contrast) %>%
+  addTiles() %>%
+  addCircleMarkers(lng = ~longitude, lat = ~latitude, color = ~pal_hu(-hu_contrast_median),
+                   radius = 5, fillOpacity = 0.9,
+                   popup = ~paste("Population:", population,"<br>Species:", species,"<br>log(detection odds) contrast:", -hu_contrast_median)) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = pal_hu, 
+            values = ~(-hu_contrast_median),
+            title = "Median log(Bd detection odds)<br>Contrast (subadult - adult)",
+            position = "bottomright")
+
+pal_mu = colorNumeric("RdYlBu", domain =  c(-mu_abs_max, mu_abs_max), reverse = TRUE)
+mu_map = leaflet(pop_agg_contrast) %>%
+  addTiles() %>%
+  addCircleMarkers(lng = ~longitude, lat = ~latitude, color = ~pal_mu(mu_contrast_median),
+                   radius = 5, fillOpacity = 0.9,
+                   popup = ~paste("Population:", population,"<br>Species:", species, "<br>log(load) contrast:", mu_contrast_median)) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addLegend(pal = pal_mu, 
+            values = ~mu_contrast_median,
+            title = "Median log(Bd load)<br>Contrast (subadult - adult)",
+            position = "bottomright")
+
+saveWidget(hu_map, here("size_bd_unified", "unified_figures", "maps", "map_prev_contrast_sn.html"))
+saveWidget(mu_map, here("size_bd_unified", "unified_figures", "maps", "map_load_contrast_sn.html"))
+
+hu_map
+mu_map
 
 ```
 
@@ -1490,10 +1615,15 @@ p_cascade_mu_contrast_linpred_pop_sn
 ```{r}
 #| fig-width: 20
 #| fig-height: 20
+
+x_range <- ggplot_build(p_cascade_hu_contrast_linpred)$layout$panel_scales_x[[1]]$range$range
+y_range <- ggplot_build(p_cascade_mu_contrast_linpred)$layout$panel_scales_x[[1]]$range$range
+
 p_combined = wrap_plots(p_median_effect_scatter +
                           scale_x_continuous(position = "top",
-                                             limits = c(-4.3, 5.9)) +
-                          ylim(-4.9, 6.8) +
+                                             limits = x_range
+                                             ) +
+                          ylim(y_range) +
                           labs(title = NULL,
                                xlab = NULL,
                                ylab = NULL),
@@ -1502,12 +1632,10 @@ p_combined = wrap_plots(p_median_effect_scatter +
                                            limits = rev) +
                           coord_flip() +
                           theme(axis.text.x = element_text(angle = 90, vjust = 0, hjust = 1)) +
-                          xlim(-4.9, 6.8) +
                           labs(title = NULL,
                                xlab = NULL,
                                ylab = NULL),
                         p_cascade_hu_contrast_linpred +
-                          xlim(-4.3, 5.9) +
                           scale_y_discrete(limits = rev) +
                           labs(title = NULL,
                                xlab = NULL,
