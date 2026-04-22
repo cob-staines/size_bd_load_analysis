@@ -18,6 +18,61 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 
 # Load data
 
+### RABO
+```{r}
+# Amphibian Disease Portal
+adp_raw = read_csv(here("data", "amphibian_disease_data_processed.csv"))
+
+adp_filter = adp_raw %>%
+  filter(!is.na(length),
+         !is.na(decimalLatitude),
+         diseaseTested == "Bd",
+         testMethod %in% c("quantitative PCR", "realtime PCR"),
+         basisOfRecord == "LivingSpecimen")
+
+adp_group = adp_filter %>%
+  group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 38) %>%
+  count()
+
+peace = adp_filter %>%
+  select(testMethod) %>%
+  distinct()
+
+adp_select = adp_filter %>%
+  filter(genus == "Rana",
+         specificEpithet == "boylii",
+         diagnosticLab == "Briggs Lab, University of California Santa Barbara")
+
+rabo_clean = adp_select %>%
+  mutate(svl_mm = length,
+         life_stage_simple = case_when(
+           svl_mm >= 38 ~ "adult",
+           svl_mm < 38 ~ "subadult"),
+         date = as.Date(verbatimEventDate),
+         bd_its_copies = quantityDetected * as.numeric(dilutionFactor) * 60,
+         taxon_capture = "rana_boylii",
+         site = tolower(gsub(",", "", gsub(" ", "_", locality))),
+         population = "alameda",
+         region = "california",
+         country = "usa",
+         project = "RABO")
+
+rabo_sites = rabo_clean %>%
+  group_by(site) %>%
+  summarize(site_latitude = mean(decimalLatitude, na.rm = TRUE),
+            site_longitude = mean(decimalLongitude, na.rm = TRUE))
+
+rabo_visit = rabo_clean %>%
+  left_join(rabo_sites, by = "site") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
 ## RIBBiTR
 ```{r}
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -61,8 +116,8 @@ usgs_visit = usgs_raw %>%
   mutate(site = paste0("usgs_", site_id),
          date = mdy(collection_date)) %>% 
   group_by(site) %>%
-  mutate(site_latitude = first(latitude),
-         site_longitude = first(longitude)) %>%
+  mutate(site_latitude = mean(latitude, na.rm = TRUE),
+         site_longitude = mean(longitude, na.rm = TRUE)) %>%
   ungroup() %>%
   group_by(site, site_latitude, site_longitude) %>%
   summarize(date_min = min(date, na.rm = TRUE),
@@ -72,15 +127,16 @@ usgs_visit = usgs_raw %>%
 
 ## RACA
 ```{r}
-raca_raw = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
-  clean_names() %>%
-  rename(site = site_name,
-         site_utme = utme_site,
-         site_utmn = utmn_site) %>%
-  mutate(date = as.Date(date),
-         site = tolower(gsub(" ", "_", site)))
+raca_raw = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv"))
 
-raca_sites = raca_raw %>%
+raca_clean = raca_raw %>%
+  clean_names() %>%
+  dplyr::rename(site_utme = utme_site,
+                site_utmn = utmn_site) %>%
+  mutate(date = as.Date(date),
+         site = tolower(gsub(" ", "_", site_name)))
+
+raca_sites = raca_clean %>%
   select(site,
          site_utme,
          site_utmn) %>%
@@ -102,7 +158,7 @@ raca_sites_ll = raca_sites %>%
          site_latitude,
          site_longitude)
 
-raca_visit = raca_raw %>%
+raca_visit = raca_clean %>%
   select(site,
          date) %>%
   left_join(raca_sites_ll, by = "site") %>%
@@ -155,28 +211,141 @@ ralu_visit = ralu_raw[[4]] %>%
 
 ```
 
+### HYPHY
+```{r}
+### Hylodes phyllodes
+hyphy_raw = import_list(here("data", "CDMR_H.phyllodes_metadata_Oct2_LKS.xlsx"))[[1]]
+
+hyphy_clean = hyphy_raw %>%
+  clean_names() %>%
+  filter(timepoint == 0) %>%
+  # filter(timepoint == 0 | treatment == "Saline control") %>%
+  mutate(
+    date = as.Date(capture_date),
+    svl_mm = as.numeric(svl),
+    life_stage_simple = case_when(
+    svl_mm < 27.5 ~ "subadult",
+    svl_mm >= 27.5 ~ "adult",
+    .default = NA),
+    taxon_capture = "hylodes_phyllodes",
+    site = gsub("aw", "s", tolower(transect)),
+    population = region,
+    country = "brazil",
+    bd_its_copies = bd_load,
+    project = "HYPHY"
+  ) %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"))
+
+hyphy_population_valid = hyphy_clean %>%
+  group_by(population) %>%
+  summarize(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            .groups = "drop")
+
+hyphy_sites = db_site %>%
+  filter(site %in% hyphy_clean$site) %>%
+  select(site,
+         site_latitude,
+         site_longitude,
+         site_elevation_m) %>%
+  collect()
+
+hyphy_visit = hyphy_clean %>%
+  left_join(hyphy_sites, by = "site") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+```
+
+### BOFA
+```{r}
+### Boana faber
+bofa_raw = read_tsv(here("data", "Boana_faber_capture_data_for_Cob.csv"))
+
+bofa_clean = bofa_raw %>%
+  clean_names() %>%
+  mutate(
+    date = as.Date(capture_date, format = "%d/%m/%Y"),
+    svl_mm = as.numeric(svl),
+    life_stage_simple = case_when(
+      svl_mm < 63 ~ "subadult",
+      svl_mm >= 63 ~ "adult",
+      .default = NA),
+    bd_its_copies = coalesce(bd_loads, as.numeric(bd_q1), as.numeric(bd_q2)),
+    bd_its_copies = if_else(is.na(bd_its_copies), 0, bd_its_copies),
+    taxon_capture = "boana_faber",
+    site = tolower(gsub(" ", "_", capture_site)),
+    site = if_else(grepl("o_paulo$", site), "joao_paulo", site),
+    population = case_when(
+      site == "lago_anta" ~ "santa_virginia",
+      .default = site),
+    region = case_when(
+      site == "lago_anta" ~ "santa_virginia",
+      .default = "sao_luis_paraitinga"),
+    country = "brazil",
+    project = "BOFA"
+  ) %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"),
+         site != "roberto")
+
+bofa_sites = bofa_clean %>%
+  group_by(site) %>%
+  summarize(site_latitude = mean(lat, na.rm = TRUE),
+            site_longitude = mean(long, na.rm = TRUE)) %>%
+  # manually correct lat/lon for lago_anta, to align with other datasets
+  mutate(site_latitude = if_else(site == "lago_anta", -23.38511, site_latitude),
+         site_longitude = if_else(site == "lago_anta", -45.18707, site_longitude))
+
+bofa_visit = bofa_clean %>%
+  left_join(bofa_sites, by = "site") %>%
+  group_by(site,
+           site_latitude,
+           site_longitude) %>%
+  summarize(date_min = min(date, na.rm = TRUE),
+            date_max = max(date, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
 # Prepare sites
 ```{r}
-day_buffer = 60
+day_buffer = 366
 
-check_cols = compare_df_cols(ribbitr_visit,
+check_cols = compare_df_cols(rabo_visit,
+                             ribbitr_visit,
+                             usgs_visit,
+                             raca_visit,
+                             ralu_visit,
+                             hyphy_visit,
+                             bofa_visit)
+
+site_date_combined = bind_rows(rabo_visit,
+                               ribbitr_visit,
                                usgs_visit,
                                raca_visit,
-                               ralu_visit)
-
-site_date_combined = bind_rows(ribbitr_visit,
-                               usgs_visit,
-                               raca_visit,
-                               ralu_visit)
+                               ralu_visit,
+                               hyphy_visit,
+                               bofa_visit) %>%
+  group_by(site, site_latitude, site_longitude) %>%
+  summarize(date_min = min(date_min),
+            date_max = max(date_max),
+            .groups = "drop")
 
 check_site_unique = get_dupes(site_date_combined, site)
 
 site_date_all = site_date_combined %>%
   mutate(start_date = date_min - days(day_buffer),
          end_date = date_max) %>%
-  rename(latitude = site_latitude,
-         longitude = site_longitude,
-         site_name = site) %>%
+  dplyr::rename(latitude = site_latitude,
+                longitude = site_longitude,
+                site_name = site) %>%
   select(-date_min,
          -date_max)
 

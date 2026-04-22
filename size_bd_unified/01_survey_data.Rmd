@@ -47,13 +47,10 @@ Species were included if supported by least 14 swabbed adults and subadults (eac
 I scaled all Bd quantities by the Snout-Vent-Length (mm) to arrive at a Bd density per linear distance of skin swabbed (within species), to correct for linear effects of larger swabbing area in larger frogs. I also set any Bd ITS copy numbers < 10 to zero, to represent uncertainty in qPCR results and support consistency in zero-inflation modeling.
 
 
-### Amphibian Disease Portal (NOT INCLUDED)
+### RABO
 ```{r}
+# Amphibian Disease Portal
 adp_raw = read_csv(here("data", "amphibian_disease_data_processed.csv"))
-
-colnames(adp_raw)
-
-problems(adp_raw)
 
 adp_filter = adp_raw %>%
   filter(!is.na(length),
@@ -63,7 +60,7 @@ adp_filter = adp_raw %>%
          basisOfRecord == "LivingSpecimen")
 
 adp_group = adp_filter %>%
-  group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 40) %>%
+  group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 38) %>%
   count()
 
 peace = adp_filter %>%
@@ -74,6 +71,41 @@ adp_select = adp_filter %>%
   filter(genus == "Rana",
          specificEpithet == "boylii",
          diagnosticLab == "Briggs Lab, University of California Santa Barbara")
+
+rabo_clean = adp_select %>%
+  mutate(svl_mm = length,
+         life_stage_simple = case_when(
+           svl_mm >= 38 ~ "adult",
+           svl_mm < 38 ~ "subadult"),
+         date = as.Date(verbatimEventDate),
+         bd_its_copies = quantityDetected * as.numeric(dilutionFactor) * 60,
+         taxon_capture = "rana_boylii",
+         site = tolower(gsub(",", "", gsub(" ", "_", locality))),
+         population = "alameda",
+         region = "california",
+         country = "usa",
+         project = "RABO")
+
+rabo_sites = rabo_clean %>%
+  group_by(site) %>%
+  summarize(site_latitude = mean(decimalLatitude, na.rm = TRUE),
+            site_longitude = mean(decimalLongitude, na.rm = TRUE))
+
+rabo_valid = rabo_clean %>%
+  select(taxon_capture,
+         date,
+         site,
+         population,
+         dilutionFactor,
+         quantityDetected,
+         bd_its_copies,
+         life_stage_simple,
+         sex,
+         svl_mm,
+         region,
+         country,
+         project) %>%
+  left_join(rabo_sites, by = "site")
 
 ```
 
@@ -592,9 +624,9 @@ ribbitr_valid = bd_sample_valid %>%
 ### HYPHY
 ```{r}
 ### Hylodes phyllodes
-hyphy_raw = import_list(here("data", "CDMR_H.phyllodes_metadata_Oct2_LKS.xlsx"))
+hyphy_raw = import_list(here("data", "CDMR_H.phyllodes_metadata_Oct2_LKS.xlsx"))[[1]]
 
-hyphy_clean = hyphy_raw[[1]] %>%
+hyphy_clean = hyphy_raw %>%
   clean_names() %>%
   filter(timepoint == 0) %>%
   # filter(timepoint == 0 | treatment == "Saline control") %>%
@@ -644,6 +676,64 @@ hyphy_valid = hyphy_clean %>%
          region,
          country,
          project)
+```
+
+### BOFA
+```{r}
+### Boana faber
+bofa_raw = read_tsv(here("data", "Boana_faber_capture_data_for_Cob.csv"))
+
+bofa_clean = bofa_raw %>%
+  clean_names() %>%
+  mutate(
+    date = as.Date(capture_date, format = "%d/%m/%Y"),
+    svl_mm = as.numeric(svl),
+    life_stage_simple = case_when(
+      svl_mm < 63 ~ "subadult",
+      svl_mm >= 63 ~ "adult",
+      .default = NA),
+    bd_its_copies = coalesce(bd_loads, as.numeric(bd_q1), as.numeric(bd_q2)),
+    bd_its_copies = if_else(is.na(bd_its_copies), 0, bd_its_copies),
+    taxon_capture = "boana_faber",
+    site = tolower(gsub(" ", "_", capture_site)),
+    site = if_else(grepl("o_paulo$", site), "joao_paulo", site),
+    population = case_when(
+      site == "lago_anta" ~ "santa_virginia",
+      .default = site),
+    region = case_when(
+      site == "lago_anta" ~ "santa_virginia",
+      .default = "sao_luis_paraitinga"),
+    country = "brazil",
+    project = "BOFA"
+  ) %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"),
+         site != "roberto")
+
+bofa_sites = bofa_clean %>%
+  group_by(site) %>%
+  summarize(site_latitude = mean(lat, na.rm = TRUE),
+            site_longitude = mean(long, na.rm = TRUE)) %>%
+  # manually correct lat/lon for lago_anta, to align with other datasets
+  mutate(site_latitude = if_else(site == "lago_anta", -23.38511, site_latitude),
+         site_longitude = if_else(site == "lago_anta", -45.18707, site_longitude))
+
+bofa_valid = bofa_clean %>%
+  left_join(bofa_sites, by = "site") %>%
+  select(taxon_capture,
+         date,
+         site,
+         site_latitude,
+         site_longitude,
+         population,
+         bd_its_copies,
+         life_stage_simple,
+         svl_mm,
+         region,
+         country,
+         project)
+
 ```
 
 ### Combine datasets
