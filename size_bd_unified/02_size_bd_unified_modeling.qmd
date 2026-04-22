@@ -37,7 +37,7 @@ Patterns of greater Bd load in recently metamorphosed individuals have been docu
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr, bayestestR, rio)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr, bayestestR)
 
 ```
 
@@ -925,7 +925,8 @@ m9e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_
                             m9b_zln,
                             # m9b_30_zln
                             m9c_zln,
-                            m9d_zln
+                            m9d_zln,
+                            m9e_zln
                             ))
 ```
 
