@@ -51,12 +51,14 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr,
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-20.RData")) 
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-22.RData")) 
 
 # checks
 sum(is.na(brms_data$bd_load_co_density))
 sum(is.na(brms_data$precip_mm_30_day_sum))
 sum(is.na(brms_data$temperature_max_c))
+sum(is.na(brms_data$past_year_weekly_precipitation_mm_sd))
+sum(is.na(brms_data$past_year_weekly_tempurature_max_c_sd))
 
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
@@ -853,7 +855,7 @@ m9d_zln <- add_criterion(m9d_zln, "loo")
 saveRDS(m9d_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
 m9d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
 
-# quadratic temp, linear precip, year
+# quadratic temp, linear precip, year, nested taxon random
 m9e_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
@@ -891,6 +893,78 @@ m9e_zln <- add_criterion(m9e_zln, "loo")
 saveRDS(m9e_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2popt*lsyr_p10t30.rds")
 m9e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2popt*lsyr_p10t30.rds")
 
+# quadratic temp, linear precip, year, climate var linear
+m9f_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
+    
+    sigma ~ 1 + taxon_capture + 
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (1 | population:year)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m9f_zln <- add_criterion(m9f_zln, "loo")
+
+saveRDS(m9f_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrcl_p10t30.rds")
+m9f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrcl_p10t30.rds")
+
+mxf_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (1 | population:year),
+    
+    hu ~ 1 + 
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (1 | population:year),
+    
+    sigma ~ 1 +
+      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+      (1 | population:year)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+# mxf_zln <- add_criterion(mxf_zln, "loo")
+
+saveRDS(mxf_zln, file = "unified_models/unified_model_results_zln_life_tax_cl.rds")
+mxf_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_cl.rds")
 
 ```
 
@@ -941,13 +1015,51 @@ m9e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m9d_zln
+model_select = mxf_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
 VarCorr(model_select)
 bayes_R2(model_select)
+```
+
+```{r}
+get_variables(model_select)
+
+mxf_draws = mxf_zln %>%
+  spread_draws(`.*past_year_weekly.*`, regex = TRUE) %>%
+  filter(.chain != 1)
+
+
+ggplot(mxf_draws, aes(x = b_past_year_weekly_tempurature_max_c_sd)) +
+  geom_histogram()
+
+ggplot(mxf_draws, aes(x = b_past_year_weekly_precipitation_mm_sd)) +
+  geom_histogram()
+
+ggplot(mxf_draws, aes(x = b_hu_past_year_weekly_tempurature_max_c_sd)) +
+  geom_histogram()
+
+ggplot(mxf_draws, aes(x = b_hu_past_year_weekly_precipitation_mm_sd)) +
+  geom_histogram()
+
+ggplot(mxf_draws, aes(x = b_sigma_past_year_weekly_tempurature_max_c_sd)) +
+  geom_histogram()
+
+ggplot(mxf_draws, aes(x = b_sigma_past_year_weekly_precipitation_mm_sd)) +
+  geom_histogram()
+  
+
+
+# hu contrast
+hu_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "hu",
+    re_formula = NA
+  ) %>%
+  ungroup()
 ```
 
 ### Posterios predictive checks
