@@ -1015,51 +1015,13 @@ mxf_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_cl.r
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = mxf_zln
+model_select = m9d_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
 VarCorr(model_select)
 bayes_R2(model_select)
-```
-
-```{r}
-get_variables(model_select)
-
-mxf_draws = mxf_zln %>%
-  spread_draws(`.*past_year_weekly.*`, regex = TRUE) %>%
-  filter(.chain != 1)
-
-
-ggplot(mxf_draws, aes(x = b_past_year_weekly_tempurature_max_c_sd)) +
-  geom_histogram()
-
-ggplot(mxf_draws, aes(x = b_past_year_weekly_precipitation_mm_sd)) +
-  geom_histogram()
-
-ggplot(mxf_draws, aes(x = b_hu_past_year_weekly_tempurature_max_c_sd)) +
-  geom_histogram()
-
-ggplot(mxf_draws, aes(x = b_hu_past_year_weekly_precipitation_mm_sd)) +
-  geom_histogram()
-
-ggplot(mxf_draws, aes(x = b_sigma_past_year_weekly_tempurature_max_c_sd)) +
-  geom_histogram()
-
-ggplot(mxf_draws, aes(x = b_sigma_past_year_weekly_precipitation_mm_sd)) +
-  geom_histogram()
-  
-
-
-# hu contrast
-hu_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "hu",
-    re_formula = NA
-  ) %>%
-  ungroup()
 ```
 
 ### Posterios predictive checks
