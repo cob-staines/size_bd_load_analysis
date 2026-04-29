@@ -63,9 +63,9 @@ adp_group = adp_filter %>%
   group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 38) %>%
   count()
 
-peace = adp_filter %>%
-  select(testMethod) %>%
-  distinct()
+# peace = adp_filter %>%
+#   select(testMethod) %>%
+#   distinct()
 
 adp_select = adp_filter %>%
   filter(genus == "Rana",
@@ -81,7 +81,7 @@ rabo_clean = adp_select %>%
          bd_its_copies = quantityDetected * as.numeric(dilutionFactor) * 60,
          taxon_capture = "rana_boylii",
          site = tolower(gsub(",", "", gsub(" ", "_", locality))),
-         population = "alameda",
+         population = site,
          region = "california",
          country = "usa",
          project = "RABO")
@@ -332,7 +332,7 @@ usgs_spp = usgs_valid %>%
 ```{r}
 
 ## SN populations
-sn_populations = read.csv(here("data", "sn_site_pop_2_2025-10-31.csv")) %>%
+sn_populations = read.csv(here("data", "sn_site_pop_3_2026-04-27.csv")) %>%
   dplyr::rename(population = pop_id) %>%
   mutate(population_sn = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
          site = as.character(site)) %>%
@@ -393,8 +393,8 @@ peace = bd_sample %>%
 bd_population = bd_sample %>%
   left_join(sn_populations, by = "site", copy = TRUE) %>%
   mutate(population = case_when(
-    country %in% c("brazil", "panama") ~ region,
     region == "california" ~ population_sn,
+    site == "hatchery" ~ "admin_pond",
     .default = site
   )) %>%
   filter(country != "panama" | (country == "panama" & population %in% population_valid_pa),
@@ -639,7 +639,7 @@ hyphy_clean = hyphy_raw %>%
     .default = NA),
     taxon_capture = "hylodes_phyllodes",
     site = gsub("aw", "s", tolower(transect)),
-    population = region,
+    population = site,
     country = "brazil",
     bd_its_copies = bd_load,
     project = "HYPHY"
@@ -697,9 +697,7 @@ bofa_clean = bofa_raw %>%
     taxon_capture = "boana_faber",
     site = tolower(gsub(" ", "_", capture_site)),
     site = if_else(grepl("o_paulo$", site), "joao_paulo", site),
-    population = case_when(
-      site == "lago_anta" ~ "santa_virginia",
-      .default = site),
+    population = site,
     region = case_when(
       site == "lago_anta" ~ "santa_virginia",
       .default = "sao_luis_paraitinga"),
@@ -739,17 +737,23 @@ bofa_valid = bofa_clean %>%
 ### Combine datasets
 ```{r}
 
-column_check = compare_df_cols(raca_valid,
+column_check = compare_df_cols(rabo_valid,
+                               raca_valid,
                                ralu_valid,
                                usgs_valid,
                                ribbitr_valid,
-                               hyphy_valid)
+                               hyphy_valid,
+                               bofa_valid)
 
-bd_model = bind_rows(raca_valid,
+bd_model = bind_rows(
+                     # rabo_valid,
+                     raca_valid,
                      ralu_valid,
                      usgs_valid,
                      ribbitr_valid,
-                     hyphy_valid) %>%
+                     hyphy_valid
+                     # bofa_valid
+                     ) %>%
   mutate(year = year(date),
          bd_load_co = if_else(bd_its_copies < 10,
                               0,
@@ -775,6 +779,55 @@ sum(is.na(bd_model$population))
             .groups = "drop") %>%
   arrange(country,
           taxon_capture))
+
+# clean up rounding error lat/lons
+distinct_sites_clean = bd_model %>%
+  group_by(site) %>%
+  summarise(site_latitude = mean(site_latitude, na.rm = TRUE),
+            site_longitude = mean(site_longitude, na.rm = TRUE),
+            .groups = "drop")
+
+bd_model_clean = bd_model %>%
+  select(-site_latitude,
+         -site_longitude) %>%
+  left_join(distinct_sites_clean, by = "site")
+
+distinct_sites = bd_model_clean %>%
+  distinct(population,
+           site,
+           site_latitude,
+           site_longitude)
+
+coords <- distinct_sites |>
+  select(lon = site_longitude, lat = site_latitude) |>
+  as.matrix()
+
+site_dist_mat <- terra::distance(coords, lonlat = TRUE, unit = "km", symmetric = TRUE) |>
+  as.matrix()
+
+dimnames(site_dist_mat) <- list(distinct_sites$site, distinct_sites$site)
+
+site_pop_dist <- site_dist_mat |>
+  as_tibble(rownames = "site_a") |>
+  pivot_longer(-site_a,
+               names_to = "site_b",
+               values_to = "distance_km") |>
+  filter(site_a != site_b) |>
+  left_join(distinct_sites %>%
+              dplyr::select(site,
+                     population) %>%
+              dplyr::rename(site_a = site,
+                     population_a = population), by = "site_a") |>
+  left_join(distinct_sites %>%
+              dplyr::select(site,
+                     population) %>%
+              dplyr::rename(site_b = site,
+                     population_b = population), by = "site_b") %>%
+  filter(population_a != population_b,
+         distance_km < 0.2
+         ) %>%
+  arrange(distance_km)
+
 ```
 ## Environmental data
 To support comparing Bd prevalence and loads between sites and species across a range of environmental conditions, I incorporated local (~5 km) daily maximum temperature (CHIRTS) and daily precipitation (CHIRPS) time series. Following Sonn et al. 2019 [sonn2019effects], I created 15-day and 30-day means (for tempurature) and sums (for precipitation). Preliminary model fitting showed stronger relationships between Bd prevalence and 15-day lag products, while Bd load showed stronger relationships with 30-day lag products, similar to Sonn et al. 2019.
@@ -782,32 +835,122 @@ To support comparing Bd prevalence and loads between sites and species across a 
 
 ### Join with env. data
 ```{r}
-#| eval: false
 #| warning: false
 #| code-fold: true
 #| code-summary: "Show environmental data mergin code"
 
 env_agg = read_csv(here("data", "unified_env_agg.csv"))
 
+env_distinct_sites = env_agg %>%
+  distinct(site,
+           latitude,
+           longitude)
 
-bd_model_env = bd_model %>%
+env_site_dupes = get_dupes(env_distinct_sites, site)
+
+
+bd_model_env = bd_model_clean %>%
   left_join(env_agg, by = c("site", "date"))
 
-brms_data = bd_model_env %>%
+bd_env = bd_model_env %>%
   mutate(
     precip_mm_10_z = as.numeric(scale(precip_mm_10_day_sum, center = TRUE, scale = TRUE)),
-    precip_mm_15_z = as.numeric(scale(precip_mm_15_day_sum, center = TRUE, scale = TRUE)),
     precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
     temp_c_10_z = as.numeric(scale(temp_c_10_day_mean, center = TRUE, scale = TRUE)),
-    temp_c_15_z = as.numeric(scale(temp_c_15_day_mean, center = TRUE, scale = TRUE)),
     temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE))) %>%
   select(taxon_capture,
          everything())
 
+sum(is.na(bd_env$precip_mm_10_day_sum))
+sum(is.na(bd_env$temp_c_30_day_sum))
+
 ```
+
+## KG zones
+```{r}
+
+kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
+  select(-rgb) %>%
+  rename_with(function(x) { paste0("kg_", x) })
+
+all_sites = bd_env %>%
+  distinct(site, site_latitude, site_longitude)
+
+site_coords = cbind(lon = all_sites$site_longitude,
+                    lat = all_sites$site_latitude)
+
+kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
+
+kg_extract = extract(kg_rast, site_coords) %>%
+  dplyr::rename(kg_id = koppen_geiger_0p00833333)
+
+sites_kg = bind_cols(all_sites,
+                          kg_extract) %>%
+  dplyr::select(-site_latitude,
+                -site_longitude) %>%
+  left_join(kg_key, by = "kg_id")
+
+bd_env_kg = bd_env %>%
+  left_join(sites_kg, by = "site") %>%
+  distinct()
+
+
+
+```
+
 # save data
 ```{r}
-save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
+save(bd_env_kg, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
+
+```
+
+# plot annual variability
+```{r}
+plot_data = brms_data %>%
+  distinct(country,
+           region,
+           site,
+           date,
+           precip_mm_10_day_sum,
+           temp_c_30_day_mean,
+           past_year_weekly_precipitation_mm_sd,
+           past_year_weekly_tempurature_max_c_sd)
+
+ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = temp_c_30_day_mean, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = past_year_weekly_precipitation_mm_sd, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = temp_c_30_day_mean, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = log(bd_load_co_density))) +
+  geom_point(alpha = 0.2)
+
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load_co_density), color = taxon_capture)) +
+  geom_point(alpha = 0.05)
+
+ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co_density), color = taxon_capture)) +
+  geom_point(alpha = 0.05)
+```
+# count KG zones
+```{r}
+
+ggplot(sites_kg, aes(x = kg_code_1, fill = kg_code_3)) +
+  geom_bar() +
+  scale_y_log10()
+
+ggplot(sites_kg, aes(x = kg_code_2)) +
+  geom_bar() +
+  scale_y_log10()
+
+ggplot(sites_kg, aes(x = kg_code_3)) +
+  geom_bar() +
+  scale_y_log10()
 
 ```
