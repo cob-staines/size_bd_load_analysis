@@ -12,7 +12,7 @@ format: html
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio, runner, arrow)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio, zoo)
 
 ```
 
@@ -382,80 +382,55 @@ write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "
 
 # Import timeseries
 ```{r}
-env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-25.csv")) %>%
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-04-22.csv")) %>%
   dplyr::rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
-
-# write_parquet(env_in, here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
-# 
-# env_in = read_parquet(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-03-23.parquet"))
-
 ```
 
 # Calculate rolling timeseries
 ```{r}
-
-sliding_window <- function(df, ts_col_name, window_size, f, result_col_name) {
-  ts_sym <- sym(ts_col_name)
-  res_sym <- sym(result_col_name)
-  
-  df %>%
-    group_modify(~{
-      n <- nrow(.x)
-      ts_vals <- pull(.x, !!ts_sym)
-      agg_vals <- map_dbl(seq_len(n), function(i) {
-        if (i >= window_size) {
-          window_vals <- ts_vals[(i - window_size + 1):i]
-          f(window_vals)
-        } else {
-          NA_real_
-        }
-      })
-      .x[[result_col_name]] <- agg_vals
-      .x
-    })
-}
-
-rolling_aggregate <- function(x, date, n_days, fun) {
-  runner(
-    x   = x,
-    idx = date,
-    k   = paste0(n_days, " days"),
-    f   = fun
-  )
-}
-
-
-n_val = function(x) sum(!is.na(x))
-
-na_mean = function(x) {
-  mean(x, na.rm = TRUE)
-}
-
-na_max = function(x) {
-  max(x, na.rm = TRUE)
-}
-
-na_sum = function(x) {
-  sum(x, na.rm = TRUE)
-}
-
 env_agg = env_in %>%
   arrange(site, date) %>%
   filter(!(is.na(precipitation_mm) & is.na(temperature_max_c))) %>%
   group_by(site) %>%
-  mutate(precip_mm_10_day_sum = rolling_aggregate(precipitation_mm, date, 10, na_sum),
-         precip_mm_15_day_sum = rolling_aggregate(precipitation_mm, date, 15, na_sum),
-         precip_mm_30_day_sum = rolling_aggregate(precipitation_mm, date, 30, na_sum),
-         temp_c_10_day_mean = rolling_aggregate(temperature_max_c, date, 10, na_mean),
-         temp_c_15_day_mean = rolling_aggregate(temperature_max_c, date, 15, na_mean),
-         temp_c_30_day_mean = rolling_aggregate(temperature_max_c, date, 30, na_mean)) %>%
+  mutate(precip_mm_10_day_sum = zoo::rollapply(precipitation_mm, 10, sum, fill = NA, align = "right"),
+         precip_mm_30_day_sum = zoo::rollapply(precipitation_mm, 30, sum, fill = NA, align = "right"),
+         temp_c_10_day_mean = zoo::rollapply(temperature_max_c, 10, mean, fill = NA, align = "right"),
+         temp_c_30_day_mean = zoo::rollapply(temperature_max_c, 30, mean, fill = NA, align = "right")
+         ) %>%
   ungroup()
+
+env_var_index = env_in %>%
+  arrange(site, date) %>%
+  filter(!(is.na(precipitation_mm) & is.na(temperature_max_c))) %>%
+  mutate(year = year(date),
+         week_of_year = week(date),
+         week_number = 52 * year + week_of_year)
+
+env_var_week = env_var_index %>%
+  group_by(site, week_number) %>%
+  summarize(weekly_precipitation_mm = mean(precipitation_mm) * 7,
+            weekly_temperature_max_c = max(temperature_max_c),
+            .groups = "drop") %>%
+  group_by(site) %>%
+  mutate(past_year_weekly_precipitation_mm_sd = zoo::rollapply(weekly_precipitation_mm, 52, sd, fill = NA, align = "right"),
+         past_year_weekly_tempurature_max_c_sd = zoo::rollapply(weekly_temperature_max_c, 52, sd, fill = NA, align = "right"))
+
+env_var_agg = env_var_index %>%
+  left_join(env_var_week, by = c("site", "week_number")) %>%
+  select(date,
+         site,
+         past_year_weekly_precipitation_mm_sd,
+         past_year_weekly_tempurature_max_c_sd)
+
+env_agg_all = env_agg %>%
+  left_join(env_var_agg, by = c("site", "date"))
+
 
 ```
 
 # Write env agg
 ```{r}
-write_csv(env_agg, here("data", "unified_env_agg.csv"))
+write_csv(env_agg_all, here("data", "unified_env_agg.csv"))
 ```
