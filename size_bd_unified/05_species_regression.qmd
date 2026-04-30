@@ -174,19 +174,49 @@ m1c_lspr = add_criterion(m1c_lspr, "loo")
 saveRDS(m1c_lspr, file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
 m1c_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
 
+# include development mode
+m1d_lspr = brm(
+  mvbf(
+    bf(hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+       family = lognormal())
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m1d_lspr = add_criterion(m1d_lspr, "loo")
+
+saveRDS(m1d_lspr, file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
+m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
+
 ```
 
 # model comparison
 ```{r}
-(loo_comp_out = loo_compare(m1_lspr,
-                            m1b_lspr))
+(loo_comp_out = loo_compare(
+  # m1_lspr,
+                            # m1b_lspr,
+                            m1c_lspr,
+                            m1d_lspr))
 
 bayes_R2(m1b_lspr)
 ```
 
 # model evaluation
 ```{r}
-model_select = m1b_lspr
+model_select = m1d_lspr
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
@@ -248,18 +278,21 @@ pp_check(model_select,
 
 # visualize
 ```{r}
-fit_mv %>%
+m_fixed_draws = model_select %>%
   gather_draws(`b_.*`, regex = TRUE) %>%
   filter(!grepl("Intercept", .variable)) %>%
   separate(.variable, into = c("prefix", "response", "term"),
-           sep = "_", extra = "merge") %>%
-  ggplot(aes(x = .value, y = term, color = response, fill = response)) +
+           sep = "_", extra = "merge")
+
+ggplot(m_fixed_draws, aes(x = .value, y = term, color = response, fill = response)) +
   stat_halfeye(alpha = 0.6, .width = c(0.5, 0.89)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
   facet_wrap(~ response, scales = "free_x") +
   theme_classic() +
   labs(x = "Posterior estimate", y = NULL,
-       title = "Fixed effects across responses")
+       title = "Fixed effects across responses",
+       fill = NULL,
+       color = NULL)
 ```
 
 # explore specific groups
@@ -292,5 +325,15 @@ iucn_draws %>%
   geom_pointrange() +
   theme_classic()
 
+
+```
+
+# export to manuscript
+```{r}
+# define manuscript destination dir
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
+
+write_parquet(m_fixed_draws, paste0(manuscript_data_dir, "unified_05_a_fixed_draws.parquet"))
 
 ```
