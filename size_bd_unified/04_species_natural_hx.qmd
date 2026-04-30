@@ -114,7 +114,14 @@ habitats_agg = habitats_clean %>%
   right_join(species_list, by = c("species_q" = "species", "genus_q" = "genus")) %>%
   select(taxon_capture,
          habitat_breadth,
-         aquatic_index)
+         aquatic_index) %>%
+  mutate(development_stage = case_when(
+    taxon_capture %in% c("colostethus_panamansis",
+                         "craugastor_crassidigitus",
+                         "craugastor_fitzingeri",
+                         "ischnocnema_henselii") ~ "direct",
+    .default = "larval"
+  ))
 
 
 write_csv(habitats_agg, here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
