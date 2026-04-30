@@ -16,6 +16,7 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 
 ```
 
+## Datasets
 ### RABO
 ```{r}
 # Amphibian Disease Portal
@@ -50,7 +51,6 @@ rabo_clean = adp_select %>%
          bd_its_copies = quantityDetected * as.numeric(dilutionFactor) * 60,
          taxon_capture = "rana_boylii",
          site = tolower(gsub(",", "", gsub(" ", "_", locality))),
-         population = site,
          region = "california",
          country = "usa",
          project = "RABO")
@@ -64,9 +64,8 @@ rabo_valid = rabo_clean %>%
   select(taxon_capture,
          date,
          site,
-         population,
-         dilutionFactor,
-         quantityDetected,
+         # dilutionFactor,
+         # quantityDetected,
          bd_its_copies,
          life_stage_simple,
          sex,
@@ -96,8 +95,7 @@ raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv
     svl_mm < 50 ~ "subadult"),
     date = as.Date(date),
     site = tolower(gsub(" ", "_", site)),
-    site_utm_zone = 11,  # verify
-    population = site,
+    site_utm_zone = 11,
     region = "W",
     country = "usa",
     project = "RACA",
@@ -127,19 +125,11 @@ raca_sites_ll = raca_sites %>%
          site_latitude,
          site_longitude)
 
-raca_population_valid = raca_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
 raca_valid = raca_clean %>%
   left_join(raca_sites_ll, by = "site") %>%
-  filter(population %in% raca_population_valid$population) %>%
   select(taxon_capture,
          date,
          site,
-         population,
          bd_its_copies,
          life_stage_simple,
          life_stage,
@@ -183,7 +173,6 @@ ralu_clean = ralu_raw[[4]] %>%
   mutate(taxon_capture = "rana_luteiventris",
          date = as.Date(bd_sample_date),
          site = tolower(pond_name),
-         population = site,
          region = "NW",
          country = "usa",
          life_stage_simple = recode_values(life_stage,
@@ -199,18 +188,11 @@ ralu_clean = ralu_raw[[4]] %>%
          !is.na(bd_its_copies),
          life_stage_simple %in% c("adult", "subadult"))
 
-ralu_population_valid = ralu_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
 ralu_valid = ralu_clean %>%
   left_join(ralu_sites_ll, by = "site") %>%
   select(taxon_capture,
          date,
          site,
-         population,
          bd_its_copies,
          life_stage_simple,
          life_stage,
@@ -244,7 +226,6 @@ usgs_clean = usgs_raw %>%
                                         default = life_stage_simple),
          date = mdy(collection_date),
          site = paste0("usgs_", site_id),
-         population = site,
          project = "usgs",
          country = "usa") %>%
   filter(!is.na(taxon_capture),
@@ -252,16 +233,7 @@ usgs_clean = usgs_raw %>%
          !is.na(svl_mm),
          life_stage_simple %in% c("subadult", "adult"))
 
-usgs_taxon_population_valid = usgs_clean %>%
-  group_by(taxon_capture, population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
 usgs_taxon_valid = usgs_clean %>%
-  inner_join(usgs_taxon_population_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
   group_by(taxon_capture) %>%
   summarize(n_adult = sum(life_stage_simple == "adult"),
             n_subadult = sum(life_stage_simple == "subadult"),
@@ -271,9 +243,6 @@ usgs_taxon_valid = usgs_clean %>%
          taxon_capture != "lithobates_chiricahuensis")
 
 usgs_valid = usgs_clean %>%
-  inner_join(usgs_taxon_population_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
   filter(taxon_capture %in% usgs_taxon_valid$taxon_capture) %>%
   select(taxon_capture,
          svl_mm,
@@ -282,7 +251,6 @@ usgs_valid = usgs_clean %>%
          life_stage,
          date,
          bd_its_copies,
-         population,
          site,
          site_latitude,
          site_longitude,
@@ -299,23 +267,13 @@ usgs_spp = usgs_valid %>%
 
 ### RIBBiTR, etc.
 ```{r}
-
-## SN populations
-sn_populations = read.csv(here("data", "sn_site_pop_3_2026-04-27.csv")) %>%
-  dplyr::rename(population = pop_id) %>%
-  mutate(population_sn = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
-         site = as.character(site)) %>%
-  select(site,
-         population_sn)
-
+# RIBBiTR data
 
 region_valid_pa = c("altos_de_campana",
                     "caribbean",
                     "el_cope",
                     "el_valle",
                     "santa_fe")
-
-# RIBBiTR data
 
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -342,7 +300,9 @@ bd_sample = db_sample %>%
   left_join(db_country, by = "country_id") %>%
   left_join(db_project, by = "project_id") %>%
   filter(sample_type == "bd",
-         !is.na(taxon_capture)) %>%
+         !is.na(taxon_capture),
+         country != "panama" | (country == "panama" & region %in% region_valid_pa),
+         !is.na(site_latitude)) %>%
   inner_join(db_bd %>%
               filter(!is.na(bd_detected)) %>%
                # limit to one qPCR result per sample
@@ -353,29 +313,19 @@ bd_sample = db_sample %>%
                      bd_detected,
                      bd_its1_copies_per_swab), by = "sample_id")
 
-peace = bd_sample %>%
-  distinct(country) %>%
-  collect()
-
-
-peace = bd_sample %>%
-  group_by(taxon_capture) %>%
-  count() %>%
-  collect()
-
-# define populations
-bd_population = bd_sample %>%
-  left_join(sn_populations, by = "site", copy = TRUE) %>%
-  mutate(population = case_when(
-    region == "california" ~ population_sn,
-    site == "hatchery" ~ "admin_pond",
-    .default = site
-  )) %>%
-  filter(country != "panama" | (country == "panama" & region %in% region_valid_pa),
-         !is.na(site_latitude))
+# # define populations
+# bd_population = bd_sample %>%
+#   left_join(sn_populations, by = "site", copy = TRUE) %>%
+#   mutate(population = case_when(
+#     region == "california" ~ population_sn,
+#     site == "hatchery" ~ "admin_pond",
+#     .default = site
+#   )) %>%
+#   filter(country != "panama" | (country == "panama" & region %in% region_valid_pa),
+#          !is.na(site_latitude))
 
 # define life stage simple
-bd_life_stage = bd_population %>%
+bd_life_stage = bd_sample %>%
   filter(life_stage %in% c("adult",
                            "subadult",
                            "juvenile",
@@ -521,19 +471,19 @@ bd_life_stage = bd_population %>%
 # identify valid species & populations
 ## drop pops without both adults and juveniles
 ## drop species without 14 or more adults and juveniles each
-pop_taxa_valid = bd_life_stage %>%
-  group_by(taxon_capture, population) %>%
-  summarize(n_adult = sum(as.integer(life_stage_simple == "adult")),
-            n_subadult = sum(as.integer(life_stage_simple == "subadult")),
-            .groups = "drop")
+# pop_taxa_valid = bd_life_stage %>%
+#   group_by(taxon_capture, population) %>%
+#   summarize(n_adult = sum(as.integer(life_stage_simple == "adult")),
+#             n_subadult = sum(as.integer(life_stage_simple == "subadult")),
+#             .groups = "drop")
 # %>%
 #   filter(n_adult > 0,
 #          n_subadult > 0)
 
 taxa_valid = bd_life_stage %>%
-  inner_join(pop_taxa_valid %>%
-               select(taxon_capture,
-                      population), by = c("taxon_capture", "population")) %>%
+  # inner_join(pop_taxa_valid %>%
+  #              select(taxon_capture,
+  #                     population), by = c("taxon_capture", "population")) %>%
   group_by(taxon_capture) %>%
   summarize(n_adult = sum(as.integer(life_stage_simple == "adult"), na.rm = TRUE),
             n_subadult = sum(as.integer(life_stage_simple == "subadult"), na.rm = TRUE),
@@ -545,7 +495,7 @@ taxa_valid = bd_life_stage %>%
 bd_sample_valid = bd_life_stage %>%
   mutate(year = year(date),
          project = project_id) %>%
-  inner_join(pop_taxa_valid, by = c("taxon_capture", "population")) %>%
+  # inner_join(pop_taxa_valid, by = c("taxon_capture", "population")) %>%
   inner_join(taxa_valid, by = "taxon_capture") %>%
   # limit to 1 bd sample per capture
   group_by(capture_id) %>%
@@ -567,7 +517,7 @@ bd_sample_valid = bd_life_stage %>%
          site_latitude,
          site_longitude,
          site_elevation_m,
-         population,
+         # population,
          region,
          country,
          project) %>%
@@ -588,7 +538,7 @@ ribbitr_valid = bd_sample_valid %>%
          site_latitude,
          site_longitude,
          site_elevation_m,
-         population,
+         # population,
          region,
          country,
          project)
@@ -613,7 +563,7 @@ hyphy_clean = hyphy_raw %>%
     .default = NA),
     taxon_capture = "hylodes_phyllodes",
     site = gsub("aw", "s", tolower(transect)),
-    population = site,
+    region = "samta_virginia",
     country = "brazil",
     bd_its_copies = bd_load,
     project = "HYPHY"
@@ -621,12 +571,6 @@ hyphy_clean = hyphy_raw %>%
   filter(!is.na(life_stage_simple),
          !is.na(bd_its_copies),
          life_stage_simple %in% c("adult", "subadult"))
-
-hyphy_population_valid = hyphy_clean %>%
-  group_by(population) %>%
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
 
 hyphy_sites = db_site %>%
   filter(site %in% hyphy_clean$site) %>%
@@ -643,7 +587,6 @@ hyphy_valid = hyphy_clean %>%
          site,
          site_latitude,
          site_longitude,
-         population,
          bd_its_copies,
          life_stage_simple,
          svl_mm,
@@ -671,7 +614,6 @@ bofa_clean = bofa_raw %>%
     taxon_capture = "boana_faber",
     site = tolower(gsub(" ", "_", capture_site)),
     site = if_else(grepl("o_paulo$", site), "joao_paulo", site),
-    population = site,
     region = case_when(
       site == "lago_anta" ~ "santa_virginia",
       .default = "sao_luis_paraitinga"),
@@ -698,7 +640,6 @@ bofa_valid = bofa_clean %>%
          site,
          site_latitude,
          site_longitude,
-         population,
          bd_its_copies,
          life_stage_simple,
          svl_mm,
@@ -708,8 +649,17 @@ bofa_valid = bofa_clean %>%
 
 ```
 
-### Combine datasets
+## Combine datasets
 ```{r}
+
+## populations
+all_populations = read.csv(here("data", "size_load_pop_1_2026-04-30.csv")) %>%
+  select(site, pop_id) %>%
+  dplyr::rename(population = pop_id) %>%
+  mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
+         site = as.character(site)) %>%
+  select(site,
+         population)
 
 column_check = compare_df_cols(rabo_valid,
                                raca_valid,
@@ -728,6 +678,7 @@ bd_model = bind_rows(
                      hyphy_valid
                      #bofa_valid
                      ) %>%
+  left_join(all_populations, by = "site") %>%
   mutate(year = year(date),
          bd_load_co = if_else(bd_its_copies < 10,
                               0,
