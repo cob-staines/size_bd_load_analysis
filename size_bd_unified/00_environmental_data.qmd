@@ -333,6 +333,9 @@ site_date_combined = bind_rows(rabo_visit,
                                ralu_visit,
                                hyphy_visit,
                                bofa_visit) %>%
+  group_by(site) %>%
+  mutate(site_latitude = mean(site_latitude, na.rm = TRUE),
+         site_longitude = mean(site_longitude, na.rm = TRUE)) %>%
   group_by(site, site_latitude, site_longitude) %>%
   summarize(date_min = min(date_min),
             date_max = max(date_max),
