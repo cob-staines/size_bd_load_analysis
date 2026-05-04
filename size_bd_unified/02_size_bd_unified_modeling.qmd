@@ -1035,18 +1035,26 @@ m9h_zln <- add_criterion(m9h_zln, "loo")
 saveRDS(m9h_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg2_p10t30.rds")
 m9h_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg2_p10t30.rds")
 
-mxf_zln <- brm(
+# quadratic temp, linear precip, year, precip var linear
+m9i_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
-      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
-      (1 | population:year),
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
     
     hu ~ 1 + 
-      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
-      (1 | population:year),
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | population:year) + 
+      (1 | population:taxon_capture:life_stage_simple),
     
-    sigma ~ 1 +
-      past_year_weekly_precipitation_mm_sd + past_year_weekly_tempurature_max_c_sd +
+    sigma ~ 1 + taxon_capture + 
       (1 | population:year)
   ),
   data = brms_data,
@@ -1062,10 +1070,53 @@ mxf_zln <- brm(
   backend = "cmdstanr"
 )
 
-# mxf_zln <- add_criterion(mxf_zln, "loo")
+m9i_zln <- add_criterion(m9i_zln, "loo")
 
-saveRDS(mxf_zln, file = "unified_models/unified_model_results_zln_life_tax_cl.rds")
-mxf_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_cl.rds")
+saveRDS(m9i_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
+m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
+
+# quadratic temp, linear precip, year, precip var linear
+m10a_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | population) +
+      (1 | population:taxon_capture:life_stage_simple) +
+      (0 + life_stage_simple || population:taxon_capture:year),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | population) +
+      (1 | population:taxon_capture:life_stage_simple) +
+      (0 + life_stage_simple || population:taxon_capture:year),
+    
+    sigma ~ 1 + taxon_capture + 
+      (1 | population:year)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m10a_zln <- add_criterion(m10a_zln, "loo")
+
+saveRDS(m10a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
+m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
+
 
 ```
 
@@ -1104,7 +1155,8 @@ mxf_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_cl.r
                             m9e_zln,
                             m9f_zln,
                             m9g_zln,
-                            m9h_zln
+                            m9h_zln,
+                            m9i_zln
                             ))
 ```
 
@@ -1119,7 +1171,7 @@ mxf_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_cl.r
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m9f_zln
+model_select = m9h_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
