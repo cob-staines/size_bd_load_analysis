@@ -43,9 +43,11 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # m9c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptls_p10t30.rds")
 # m9d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyr_p10t30.rds")
 # m9b_30_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p30t30.rds")
-m9f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrclt_p10t30.rds")
+# m9f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrclt_p10t30.rds")
+# m9h_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg2_p10t30.rds")
+m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
 
-model_select = m9f_zln
+model_select = m9i_zln
 ```
 
 ## Define analysis functions
@@ -86,6 +88,10 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
   return(ws[2])
 }
 
+mmode = function(x) {
+  ux = unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
 
 ```
 
@@ -101,7 +107,7 @@ nd_env_subadult = model_select$data %>%
   group_by(taxon_capture, life_stage_simple) %>%
   summarize(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
-            past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
+            kg_code_3 = mmode(kg_code_3),
             .groups = "drop") %>%
   filter(life_stage_simple == "subadult")
 
@@ -432,8 +438,6 @@ ggsave(here("size_bd_unified", "unified_figures", "03_net_effect_scatter.png"),
        p_net_effect_scatter,
        width = 8, height = 8)
 
-p_net_effect_scatter
-
 # median effect scatter of contrast
 p_median_effect_scatter = ggplot(combined_agg_single, aes(x = -hu_contrast_median, y = mu_contrast_median)) +
   geom_vline(xintercept = 0, color = "#aaa") +
@@ -452,6 +456,8 @@ ggsave(here("size_bd_unified", "unified_figures", "03_median_effect_scatter.png"
        p_median_effect_scatter,
        width = 8, height = 8)
 
+
+p_net_effect_scatter
 p_median_effect_scatter
 
 # median effect scatter
@@ -844,26 +850,26 @@ sym_div_cont_map = function(tree, var_values, species, center, p_title, style = 
 }
 
 p_hu_contrast_med_map = sym_div_cont_map(jp_pruned,
-                                  combined_agg_j$hu_contrast_median,
-                                  combined_agg_j$taxon_capture,
+                                  combined_agg$hu_contrast_median,
+                                  combined_agg$taxon_capture,
                                   0,
                                   "Bd prevalence (hu): median subadult effect")
 
 p_mu_contrast_med_map = sym_div_cont_map(jp_pruned,
-                                 combined_agg_j$mu_contrast_median,
-                                 combined_agg_j$taxon_capture,
+                                 combined_agg$mu_contrast_median,
+                                 combined_agg$taxon_capture,
                                  0,
                                  "Bd log load (mu): median subadult effect")
 
 p_prev_med_map = sym_div_cont_map(jp_pruned,
-                                combined_agg_j$prevalence_median,
-                                combined_agg_j$taxon_capture,
+                                combined_agg$prevalence_median,
+                                combined_agg$taxon_capture,
                                 0.5,
                                 "Median Bd prevalence")
 
 p_sigma_med_map = sym_div_cont_map(jp_pruned,
-                                 combined_agg_j$sigma_median,
-                                 combined_agg_j$taxon_capture,
+                                 combined_agg$sigma_median,
+                                 combined_agg$taxon_capture,
                                  0.8822,
                                  "Median Bd load dispersion (sigma)")
 
@@ -1027,9 +1033,7 @@ simple_cor = cor_mat(brms_data %>%
                        select(precip_mm_10_day_sum,
                               precip_mm_30_day_sum,
                               temp_c_10_day_mean,
-                              temp_c_30_day_mean,
-                              past_year_weekly_precipitation_mm_sd,
-                              past_year_weekly_tempurature_max_c_sd), method = "pearson")
+                              temp_c_30_day_mean), method = "pearson")
 peace = simple_cor
 cor_get_pval(simple_cor)
 
@@ -1334,81 +1338,73 @@ p_temp_mu
 
 ```
 
-### Variation
+### KG zones
 ```{r}
-apply_scale <- function(x_new, sc_obj) {
-  (x_new - attr(sc_obj, "scaled:center")) / attr(sc_obj, "scaled:scale")
-}
-
-remove_scale = function(x_sc, sc_obj) {
-  x_sc * attr(sc_obj, "scaled:scale") + attr(sc_obj, "scaled:center")
-}
-
-precip_10_sc = scale(brms_data$precip_mm_10_day_sum)
-temp_30_sc = scale(brms_data$temp_c_30_day_mean)
-
-y_temp_sd <- seq(min(brms_data$past_year_weekly_tempurature_max_c_sd),
-                 max(brms_data$past_year_weekly_tempurature_max_c_sd),
-                 length.out = 100)
-
-y_temp <- model_select$data |>
+nd_kg_env = model_select$data |>
   group_by(taxon_capture, life_stage_simple) |>
-  summarize(precip_mm_10_z = median(precip_mm_10_z),
+  summarise(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
             .groups = "drop") |>
-  filter(life_stage_simple == "subadult") |>
-  cross_join(tibble(past_year_weekly_tempurature_max_c_sd = y_temp_sd)) |>
-  mutate(
-    precip_mm_10_day_sum   = remove_scale(precip_mm_10_z, precip_10_sc),
-    temp_c_30_day_mean   = remove_scale(temp_c_30_z, temp_30_sc)
-  )
+  filter(life_stage_simple == "subadult") %>%
+  select(-life_stage_simple)
 
+nd_kg = model_select$data |>
+  distinct(taxon_capture, life_stage_simple, kg_code_3) |>
+  left_join(nd_kg_env, by = "taxon_capture")
 
-# hu
-hu_draws_y_temp <- model_select |>
+hu_draws_kg_spp_lss = model_select |>
   linpred_draws(
-    newdata    = y_temp,
+    newdata    = nd_kg,
     dpar       = "hu",
-    re_formula = ~ 1
+    re_formula = ~ (1 | kg_code_3)
   )
 
-hu_agg_y_temp = hu_draws_y_temp |>
+hu_agg_kg = hu_draws_kg_spp_lss |>
   mutate(prevalence = 1 - plogis(hu)) |>
-  group_by(past_year_weekly_tempurature_max_c_sd) |>
+  group_by(kg_code_3) |>
   median_qi(prevalence)
 
+
 # mu
-mu_draws_y_temp <- model_select |>
+mu_draws_kg_spp_lss = model_select |>
   linpred_draws(
-    newdata    = y_temp,
+    newdata    = nd_kg,
     dpar       = "mu",
-    re_formula = ~ 1
+    re_formula = ~ (1 | kg_code_3)
   )
 
-mu_agg_y_temp = mu_draws_y_temp |>
-  group_by(past_year_weekly_tempurature_max_c_sd) |>
+mu_agg_kg = mu_draws_kg_spp_lss |>
+  group_by(kg_code_3) |>
   median_qi(mu)
 
-agg_y_temp = hu_agg_y_temp %>%
+agg_kg = hu_agg_kg %>%
   dplyr::rename(prevalence_lower = .lower,
                 prevalence_upper = .upper,
                 prevalence_width = .width) %>%
-  select(past_year_weekly_tempurature_max_c_sd,
+  select(kg_code_3,
          prevalence,
          prevalence_lower,
          prevalence_upper,
          prevalence_width) %>%
-  left_join(mu_agg_y_temp %>%
+  left_join(mu_agg_kg %>%
               dplyr::rename(mu_lower = .lower,
                             mu_upper = .upper,
                             mu_width = .width) %>%
-              select(past_year_weekly_tempurature_max_c_sd,
+              select(kg_code_3,
                      mu,
                      mu_lower,
                      mu_upper,
-                     mu_width), by = "past_year_weekly_tempurature_max_c_sd")
+                     mu_width), by = "kg_code_3") %>%
+  mutate(kg_code_2 = substr(kg_code_3, start = 1, stop = 2),
+         kg_code_1 = substr(kg_code_3, start = 1, stop = 1))
 
 # visualize
+ggplot(agg_kg, aes(x = kg_code_3, fill = kg_code_1)) +
+  geom_boxplot(stat = "identity", aes(middle = prevalence, lower = prevalence_lower, upper = prevalence_upper, ymin = prevalence_lower, ymax = prevalence_upper))
+
+ggplot(agg_kg, aes(x = kg_code_3, fill = kg_code_1)) +
+  geom_boxplot(stat = "identity", aes(middle = mu, lower = mu_lower, upper = mu_upper, ymin = mu_lower, ymax = mu_upper))
+
 p_y_temp_prev = ggplot(agg_y_temp, aes(x = past_year_weekly_tempurature_max_c_sd, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
   geom_line() +
   geom_ribbon(alpha = 0.3) +
@@ -1753,32 +1749,36 @@ f_draw_agg <- function(draws, group_vars, agg_var) {
     )
 }
 
-pop_select = c("10037_pop",
-               "10055_pop",
-               "12102_pop",
-               "54188_pop",
-               "70413_pop",
-               "70459_pop",
-               "70505_pop",
-               "70550_pop",
-               "70563_pop",
-               "72808_pop",
-               "72973_pop",
-               "72996_pop")
+popyr_summary = model_select$data %>%
+  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+  group_by(population, year) %>%
+  summarize(adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  filter(adult_n > 0 & subadult_n > 0) %>%
+  group_by(population) %>%
+  summarize(start_year = min(year),
+            end_year = max(year),
+            n_year = n())
+
+pop_oi = popyr_summary %>%
+  filter(n_year >= 10) %>%
+  pull(population)
+  
 
 nd_pop_env = model_select$data |>
   group_by(taxon_capture, life_stage_simple) |>
   summarise(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
-            past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
+            kg_code_2 = mmode(kg_code_2),
             .groups = "drop") |>
   filter(life_stage_simple == "subadult") %>%
   select(-life_stage_simple)
 
 nd_popyr = model_select$data |>
-  filter(population %in% pop_select,
+  filter(population %in% pop_oi,
          taxon_capture %in% c("rana_muscosa", "rana_sierrae")) |>
-  group_by(taxon_capture, life_stage_simple, population, year) |>
+  group_by(taxon_capture, life_stage_simple, population, year, `population:year`, `population:taxon_capture:life_stage_simple`) |>
   summarize(n_adult = sum(life_stage_simple == "adult"),
             n_subadult = sum(life_stage_simple == "subadult"),
             .groups = "drop") |>
@@ -1788,7 +1788,9 @@ hu_draws_popyr_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_popyr,
     dpar       = "hu",
-    re_formula = ~ (1 | population:year:taxon_capture:life_stage_simple)
+    re_formula = ~ (1 | population:year) +
+                  (1 | population:taxon_capture:life_stage_simple),
+    allow_new_levels = FALSE
   )
 
 hu_popyr_contrast_draws = hu_draws_popyr_spp_lss |>
@@ -1814,7 +1816,7 @@ mu_draws_popyr_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_popyr,
     dpar       = "mu",
-    re_formula = ~ (1 | population:year:taxon_capture:life_stage_simple)
+    re_formula = NULL
   )
 
 mu_popyr_contrast_draws = mu_draws_popyr_spp_lss |>
