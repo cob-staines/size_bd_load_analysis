@@ -5,7 +5,7 @@ format: html
 
 # Load data & models
 ```{r}
-librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, helixcn/phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
 load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-22.RData"))
@@ -45,9 +45,12 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # m9b_30_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_env2_renv2poptls_p30t30.rds")
 # m9f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrclt_p10t30.rds")
 # m9h_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg2_p10t30.rds")
-m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
+# m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
+# m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
+# m10b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rtaxapt2poplsyrkg3_p10t30.rds")
+m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
 
-model_select = m9i_zln
+model_select = m11a_zln
 ```
 
 ## Define analysis functions
@@ -1471,7 +1474,7 @@ nd_pop_env = model_select$data |>
   group_by(taxon_capture, life_stage_simple) |>
   summarise(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
-            past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
+            kg_code_3 = mmode(kg_code_3),
             .groups = "drop") |>
   filter(life_stage_simple == "subadult") %>%
   select(-life_stage_simple)
@@ -1484,7 +1487,8 @@ hu_draws_pop_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_pop,
     dpar       = "hu",
-    re_formula = ~ (1 | population:taxon_capture:life_stage_simple)
+    re_formula = ~ (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)),
+    allow_new_levels = FALSE
   )
 
 hu_pop_contrast_draws = hu_draws_pop_spp_lss |>
@@ -1500,17 +1504,18 @@ hu_pop_contrast_agg = f_draw_agg(hu_pop_contrast_draws %>%
                                    filter(!is.na(hu_contrast)), c("taxon_capture", "population", "contrast"), "hu_contrast")
 hu_pop_adult_agg = f_draw_agg(hu_pop_contrast_draws %>%
                                 filter(!is.na(adult)) %>%
-                                dplyr::rename(hu_adult = adult), c("taxon_capture", "population", "contrast"), "hu_adult")
+                                mutate(prevalence_adult = 1 - plogis(adult)), c("taxon_capture", "population", "contrast"), "prevalence_adult")
 hu_pop_subadult_agg = f_draw_agg(hu_pop_contrast_draws %>%
                                    filter(!is.na(subadult)) %>%
-                                dplyr::rename(hu_subadult = subadult), c("taxon_capture", "population", "contrast"), "hu_subadult")
+                                mutate(prevalence_subadult = 1 - plogis(subadult)), c("taxon_capture", "population", "contrast"), "prevalence_subadult")
 
 # mu
 mu_draws_pop_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_pop,
     dpar       = "mu",
-    re_formula = ~ (1 | population:taxon_capture:life_stage_simple)
+    re_formula = ~ (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)),
+    allow_new_levels = FALSE
   )
 
 mu_pop_contrast_draws = mu_draws_pop_spp_lss |>
@@ -1540,32 +1545,9 @@ pop_agg_combined = hu_pop_contrast_agg %>%
   left_join(pop_coords, by = "population") %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
 
-pop_agg_stats = pop_agg_combined %>%
-  group_by(taxon_capture) %>%
-  summarize(adult_n = sum(!is.na(hu_adult_median)),
-            subadult_n = sum(!is.na(hu_subadult_median)),
-            contrast_n = sum(!is.na(hu_contrast_median)))
-
-pop_agg_stats_select = pop_agg_stats %>%
-  filter(contrast_n >= 0)
-
-ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_contrast_median, y = mu_contrast_median, color = taxon_capture)) +
-  geom_point() +
-  geom_text_repel(aes(label = population),
-                  color = "#333",
-                  size = 3)
-
-ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_contrast_median, y = mu_contrast_median, color = taxon_capture)) +
-  geom_point() +
-  geom_text_repel(aes(label = population),
-                  color = "#333",
-                  size = 3) +
-  facet_wrap("taxon_capture")
 
 p_scatter_hu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = -hu_adult_median, y = -hu_subadult_median)) +
+         filter(!is.na(hu_contrast_median)), aes(x = prevalence_adult_median, y = prevalence_subadult_median)) +
   geom_abline(intercept = 0,
               slope = 1,
               alpha = 0.5) + 
@@ -1575,13 +1557,14 @@ p_scatter_hu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
                   size = 3) +
   facet_wrap("species") +
   labs(title = "Adult v. Subadult Prevalence by Population",
-       x = "Adult median log(Bd detection odds)",
-       y = "Subadult median log(Bd detection odds)") +
+       x = "Adult median prevalence",
+       y = "Subadult median prevalence") +
   theme_minimal()
 
 p_scatter_hu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
-         arrange(desc(taxon_capture)), aes(x = -hu_adult_median, y = -hu_subadult_median, color = species)) +
+         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
+                !is.na(hu_contrast_median)) %>%
+         arrange(desc(taxon_capture)), aes(x = prevalence_adult_median, y = prevalence_subadult_median, color = species)) +
   geom_abline(intercept = 0,
               slope = 1,
               alpha = 0.5) + 
@@ -1590,12 +1573,12 @@ p_scatter_hu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
                   color = "#333",
                   size = 3) +
   labs(title = "Adult v. Subadult Prevalence by Population",
-       x = "Adult median log(Bd detection odds)",
-       y = "Subadult median log(Bd detection odds)") +
+       x = "Adult median prevalence",
+       y = "Subadult median prevalence") +
   theme_minimal()
 
 p_scatter_mu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% pop_agg_stats_select$taxon_capture), aes(x = mu_adult_median, y = mu_subadult_median)) +
+         filter(!is.na(mu_contrast_median)), aes(x = mu_adult_median, y = mu_subadult_median)) +
   geom_abline(intercept = 0,
               slope = 1,
               alpha = 0.5) + 
@@ -1610,7 +1593,8 @@ p_scatter_mu_life_stage_linpred_pop = ggplot(pop_agg_combined %>%
   theme_minimal()
 
 p_scatter_mu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"),
+                !is.na(mu_contrast_median)) %>%
          arrange(desc(taxon_capture)), aes(x = mu_adult_median, y = mu_subadult_median, color = species)) +
   geom_abline(intercept = 0,
               slope = 1,
@@ -1624,76 +1608,6 @@ p_scatter_mu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
        y = "Subadult median log(Bd load)") +
   theme_minimal()
 
-
-p_cascade_hu_contrast_linpred_pop_sn = ggplot(pop_agg_combined %>%
-                                                filter(taxon_capture %in% c("rana_muscosa",
-                                                                            "rana_sierrae"),
-                                                       !is.na(hu_contrast_median)), aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(population, hu_contrast_median), color = taxon_capture)) +
-  geom_vline(xintercept = 0, color = "#555") +
-  geom_rect(aes(xmin = -hu_contrast_lower_50, xmax = -hu_contrast_upper_50), height = 0.2, color = "#000") +
-  geom_pointrange() +
-  theme_minimal() +
-  labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
-       x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
-       y = "Species") +
-  scale_color_brewer(palette = "Set2")
-
-p_cascade_mu_contrast_linpred_pop_sn = ggplot(pop_agg_combined %>%
-                                                filter(taxon_capture %in% c("rana_muscosa",
-                                                                            "rana_sierrae"),
-                                                       !is.na(mu_contrast_median)), aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(population, -mu_contrast_median), color = taxon_capture)) +
-  geom_vline(xintercept = 0, color = "#555") +
-  geom_rect(aes(xmin = mu_contrast_lower_50, xmax = mu_contrast_upper_50), height = 0.2, color = "#000") +
-  geom_pointrange() +
-  theme_minimal() +
-  labs(title = "Bd Load Contrast (Subadult - Adult)",
-       x = "Contrast of log Bd load density (Subadult - Adult) [-]",
-       y = "Species") +
-  scale_color_brewer(palette = "Set2")
-
-p_cascade_hu_contrast_linpred_pop_sn_lat = ggplot(pop_agg_combined %>%
-                                                filter(taxon_capture %in% c("rana_muscosa",
-                                                                            "rana_sierrae"),
-                                                       !is.na(hu_contrast_median)), aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(population, latitude), color = taxon_capture)) +
-  geom_vline(xintercept = 0, color = "#555") +
-  geom_rect(aes(xmin = -hu_contrast_lower_50, xmax = -hu_contrast_upper_50), height = 0.2, color = "#000") +
-  geom_pointrange() +
-  theme_minimal() +
-  labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
-       x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
-       y = "Species") +
-  scale_color_brewer(palette = "Set2")
-
-p_cascade_mu_contrast_linpred_pop_sn_lat = ggplot(pop_agg_combined %>%
-                                                filter(taxon_capture %in% c("rana_muscosa",
-                                                                            "rana_sierrae"),
-                                                       !is.na(mu_contrast_median)), aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(population, latitude), color = taxon_capture)) +
-  geom_vline(xintercept = 0, color = "#555") +
-  geom_rect(aes(xmin = mu_contrast_lower_50, xmax = mu_contrast_upper_50), height = 0.2, color = "#000") +
-  geom_pointrange() +
-  theme_minimal() +
-  labs(title = "Bd Load Contrast (Subadult - Adult)",
-       x = "Contrast of log Bd load density (Subadult - Adult) [-]",
-       y = "Species") +
-  scale_color_brewer(palette = "Set2")
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_cascade_sn_prev_contrast.png"),
-       p_cascade_hu_contrast_linpred_pop_sn,
-       width = 8, height = 18)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_cascade_sn_load_contrast.png"),
-       p_cascade_mu_contrast_linpred_pop_sn,
-       width = 8, height = 18)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_cascade_sn_prev_contrast_lat.png"),
-       p_cascade_hu_contrast_linpred_pop_sn_lat,
-       width = 8, height = 18)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_cascade_sn_load_contrast_lat.png"),
-       p_cascade_mu_contrast_linpred_pop_sn_lat,
-       width = 8, height = 18)
-
-
 pop_cor = cor_mat(pop_agg_combined %>%
                     filter(taxon_capture %in% c("rana_muscosa",
                                                 "rana_sierrae")) %>%
@@ -1703,37 +1617,32 @@ pop_cor = cor_mat(pop_agg_combined %>%
 
 cor_get_pval(pop_cor)
 
-p_cascade_hu_contrast_linpred_pop_sn
-p_cascade_mu_contrast_linpred_pop_sn
-p_cascade_hu_contrast_linpred_pop_sn_lat
-p_cascade_mu_contrast_linpred_pop_sn_lat
-
 p_scatter_hu_life_stage_linpred_pop
 p_scatter_hu_life_stage_linpred_pop_sn
 p_scatter_mu_life_stage_linpred_pop
 p_scatter_mu_life_stage_linpred_pop_sn
 
-ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult.png"),
-       p_scatter_hu_life_stage_linpred_pop,
-       width = 10, height = 10)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult_sn.png"),
-       p_scatter_hu_life_stage_linpred_pop_sn,
-       width = 10, height = 10)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult.png"),
-       p_scatter_mu_life_stage_linpred_pop,
-       width = 10, height = 10)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult_sn.png"),
-       p_scatter_mu_life_stage_linpred_pop_sn,
-       width = 10, height = 10)
-
-
+# ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult.png"),
+#        p_scatter_hu_life_stage_linpred_pop,
+#        width = 10, height = 10)
+# 
+# ggsave(here("size_bd_unified", "unified_figures", "03_population_prev_adult_subadult_sn.png"),
+#        p_scatter_hu_life_stage_linpred_pop_sn,
+#        width = 10, height = 10)
+# 
+# ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult.png"),
+#        p_scatter_mu_life_stage_linpred_pop,
+#        width = 10, height = 10)
+# 
+# ggsave(here("size_bd_unified", "unified_figures", "03_population_load_adult_subadult_sn.png"),
+#        p_scatter_mu_life_stage_linpred_pop_sn,
+#        width = 10, height = 10)
 ```
 
 ## population year
 ```{r}
+#| fig-width: 10
+#| fig-height: 10
 
 f_draw_agg <- function(draws, group_vars, agg_var) {
   
@@ -1762,7 +1671,7 @@ popyr_summary = model_select$data %>%
             n_year = n())
 
 pop_oi = popyr_summary %>%
-  filter(n_year >= 10) %>%
+  filter(n_year >= 5) %>%
   pull(population)
   
 
@@ -1770,7 +1679,7 @@ nd_pop_env = model_select$data |>
   group_by(taxon_capture, life_stage_simple) |>
   summarise(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
-            kg_code_2 = mmode(kg_code_2),
+            kg_code_3 = mmode(kg_code_3),
             .groups = "drop") |>
   filter(life_stage_simple == "subadult") %>%
   select(-life_stage_simple)
@@ -1778,18 +1687,15 @@ nd_pop_env = model_select$data |>
 nd_popyr = model_select$data |>
   filter(population %in% pop_oi,
          taxon_capture %in% c("rana_muscosa", "rana_sierrae")) |>
-  group_by(taxon_capture, life_stage_simple, population, year, `population:year`, `population:taxon_capture:life_stage_simple`) |>
-  summarize(n_adult = sum(life_stage_simple == "adult"),
-            n_subadult = sum(life_stage_simple == "subadult"),
-            .groups = "drop") |>
+  distinct(taxon_capture, life_stage_simple, population, year, `taxon_capture:population`, `taxon_capture:population:life_stage_simple`, `taxon_capture:population:year`) |>
   left_join(nd_pop_env, by = "taxon_capture")
 
 hu_draws_popyr_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_popyr,
     dpar       = "hu",
-    re_formula = ~ (1 | population:year) +
-                  (1 | population:taxon_capture:life_stage_simple),
+    re_formula = ~ (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple || gr(taxon_capture:population:year, by = taxon_capture)),
     allow_new_levels = FALSE
   )
 
@@ -1806,17 +1712,19 @@ hu_popyr_contrast_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                    filter(!is.na(hu_contrast)), c("taxon_capture", "population", "year", "contrast"), "hu_contrast")
 hu_popyr_adult_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                 filter(!is.na(adult)) %>%
-                                dplyr::rename(hu_adult = adult), c("taxon_capture", "population", "year", "contrast"), "hu_adult")
+                                mutate(prevalence_adult = 1 - plogis(adult)), c("taxon_capture", "population", "year", "contrast"), "prevalence_adult")
 hu_popyr_subadult_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                    filter(!is.na(subadult)) %>%
-                                dplyr::rename(hu_subadult = subadult), c("taxon_capture", "population", "year", "contrast"), "hu_subadult")
+                                mutate(prevalence_subadult = 1 - plogis(subadult)), c("taxon_capture", "population", "year", "contrast"), "prevalence_subadult")
 
 # mu
 mu_draws_popyr_spp_lss = model_select |>
   linpred_draws(
     newdata    = nd_popyr,
     dpar       = "mu",
-    re_formula = NULL
+    re_formula =  ~ (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple || gr(taxon_capture:population:year, by = taxon_capture)),
+    allow_new_levels = FALSE
   )
 
 mu_popyr_contrast_draws = mu_draws_popyr_spp_lss |>
@@ -1845,32 +1753,37 @@ popyr_agg_combined = hu_popyr_contrast_agg %>%
   left_join(mu_popyr_subadult_agg, by = c("taxon_capture", "population", "year", "contrast"))
 
 
-p_scatter_hu_life_stage_popyr_sn = ggplot(popyr_agg_combined, aes(x = -hu_adult_median, y = -hu_subadult_median, color = population)) +
+p_scatter_hu_life_stage_popyr_sn = ggplot(popyr_agg_combined %>%
+                                            filter(!is.na(hu_contrast_median)) %>%
+                                            arrange(population, year), aes(x = prevalence_adult_median, y = prevalence_subadult_median, color = taxon_capture)) +
   geom_abline(intercept = 0,
               slope = 1,
               alpha = 0.5) + 
   geom_point() +
-  geom_line() +
+  geom_path() +
+  facet_wrap("population") +
   geom_text_repel(aes(label = year),
                   color = "#333",
                   size = 3) +
   theme_minimal()
 
-
-p_scatter_mu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
-         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
-         arrange(desc(taxon_capture)), aes(x = mu_adult_median, y = mu_subadult_median, color = species)) +
+p_scatter_mu_life_stage_popyr_sn = ggplot(popyr_agg_combined %>%
+                                            filter(!is.na(mu_contrast_median)) %>%
+                                            arrange(population, year), aes(x = mu_adult_median, y = mu_subadult_median, color = taxon_capture)) +
   geom_abline(intercept = 0,
               slope = 1,
               alpha = 0.5) + 
   geom_point() +
-  geom_text_repel(aes(label = population),
+  geom_path() +
+  facet_wrap("population") +
+  geom_text_repel(aes(label = year),
                   color = "#333",
                   size = 3) +
-  labs(title = "Adult v. Subadult Load by Population",
-       x = "Adult median log(Bd load)",
-       y = "Subadult median log(Bd load)") +
   theme_minimal()
+
+p_scatter_hu_life_stage_popyr_sn
+p_scatter_mu_life_stage_popyr_sn
+
 ```
 
 ## map
@@ -1878,6 +1791,7 @@ p_scatter_mu_life_stage_linpred_pop_sn = ggplot(pop_agg_combined %>%
 library(leaflet)
 library(RColorBrewer)
 library(mapview)
+library(htmlwidgets)
 
 pop_agg_contrast = pop_agg_combined %>%
   filter(!is.na(hu_contrast_median),
