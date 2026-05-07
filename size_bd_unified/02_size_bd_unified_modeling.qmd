@@ -11,7 +11,7 @@ author: Cob Staines
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, cmdstanr, bayestestR, terra)
+librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, stan-dev/cmdstanr, bayestestR, terra)
 
 ```
 
@@ -1074,16 +1074,57 @@ m9i_zln <- add_criterion(m9i_zln, "loo")
 
 saveRDS(m9i_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
 m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
+# 
+# # quadratic temp, linear precip, year, precip var linear, random effects of year with life_stage_simple
+# m10a_zln <- brm(
+#   formula = bf(
+#     bd_load_co_density ~ 1 + 
+#       life_stage_simple * taxon_capture +
+#       (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+#       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+#       (1 | kg_code_3) +
+#       (1 | population) +
+#       (1 | population:taxon_capture:life_stage_simple) +
+#       (0 + life_stage_simple || population:taxon_capture:year),
+#     
+#     hu ~ 1 + 
+#       life_stage_simple * taxon_capture +
+#       (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+#       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+#       (1 | kg_code_3) +
+#       (1 | population) +
+#       (1 | population:taxon_capture:life_stage_simple) +
+#       (0 + life_stage_simple || population:taxon_capture:year),
+#     
+#     sigma ~ 1 + taxon_capture + 
+#       (1 | population:year)
+#   ),
+#   data = brms_data,
+#   family = hurdle_lognormal(),
+#   prior = model_priors,
+#   sample_prior = "yes",
+#   control = list(adapt_delta = 0.98),
+#   chains = 4,
+#   iter = 2000,
+#   warmup = 1000,
+#   seed = 126,
+#   cores = 4,
+#   backend = "cmdstanr"
+# )
+# 
+# m10a_zln <- add_criterion(m10a_zln, "loo")
+# 
+# saveRDS(m10a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
+# m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
 
-# quadratic temp, linear precip, year, precip var linear
-m10a_zln <- brm(
+# isolate scales between taxa
+m10b_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
       life_stage_simple * taxon_capture +
       (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
       (1 | kg_code_3) +
-      (1 | population) +
       (1 | population:taxon_capture:life_stage_simple) +
       (0 + life_stage_simple || population:taxon_capture:year),
     
@@ -1092,12 +1133,10 @@ m10a_zln <- brm(
       (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
       (1 | kg_code_3) +
-      (1 | population) +
       (1 | population:taxon_capture:life_stage_simple) +
       (0 + life_stage_simple || population:taxon_capture:year),
     
-    sigma ~ 1 + taxon_capture + 
-      (1 | population:year)
+    sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
@@ -1112,11 +1151,88 @@ m10a_zln <- brm(
   backend = "cmdstanr"
 )
 
-m10a_zln <- add_criterion(m10a_zln, "loo")
+m10b_zln <- add_criterion(m10b_zln, "loo", moment_match = TRUE)
 
-saveRDS(m10a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
-m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
+saveRDS(m10b_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rtaxapt2poplsyrkg3_p10t30.rds")
+m10b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rtaxapt2poplsyrkg3_p10t30.rds")
 
+# isolate scales between taxa
+m11a_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple || gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple || gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    sigma ~ 1 + taxon_capture + (1 | taxon_capture:population)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m11a_zln <- add_criterion(m11a_zln, "loo", moment_match = TRUE)
+
+saveRDS(m11a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
+m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
+
+# isolate scales between taxa
+m11b_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    sigma ~ 1 + taxon_capture + (1 | taxon_capture:population)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m11b_zln <- add_criterion(m11b_zln, "loo", moment_match = TRUE)
+
+saveRDS(m11b_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
+m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 
 ```
 
@@ -1156,7 +1272,9 @@ m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
                             m9f_zln,
                             m9g_zln,
                             m9h_zln,
-                            m9i_zln
+                            m9i_zln,
+                            m10b_zln,
+                            m11a_zln
                             ))
 ```
 
@@ -1171,7 +1289,7 @@ m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m9h_zln
+model_select = m11a_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
