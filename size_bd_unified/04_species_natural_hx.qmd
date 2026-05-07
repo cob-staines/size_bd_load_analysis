@@ -4,7 +4,7 @@ format: html
 ---
 
 ```{r}
-librarian::shelf(tidyverse, here, iucnredlist, rio, janitor)
+librarian::shelf(tidyverse, here, IUCN-UK/iucnredlist, rio, janitor)
 
 load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-03.RData"))
 
