@@ -17,8 +17,9 @@ librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio
 
 # Load models and data
 ```{r}
-# load linpred draws
-spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
+# load model
+m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
+model_select = m11a_zln
 
 # load life history
 ls_in = read_csv(here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
@@ -29,6 +30,133 @@ ls_clean = ls_in %>%
 # phylogenetic tree
 jp_phylo_tree = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
 jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = FALSE)
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+```
+
+# linpred draws
+```{r}
+f_draw_agg <- function(draws, group_vars, agg_var) {
+  
+  draws |>
+    group_by(across(all_of(group_vars))) |>
+    reframe(
+      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
+      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
+      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
+      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
+      "{agg_var}_median"   := median(.data[[agg_var]]),
+      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
+    )
+}
+
+mmode = function(x) {
+  ux = unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+
+# define linpred data
+nd_env_subadult = model_select$data %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarize(precip_mm_10_z = median(precip_mm_10_z),
+            temp_c_30_z = median(temp_c_30_z),
+            kg_code_3 = mmode(kg_code_3),
+            .groups = "drop") %>%
+  filter(life_stage_simple == "subadult")
+
+nd_spp_lss = model_select$data |>
+  distinct(taxon_capture, life_stage_simple) %>%
+  left_join(nd_env_subadult %>%
+              select(-life_stage_simple), by = "taxon_capture")
+
+
+# hu contrast
+hu_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "hu",
+    re_formula = NA
+  ) %>%
+  ungroup()
+
+hu_spp_draws = hu_spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(hu = mean(hu), .groups = "drop")
+
+hu_spp_lss_contrast_draws = hu_spp_lss_draws |>
+  pivot_wider(
+    id_cols     = c(taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = hu
+  ) |>
+  mutate(hu_contrast = subadult - adult,
+         contrast = "subadult - adult")
+
+# mu 
+mu_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "mu",
+    re_formula = NA
+  ) %>% ungroup()
+
+mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
+  pivot_wider(
+    id_cols     = c(taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = mu
+  ) |>
+  mutate(mu_contrast = subadult - adult,
+         contrast = "subadult - adult")
+
+# sigma 
+sigma_spp_lss_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_spp_lss,
+    dpar       = "sigma",
+    re_formula = NA
+  ) %>% ungroup()
+
+sigma_spp_draws = sigma_spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(sigma = mean(sigma), .groups = "drop")
+
+
+hu_spp_agg = f_draw_agg(hu_spp_draws, c("taxon_capture"), "hu")
+prevalence_spp_agg = f_draw_agg(hu_spp_draws %>%
+                                    mutate(prevalence = 1 - plogis(hu)), c("taxon_capture"), "prevalence")
+sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
+mu_spp_lss_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
+hu_spp_lss_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
+
+# combine
+spp_draws = hu_spp_draws %>%
+  mutate(prevalence = 1 - plogis(hu)) %>%
+  left_join(sigma_spp_draws, by = c(".draw", "taxon_capture"))
+
+
+spp_lss_draws = hu_spp_lss_draws %>%
+  select(taxon_capture,
+         life_stage_simple,
+         .draw,
+         hu) %>%
+  mutate(prevalence = 1 - plogis(hu)) %>%
+  left_join(mu_spp_lss_draws %>%
+              select(taxon_capture,
+                     life_stage_simple,
+                     .draw,
+                     mu), by = c("taxon_capture", "life_stage_simple", ".draw")) %>%
+  left_join(sigma_spp_lss_draws %>%
+              select(taxon_capture,
+                     life_stage_simple,
+                     .draw,
+                     sigma), by = c("taxon_capture", "life_stage_simple", ".draw"))
+
+
+
+# # load linpred draws
+# spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
 ```
 
@@ -100,7 +228,6 @@ setdiff(mat_names, data_names)  # in matrix but not data
 
 # Model
 ```{r}
-set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 
 m1_lspr = brm(
   mvbf(
@@ -207,7 +334,7 @@ m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_ls
 ```{r}
 (loo_comp_out = loo_compare(
   # m1_lspr,
-                            # m1b_lspr,
+  #                           m1b_lspr,
                             m1c_lspr,
                             m1d_lspr))
 
