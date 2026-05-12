@@ -563,7 +563,7 @@ hyphy_clean = hyphy_raw %>%
     .default = NA),
     taxon_capture = "hylodes_phyllodes",
     site = gsub("aw", "s", tolower(transect)),
-    region = "samta_virginia",
+    region = "santa_virginia",
     country = "brazil",
     bd_its_copies = bd_load,
     project = "HYPHY"
@@ -653,7 +653,9 @@ bofa_valid = bofa_clean %>%
 ```{r}
 
 ## populations
-all_populations = read.csv(here("data", "size_load_pop_1_2026-04-30.csv")) %>%
+pops_in = read.csv(here("data", "size_load_pop_1_2026-05-11.csv"))
+
+all_populations = pops_in %>%
   select(site, pop_id) %>%
   dplyr::rename(population = pop_id) %>%
   mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
@@ -786,6 +788,9 @@ bd_env = bd_model_env %>%
   select(taxon_capture,
          everything())
 
+peace = bd_env %>%
+  distinct(site, population)
+
 sum(is.na(bd_env$precip_mm_10_day_sum))
 sum(is.na(bd_env$temp_c_30_day_sum))
 
@@ -798,7 +803,7 @@ kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
   select(-rgb) %>%
   rename_with(function(x) { paste0("kg_", x) })
 
-all_sites = brms_data %>%
+all_sites = bd_env %>%
   group_by(site, population, country) %>%
   summarize(site_latitude = mean(site_latitude),
             site_longitude = mean(site_longitude),
@@ -843,7 +848,9 @@ ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
 
 # save data
 ```{r}
-save(bd_env_kg, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
+brms_data = bd_env_kg
+
+save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
 
@@ -882,6 +889,7 @@ ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load
 ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co_density), color = taxon_capture)) +
   geom_point(alpha = 0.05)
 ```
+
 # count KG zones
 ```{r}
 
@@ -896,5 +904,111 @@ ggplot(sites_kg, aes(x = kg_code_2)) +
 ggplot(sites_kg, aes(x = kg_code_3)) +
   geom_bar() +
   scale_y_log10()
+
+```
+
+# investigate bias in species absolute loads and env data
+```{r}
+# who is missing projects?
+peace = brms_data %>%
+  group_by(taxon_capture, project) %>%
+  count()
+
+brms_data |>
+  group_by(taxon_capture, kg_code_3) |>
+  summarise(n = n(), .groups = "drop") |>
+  count(kg_code_3, taxon_capture) |>
+  ggplot(aes(x = kg_code_3, y = n, fill = taxon_capture)) +
+  geom_col(position = "fill")
+
+# Precipitation
+brms_data |>
+  ggplot(aes(x = taxon_capture, y = precip_mm_10_day_sum)) +
+  geom_violin(fill = "steelblue", alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  coord_flip() +
+  labs(title = "Precipitation distribution by taxon",
+       x = NULL, y = "10-day precipitation (mm)") +
+  theme_minimal()
+
+# Temperature
+brms_data |>
+  ggplot(aes(x = taxon_capture, y = temp_c_30_day_mean)) +
+  geom_violin(fill = "tomato", alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  coord_flip() +
+  labs(title = "Temperature distribution by taxon",
+       x = NULL, y = "30-day mean temperature (°C)") +
+  theme_minimal()
+
+# compute taxon-level means
+taxon_env_load = brms_data |>
+  group_by(taxon_capture) |>
+  summarise(
+    mean_precip    = mean(precip_mm_10_day_sum, na.rm = TRUE),
+    mean_temp      = mean(temp_c_30_day_mean, na.rm = TRUE),
+    mean_prevalence = mean(bd_detected_co, na.rm = TRUE),
+    mean_load      = mean(log1p(bd_load_co_density[bd_detected_co]), na.rm = TRUE),  # log scale
+    n              = n(),
+    .groups        = "drop"
+  )
+
+# prevalence vs environment
+p_prev_precip = ggplot(taxon_env_load, aes(x = mean_precip, y = mean_prevalence)) +
+  geom_point(aes(size = n)) +
+  geom_smooth(method = "lm", se = TRUE) +
+  # geom_text_repel(aes(label = taxon_capture), size = 3) +
+  labs(x = "Species mean precipitation (mm)",
+       y = "Species mean prevalence",
+       title = "Between-taxon: prevalence vs precipitation") +
+  theme_minimal()
+
+p_prev_temp = ggplot(taxon_env_load, aes(x = mean_temp, y = mean_prevalence)) +
+  geom_point(aes(size = n)) +
+  geom_smooth(method = "lm", se = TRUE) +
+  # geom_text_repel(aes(label = taxon_capture), size = 3) +
+  labs(x = "Species mean temperature (°C)",
+       y = "Species mean prevalence",
+       title = "Between-taxon: prevalence vs temperature") +
+  theme_minimal()
+
+# load vs environment (log scale, non-zero only)
+p_load_precip = brms_data |>
+  filter(bd_load_co_density > 0) |>
+  group_by(taxon_capture) |>
+  summarise(
+    mean_precip = mean(precip_mm_10_day_sum, na.rm = TRUE),
+    mean_load   = mean(log(bd_load_co_density), na.rm = TRUE),
+    n           = n(),
+    .groups     = "drop"
+  ) |>
+  ggplot(aes(x = mean_precip, y = mean_load)) +
+  geom_point(aes(size = n)) +
+  geom_smooth(method = "lm", se = TRUE) +
+  # geom_text_repel(aes(label = taxon_capture), size = 3) +
+  labs(x = "Species mean precipitation (mm)",
+       y = "Species mean log load (non-zero)",
+       title = "Between-taxon: load vs precipitation") +
+  theme_minimal()
+
+p_load_temp = brms_data |>
+  filter(bd_load_co_density > 0) |>
+  group_by(taxon_capture) |>
+  summarise(
+    mean_temp = mean(temp_c_30_day_mean, na.rm = TRUE),
+    mean_load = mean(log(bd_load_co_density), na.rm = TRUE),
+    n         = n(),
+    .groups   = "drop"
+  ) |>
+  ggplot(aes(x = mean_temp, y = mean_load)) +
+  geom_point(aes(size = n)) +
+  geom_smooth(method = "lm", se = TRUE) +
+  # geom_text_repel(aes(label = taxon_capture), size = 3) +
+  labs(x = "Species mean temperature (°C)",
+       y = "Species mean log load (non-zero)",
+       title = "Between-taxon: load vs temperature") +
+  theme_minimal()
+
+(p_prev_precip + p_prev_temp) / (p_load_precip + p_load_temp)
 
 ```
