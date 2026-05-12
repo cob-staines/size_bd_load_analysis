@@ -107,6 +107,8 @@ brms_data = brms_data %>%
          kg_code_3_cm = mmode(kg_code_3)) %>%
   ungroup
 
+# save(brms_data, file = "/home/cob/Documents/ribbitr/repos/r-brms-contained/data/bd_model_env_unified_2026-04-22.RData")
+
 ```
 
 # visualize
@@ -1265,6 +1267,45 @@ m11b_zln <- add_criterion(m11b_zln, "loo")
 saveRDS(m11b_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 
+# isolate scales between taxa
+m11c_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    sigma ~ 1 + taxon_capture + (1 | gr(taxon_capture:population, by = taxon_capture))
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m11c_zln <- add_criterion(m11c_zln, "loo")
+
+saveRDS(m11c_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3tax_p10t30.rds")
+m11c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3tax_p10t30.rds")
+
 # include taxon center means for temp, precip and climate zones
 m12a_zln <- brm(
   formula = bf(
@@ -1518,5 +1559,16 @@ hu_spp_lss_draws = model_select |>
     re_formula = NA
   ) %>%
   ungroup()
+
+```
+
+```{r}
+as_draws_df(m11b_zln) |>
+  select(
+    sd_mean  = contains("sd_taxon_capture:population:life_stage_simple"),
+    sd_sigma = contains("sd_taxon_capture:population__sigma")
+  ) |>
+  cor() |>
+  round(2)
 
 ```
