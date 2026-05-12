@@ -94,9 +94,40 @@ brms_data = brms_data %>%
 
 peace = get_dupes(all_sites_kg, site)
 
+# cluster means
+mmode = function(x) {
+  ux = unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+brms_data = brms_data %>%
+  group_by(taxon_capture) %>%
+  mutate(precip_mm_10_cm = mean(precip_mm_10_z),
+         temp_c_30_cm = mean(temp_c_30_z),
+         kg_code_3_cm = mmode(kg_code_3)) %>%
+  ungroup
+
+```
+
+# visualize
+```{r}
 ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
   geom_bar() +
   scale_y_log10()
+
+ggplot(brms_data, aes(x = kg_code_3)) +
+  geom_bar()
+
+ggplot(brms_data, aes(x = precip_mm_10_cm)) +
+  geom_bar() +
+  scale_y_log10()
+
+ggplot(brms_data, aes(x = precip_mm_10_day_sum, fill = taxon_capture)) +
+  geom_histogram() +
+  scale_x_log10()
+
+ggplot(brms_data, aes(x = temp_c_30_day_mean, fill = taxon_capture)) +
+  geom_histogram()
 
 ```
 
@@ -1229,10 +1260,51 @@ m11b_zln <- brm(
   backend = "cmdstanr"
 )
 
-m11b_zln <- add_criterion(m11b_zln, "loo", moment_match = TRUE)
+m11b_zln <- add_criterion(m11b_zln, "loo")
 
 saveRDS(m11b_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
+
+# include taxon center means for temp, precip and climate zones
+m12a_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      temp_c_30_cm + temp_c_30_z + I(temp_c_30_z^2) +
+      precip_mm_10_cm + precip_mm_10_z +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      kg_code_3_cm + (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      temp_c_30_cm + temp_c_30_z + I(temp_c_30_z^2) +
+      precip_mm_10_cm + precip_mm_10_z +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      kg_code_3_cm + (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    sigma ~ 1 + taxon_capture + (1 | taxon_capture:population)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m12a_zln <- add_criterion(m12a_zln, "loo")
+
+saveRDS(m12a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3cm_p10t30.rds")
+m12a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3cm_p10t30.rds")
 
 ```
 
@@ -1244,37 +1316,38 @@ m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 # model comparison and selection
 
 (loo_comp_out = loo_compare(null_zln,
-                            # nullb_zln, # no density
-                            # m1_zln,
-                            # m2_zln,
-                            # m2b_zln,
-                            # m3_zln,
-                            # m3b_zln,  # no density
-                            # m4_zln,
-                            # m5_zln,
-                            # m5b_zln,
-                            # m5c_zln,
-                            # m5d_zln,
-                            # m5e_zln,
-                            # m5f_zln,
-                            # m5g_zln
-                            # m6_zln,
-                            # m6b_zln,
-                            # m6c_zln,
-                            # m6d_zln,
-                            # m8_zln,
-                            m9a_zln,
-                            m9b_zln,
-                            # m9b_30_zln
-                            m9c_zln,
-                            m9d_zln,
-                            m9e_zln,
-                            m9f_zln,
-                            m9g_zln,
-                            m9h_zln,
-                            m9i_zln,
-                            m10b_zln,
-                            m11a_zln
+                            # # nullb_zln, # no density
+                            # # m1_zln,
+                            # # m2_zln,
+                            # # m2b_zln,
+                            # # m3_zln,
+                            # # m3b_zln,  # no density
+                            # # m4_zln,
+                            # # m5_zln,
+                            # # m5b_zln,
+                            # # m5c_zln,
+                            # # m5d_zln,
+                            # # m5e_zln,
+                            # # m5f_zln,
+                            # # m5g_zln
+                            # # m6_zln,
+                            # # m6b_zln,
+                            # # m6c_zln,
+                            # # m6d_zln,
+                            # # m8_zln,
+                            # m9a_zln,
+                            # m9b_zln,
+                            # # m9b_30_zln
+                            # m9c_zln,
+                            # m9d_zln,
+                            # m9e_zln,
+                            # m9f_zln,
+                            # m9g_zln,
+                            # m9h_zln,
+                            # m9i_zln,
+                            # m10b_zln,
+                            m11a_zln,
+                            m11b_zln
                             ))
 ```
 
@@ -1289,13 +1362,44 @@ m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m11a_zln
+model_select = m11b_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
 VarCorr(model_select)
 bayes_R2(model_select)
+```
+
+# convergence comparison
+```{r}
+# For one model (e.g., m11b_zln)
+diag1 <- as_draws_df(m11a_zln) |> 
+  summarize_draws("rhat", "ess_bulk", "ess_tail") |> 
+  mutate(Model = "m11a_zln")
+
+# For second model (e.g., m12)
+diag2 <- as_draws_df(m11b_zln) |> 
+  summarize_draws("rhat", "ess_bulk", "ess_tail") |> 
+  mutate(odel = "m11b_zln")
+
+# Combine and summarize issues
+diag_combined <- bind_rows(diag1, diag2)
+
+# Flag problems
+peace = diag_combined |>
+  pivot_wider(id_cols = "variable",
+              names_from = "Model",
+              values_from = c("rhat",
+                              "ess_bulk",
+                              "ess_tail")) %>%
+  filter(rhat_m11a_zln > 1.01 |
+           rhat_m11b_zln > 1.01)
+
+ggplot(peace, aes(x = rhat_m11a_zln, y = rhat_m11b_zln)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1)
+
 ```
 
 ### Posterios predictive checks
