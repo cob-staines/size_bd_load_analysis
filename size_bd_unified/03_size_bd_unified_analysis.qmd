@@ -48,9 +48,11 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # m9i_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3_p10t30.rds")
 # m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
 # m10b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rtaxapt2poplsyrkg3_p10t30.rds")
-m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
+# m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
+m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 
-model_select = m11a_zln
+model_select = m11b_zln
+
 ```
 
 ## Define analysis functions
