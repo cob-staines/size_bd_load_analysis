@@ -49,9 +49,10 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # m10a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rpt2poptlsyrkg3ls_p10t30.rds")
 # m10b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rtaxapt2poplsyrkg3_p10t30.rds")
 # m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
-m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
+# m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
+m11c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtax_p10t30_20260514_034956.rds")
 
-model_select = m11b_zln
+model_select = m11c_zln
 
 ```
 
@@ -1661,8 +1662,8 @@ f_draw_agg <- function(draws, group_vars, agg_var) {
 }
 
 popyr_summary = model_select$data %>%
-  filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
-  group_by(population, year) %>%
+  # filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
+  group_by(population, year, taxon_capture) %>%
   summarize(adult_n = sum(life_stage_simple == "adult"),
             subadult_n = sum(life_stage_simple == "subadult"),
             .groups = "drop") %>%
@@ -1673,7 +1674,7 @@ popyr_summary = model_select$data %>%
             n_year = n())
 
 pop_oi = popyr_summary %>%
-  filter(n_year >= 5) %>%
+  # filter(n_year >= 5) %>%
   pull(population)
   
 
@@ -1687,9 +1688,9 @@ nd_pop_env = model_select$data |>
   select(-life_stage_simple)
 
 nd_popyr = model_select$data |>
-  filter(population %in% pop_oi,
-         taxon_capture %in% c("rana_muscosa", "rana_sierrae")) |>
-  distinct(taxon_capture, life_stage_simple, population, year, `taxon_capture:population`, `taxon_capture:population:life_stage_simple`, `taxon_capture:population:year`) |>
+  # filter(population %in% pop_oi,
+  #        taxon_capture %in% c("rana_muscosa", "rana_sierrae")) |>
+  distinct(taxon_capture, life_stage_simple, population, year, `taxon_capture:population:life_stage_simple`, `taxon_capture:population:year`) |>
   left_join(nd_pop_env, by = "taxon_capture")
 
 hu_draws_popyr_spp_lss = model_select |>
@@ -1714,10 +1715,12 @@ hu_popyr_contrast_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                    filter(!is.na(hu_contrast)), c("taxon_capture", "population", "year", "contrast"), "hu_contrast")
 hu_popyr_adult_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                 filter(!is.na(adult)) %>%
-                                mutate(prevalence_adult = 1 - plogis(adult)), c("taxon_capture", "population", "year", "contrast"), "prevalence_adult")
+                                mutate(prevalence_adult = 1 - plogis(adult)) %>%
+                                dplyr::rename(hu_adult = adult), c("taxon_capture", "population", "year", "contrast"), "hu_adult")
 hu_popyr_subadult_agg = f_draw_agg(hu_popyr_contrast_draws %>%
                                    filter(!is.na(subadult)) %>%
-                                mutate(prevalence_subadult = 1 - plogis(subadult)), c("taxon_capture", "population", "year", "contrast"), "prevalence_subadult")
+                                mutate(prevalence_subadult = 1 - plogis(subadult)) %>%
+                                dplyr::rename(hu_subadult = subadult), c("taxon_capture", "population", "year", "contrast"), "hu_subadult")
 
 # mu
 mu_draws_popyr_spp_lss = model_select |>
@@ -1754,6 +1757,79 @@ popyr_agg_combined = hu_popyr_contrast_agg %>%
   left_join(mu_popyr_adult_agg, by = c("taxon_capture", "population", "year", "contrast")) %>%
   left_join(mu_popyr_subadult_agg, by = c("taxon_capture", "population", "year", "contrast"))
 
+### CALCULATE ADULT NORMALS
+
+nd_taxon_adult = nd_pop_env |>
+  mutate(life_stage_simple = "adult")
+
+hu_taxon_adult_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_taxon_adult,
+    dpar       = "hu",
+    re_formula = NA   # fixed effects only → taxon-level baseline
+  ) |>
+  select(taxon_capture, .draw, hu_taxon_adult = hu)
+
+mu_taxon_adult_draws = model_select |>
+  linpred_draws(
+    newdata    = nd_taxon_adult,
+    dpar       = "mu",
+    re_formula = NA
+  ) |>
+  select(taxon_capture, .draw, mu_taxon_adult = mu)
+
+hu_popyr_contrast_tax_draws = hu_draws_popyr_spp_lss |>
+  pivot_wider(
+    id_cols     = c(population, year, taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = hu
+  ) |>
+  left_join(hu_taxon_adult_draws, by = c("taxon_capture", ".draw")) |>
+  mutate(
+    adult    = adult    - hu_taxon_adult,
+    subadult = subadult - hu_taxon_adult,
+    hu_contrast = subadult - adult,
+    contrast    = "subadult - adult"
+  )
+
+mu_popyr_contrast_tax_draws = mu_draws_popyr_spp_lss |>
+  pivot_wider(
+    id_cols     = c(population, year, taxon_capture, .draw),
+    names_from  = life_stage_simple,
+    values_from = mu
+  ) |>
+  left_join(mu_taxon_adult_draws, by = c("taxon_capture", ".draw")) |>
+  mutate(
+    adult    = adult    - mu_taxon_adult,
+    subadult = subadult - mu_taxon_adult,
+    mu_contrast = subadult - adult,
+    contrast    = "subadult - adult"
+  )
+
+
+hu_popyr_adult_tax_agg = f_draw_agg(hu_popyr_contrast_tax_draws %>%
+                                filter(!is.na(adult)) %>%
+                                mutate(prevalence_adult = 1 - plogis(adult)) %>%
+                                dplyr::rename(hu_adult = adult), c("taxon_capture", "population", "year", "contrast"), "hu_adult")
+hu_popyr_subadult_tax_agg = f_draw_agg(hu_popyr_contrast_tax_draws %>%
+                                   filter(!is.na(subadult)) %>%
+                                mutate(prevalence_subadult = 1 - plogis(subadult)) %>%
+                                dplyr::rename(hu_subadult = subadult), c("taxon_capture", "population", "year", "contrast"), "hu_subadult")
+
+
+mu_popyr_adult_tax_agg = f_draw_agg(mu_popyr_contrast_tax_draws %>%
+                                filter(!is.na(adult)) %>%
+                                dplyr::rename(mu_adult = adult), c("taxon_capture", "population", "year", "contrast"), "mu_adult")
+mu_popyr_subadult_tax_agg = f_draw_agg(mu_popyr_contrast_tax_draws %>%
+                                   filter(!is.na(subadult)) %>%
+                                dplyr::rename(mu_subadult = subadult), c("taxon_capture", "population", "year", "contrast"), "mu_subadult")
+
+popyr_tax_agg_combined = hu_popyr_adult_tax_agg %>%
+  full_join(hu_popyr_subadult_tax_agg, by = c("taxon_capture", "population", "year", "contrast")) %>%
+  left_join(mu_popyr_adult_tax_agg, by = c("taxon_capture", "population", "year", "contrast")) %>%
+  left_join(mu_popyr_subadult_tax_agg, by = c("taxon_capture", "population", "year", "contrast"))
+
+### VISUALIZE
 
 p_scatter_hu_life_stage_popyr_sn = ggplot(popyr_agg_combined %>%
                                             filter(!is.na(hu_contrast_median)) %>%
@@ -1785,6 +1861,49 @@ p_scatter_mu_life_stage_popyr_sn = ggplot(popyr_agg_combined %>%
 
 p_scatter_hu_life_stage_popyr_sn
 p_scatter_mu_life_stage_popyr_sn
+
+# overplot years
+ggplot(popyr_agg_combined %>%
+         filter(!is.na(hu_contrast_median)) %>%
+         arrange(population, year), aes(x = hu_adult_median, y = hu_subadult_median, color = taxon_capture)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point(alpha = 0.3) +
+  facet_wrap("taxon_capture") +
+  theme_minimal()
+
+ggplot(popyr_agg_combined %>%
+         filter(!is.na(mu_contrast_median)) %>%
+         arrange(population, year), aes(x = mu_adult_median, y = mu_subadult_median, color = taxon_capture)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point(alpha = 0.3) +
+  facet_wrap("taxon_capture") +
+  theme_minimal()
+
+ggplot(popyr_tax_agg_combined %>%
+         filter(!is.na(hu_adult_median),
+                !is.na(hu_subadult_median)) %>%
+         arrange(population, year), aes(x = hu_adult_median, y = hu_subadult_median, color = taxon_capture)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point(alpha = 0.3) +
+  facet_wrap("taxon_capture") +
+  theme_minimal()
+
+ggplot(popyr_tax_agg_combined %>%
+         filter(!is.na(hu_adult_median),
+                !is.na(hu_subadult_median)) %>%
+         arrange(population, year), aes(x = mu_adult_median, y = mu_subadult_median, color = taxon_capture)) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              alpha = 0.5) + 
+  geom_point(alpha = 0.3) +
+  facet_wrap("taxon_capture") +
+  theme_minimal()
 
 ```
 
