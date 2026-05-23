@@ -1859,29 +1859,30 @@ p_scatter_mu_life_stage_popyr_sn = ggplot(popyr_agg_combined %>%
                   size = 3) +
   theme_minimal()
 
-p_scatter_hu_life_stage_popyr_sn
-p_scatter_mu_life_stage_popyr_sn
+# p_scatter_hu_life_stage_popyr_sn
+# p_scatter_mu_life_stage_popyr_sn
 
 # overplot years
-ggplot(popyr_agg_combined %>%
-         filter(!is.na(hu_contrast_median)) %>%
-         arrange(population, year), aes(x = hu_adult_median, y = hu_subadult_median, color = taxon_capture)) +
-  geom_abline(intercept = 0,
-              slope = 1,
-              alpha = 0.5) + 
-  geom_point(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal()
 
-ggplot(popyr_agg_combined %>%
-         filter(!is.na(mu_contrast_median)) %>%
-         arrange(population, year), aes(x = mu_adult_median, y = mu_subadult_median, color = taxon_capture)) +
-  geom_abline(intercept = 0,
-              slope = 1,
-              alpha = 0.5) + 
-  geom_point(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal()
+# ggplot(popyr_agg_combined %>%
+#          filter(!is.na(hu_contrast_median)) %>%
+#          arrange(population, year), aes(x = hu_adult_median, y = hu_subadult_median, color = taxon_capture)) +
+#   geom_abline(intercept = 0,
+#               slope = 1,
+#               alpha = 0.5) + 
+#   geom_point(alpha = 0.3) +
+#   facet_wrap("taxon_capture") +
+#   theme_minimal()
+# 
+# ggplot(popyr_agg_combined %>%
+#          filter(!is.na(mu_contrast_median)) %>%
+#          arrange(population, year), aes(x = mu_adult_median, y = mu_subadult_median, color = taxon_capture)) +
+#   geom_abline(intercept = 0,
+#               slope = 1,
+#               alpha = 0.5) + 
+#   geom_point(alpha = 0.3) +
+#   facet_wrap("taxon_capture") +
+#   theme_minimal()
 
 ggplot(popyr_tax_agg_combined %>%
          filter(!is.na(hu_adult_median),
