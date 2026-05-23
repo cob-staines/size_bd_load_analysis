@@ -1306,7 +1306,7 @@ m11c_zln <- add_criterion(m11c_zln, "loo", moment_match = TRUE)
 saveRDS(m11c_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtax_p10t30_20260514_034956.rds")
 m11c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtax_p10t30_20260514_034956.rds")
 
-# simpler sigma effects
+# group sigma random effects by taxon
 m11d_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
@@ -1340,10 +1340,49 @@ m11d_zln <- brm(
   backend = "cmdstanr"
 )
 
-m11d_zln <- add_criterion(m11d_zln, "loo", moment_match = TRUE)
+m11d_zln <- add_criterion(m11d_zln, "loo")
 
-saveRDS(m11d_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtaxrpop_p10t30.rds")
-m11d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtaxrpop_p10t30.rds")
+saveRDS(m11d_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtaxrpop_p10t30_20260516_145515.rds")
+m11d_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtaxrpop_p10t30_20260516_145515.rds")
+
+# simpler kg in sigma effects
+m11e_zln <- brm(
+  formula = bf(
+    bd_load_co_density ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    hu ~ 1 + 
+      life_stage_simple * taxon_capture +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+      (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
+      (1 | kg_code_3) +
+      (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
+      (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
+    
+    sigma ~ 1 + taxon_capture + (1 | taxon_capture:population) + (1 | kg_code_3)
+  ),
+  data = brms_data,
+  family = hurdle_lognormal(),
+  prior = model_priors,
+  sample_prior = "yes",
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 126,
+  cores = 4,
+  backend = "cmdstanr"
+)
+
+m11e_zln <- add_criterion(m11e_zln, "loo")
+
+saveRDS(m11e_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30.rds")
+m11e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3__sigma_taxpopkg_p10t30.rds")
 
 # include taxon center means for temp, precip and climate zones
 m12a_zln <- brm(
@@ -1415,20 +1454,21 @@ m12a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
                             # # m6c_zln,
                             # # m6d_zln,
                             # # m8_zln,
-                            # m9a_zln,
-                            # m9b_zln,
+                            m9a_zln,
+                            m9b_zln,
                             # # m9b_30_zln
-                            # m9c_zln,
-                            # m9d_zln,
-                            # m9e_zln,
-                            # m9f_zln,
-                            # m9g_zln,
-                            # m9h_zln,
-                            # m9i_zln,
-                            # m10b_zln,
+                            m9c_zln,
+                            m9d_zln,
+                            m9e_zln,
+                            m9f_zln,
+                            m9g_zln,
+                            m9h_zln,
+                            m9i_zln,
+                            m10b_zln,
                             m11a_zln,
                             m11b_zln,
-                            m11c_zln
+                            m11c_zln,
+                            m11d_zln
                             ))
 ```
 
@@ -1611,11 +1651,57 @@ co_summary = brms_data %>%
             p_neg = sum(bd_its_copies == 0) / n(),
             p_10 = sum(bd_its_copies > 0 & bd_its_copies < 10) / n(),
             p_pos = sum(bd_its_copies > 10) / n(),
-            med_pos = median(bd_its_copies[bd_its_copies > 0]))
+            med_pos = median(bd_its_copies[bd_its_copies > 0]),
+            max = max(bd_its_copies))
 
 ggplot(brms_data, aes(x = bd_its_copies)) +
   geom_density() +
   facet_wrap("taxon_capture") +
   xlim(0, 20)
+
+```
+
+# look at heteroscedasticity
+```{r}
+# compute per-population mean and SD of log-load
+# if mean and SD are uncorrelated, sigma variation is independent of mean variation
+brms_data |>
+  filter(bd_load_co_density > 0) |>
+  group_by(taxon_capture, population) |>
+  summarise(
+    n        = n(),
+    mean_log = mean(log(bd_load_co_density)),
+    sd_log   = sd(log(bd_load_co_density)),
+    .groups  = "drop"
+  ) |>
+  filter(n >= 5) |>
+  ggplot(aes(x = mean_log, y = sd_log)) +
+  geom_point(aes(size = n), alpha = 0.5) +
+  geom_smooth(method = "lm") +
+  facet_wrap("taxon_capture", scales = "free") +
+  labs(x = "Population mean log-load",
+       y = "Population SD log-load",
+       title = "Mean vs spread of log-load by population within taxon") +
+  theme_minimal()
+
+```
+
+# look at within-taxa variation in population-level SD
+```{r}
+peace = brms_data |>
+  filter(bd_load_co_density > 0) |>
+  group_by(taxon_capture, population) |>
+  summarise(
+    sd_log   = sd(log(bd_load_co_density)),
+    n        = n(),
+    .groups  = "drop"
+  ) |>
+  filter(n >= 5) |>
+  group_by(taxon_capture) |>
+  summarise(
+    between_pop_cv = sd(sd_log) / mean(sd_log),  # how much does sigma vary across pops within taxon
+    .groups = "drop"
+  ) |>
+  arrange(desc(between_pop_cv))
 
 ```
