@@ -672,13 +672,13 @@ column_check = compare_df_cols(rabo_valid,
                                bofa_valid)
 
 bd_model = bind_rows(
-                     # rabo_valid,
+                     rabo_valid,
                      raca_valid,
                      ralu_valid,
                      usgs_valid,
                      ribbitr_valid,
-                     hyphy_valid
-                     #bofa_valid
+                     hyphy_valid,
+                     bofa_valid
                      ) %>%
   left_join(all_populations, by = "site") %>%
   mutate(year = year(date),
