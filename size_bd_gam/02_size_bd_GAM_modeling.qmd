@@ -23,7 +23,7 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-04-06.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-05-30.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%
@@ -286,18 +286,22 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 # saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
 # m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
 
-
 m3_formula = bf(
-  bd_load_co_density ~ 1 +
-    is_metamorph + s(svl_mm, by = is_not_metamorph) +
-    (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) + 
-    (1 | population:life_stage_simple),
-  hu ~ 1 +
-    is_metamorph + s(svl_mm, by = is_not_metamorph) +
-    (precip_mm_10_z + I(precip_mm_10_z^2) + temp_c_30_z + I(temp_c_30_z^2)) + 
-    (1 | population:life_stage_simple),
-  sigma ~ 1 +
-    (1 | population)
+  bd_load_co_density ~  1 + 
+    life_stage_simple * taxon_capture +
+    (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+    (1 | kg_code_3) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+  
+  hu ~ 1 + 
+    life_stage_simple * taxon_capture +
+    (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
+    (1 | kg_code_3) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+  
+  sigma ~ 1 + (1 | population) + (1 | kg_code_3)
 )
 
 model_svl_by_species = function(model_data, taxon_weather) {
