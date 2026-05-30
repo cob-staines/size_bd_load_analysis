@@ -653,7 +653,7 @@ bofa_valid = bofa_clean %>%
 ```{r}
 
 ## populations
-pops_in = read.csv(here("data", "size_load_pop_1_2026-05-11.csv"))
+pops_in = read.csv(here("data", "size_load_pop_1_2026-05-30.csv"))
 
 all_populations = pops_in %>%
   select(site, pop_id) %>%
@@ -671,8 +671,7 @@ column_check = compare_df_cols(rabo_valid,
                                hyphy_valid,
                                bofa_valid)
 
-bd_model = bind_rows(
-                     rabo_valid,
+bd_model = bind_rows(rabo_valid,
                      raca_valid,
                      ralu_valid,
                      usgs_valid,
@@ -844,7 +843,34 @@ ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
   scale_y_log10()
 
 ```
+# checks
+```{r}
 
+count_na = function(df, cols) {
+  df |>
+    summarise(across(all_of(cols), ~sum(is.na(.)))) |>
+    pivot_longer(everything(),
+                 names_to  = "column",
+                 values_to = "n_na")
+}
+
+check_na_cols = c("bd_load_co_density",
+                  "life_stage_simple",
+                  "taxon_capture",
+                  "precip_mm_10_z",
+                  "temp_c_30_z",
+                  "kg_code_3",
+                  "population",
+                  "date",
+                  "year")
+
+na_col_check = count_na(bd_env_kg, check_na_cols)
+
+if (sum(na_col_check$n_na) > 0) {
+  warning("NAs found in model variable columns. Please review.")
+}
+
+```
 
 # save data
 ```{r}
@@ -853,6 +879,28 @@ brms_data = bd_env_kg
 save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
+
+```
+
+# population species and year distributions
+```{r}
+pop_spp = brms_data %>%
+  group_by(population) %>%
+  summarize(n_taxa = n_distinct(taxon_capture),
+            .groups = "drop")
+
+pop_year_spp = brms_data %>%
+  group_by(population, year) %>%
+  summarize(n_taxa = n_distinct(taxon_capture),
+            .groups = "drop")
+
+ggplot(pop_spp, aes(x = n_taxa)) +
+  geom_histogram(bins = 15) +
+  scale_y_log10()
+
+ggplot(pop_year_spp, aes(x = n_taxa)) +
+  geom_histogram(bins = 15) +
+  scale_y_log10()
 
 ```
 
