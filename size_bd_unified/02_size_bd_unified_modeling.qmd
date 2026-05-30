@@ -1381,31 +1381,29 @@ m11e_zln <- brm(
 
 m11e_zln <- add_criterion(m11e_zln, "loo")
 
-saveRDS(m11e_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30.rds")
-m11e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3__sigma_taxpopkg_p10t30.rds")
+saveRDS(m11e_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30_20260524_013046.rds")
+m11e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30_20260524_013046.rds")
 
-# include taxon center means for temp, precip and climate zones
-m12a_zln <- brm(
+# drop sigma taxo RE
+m11f_zln <- brm(
   formula = bf(
     bd_load_co_density ~ 1 + 
       life_stage_simple * taxon_capture +
-      temp_c_30_cm + temp_c_30_z + I(temp_c_30_z^2) +
-      precip_mm_10_cm + precip_mm_10_z +
+      (precip_mm_10_z  + temp_c_30_z + I(temp_c_30_z^2)) +
       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
-      kg_code_3_cm + (1 | kg_code_3) +
+      (1 | kg_code_3) +
       (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
       (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
     
     hu ~ 1 + 
       life_stage_simple * taxon_capture +
-      temp_c_30_cm + temp_c_30_z + I(temp_c_30_z^2) +
-      precip_mm_10_cm + precip_mm_10_z +
+      (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
       (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture) +
-      kg_code_3_cm + (1 | kg_code_3) +
+      (1 | kg_code_3) +
       (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
       (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
     
-    sigma ~ 1 + taxon_capture + (1 | taxon_capture:population)
+    sigma ~ 1 + taxon_capture + (1 | population) + (1 | kg_code_3)
   ),
   data = brms_data,
   family = hurdle_lognormal(),
@@ -1420,10 +1418,12 @@ m12a_zln <- brm(
   backend = "cmdstanr"
 )
 
-m12a_zln <- add_criterion(m12a_zln, "loo")
+m11f_zln <- add_criterion(m11f_zln, "loo")
 
-saveRDS(m12a_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3cm_p10t30.rds")
-m12a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3cm_p10t30.rds")
+saveRDS(m11f_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigmatax_popkg_p10t30_20260526_171916.rds")
+m11f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigmatax_popkg_p10t30_20260526_171916.rds")
+
+
 
 ```
 
@@ -1468,7 +1468,9 @@ m12a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
                             m11a_zln,
                             m11b_zln,
                             m11c_zln,
-                            m11d_zln
+                            m11d_zln,
+                            m11e_zln,
+                            m11f_zln
                             ))
 ```
 
@@ -1483,7 +1485,7 @@ m12a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m11b_zln
+model_select = m11e_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
