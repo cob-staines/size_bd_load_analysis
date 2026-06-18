@@ -519,7 +519,8 @@ plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species, color =
           position = position_dodge(width = .8)) +
   ylim(0, 1) +
   theme(legend.position = "none") +
-  theme_minimal()
+  theme_minimal() +
+  scale_color_brewer(palette = "Dark2")
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
        plot = plot_prev_region,
@@ -551,7 +552,8 @@ plot_load_region = ggplot(bd_model_plot %>%
   ) +
   ylim(log(0.3), 20) +
   theme(legend.position = "none") +
-  theme_minimal()
+  theme_minimal() +
+  scale_color_brewer(palette = "Dark2")
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_obs_adult_region.png"),
        plot = plot_load_region,
