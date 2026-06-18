@@ -504,72 +504,43 @@ saveRDS(mbd_full, file = here("panama_resilience_paper/pa_resilience_models/comb
 summary(mbd_full)
 
 ```
-
-## Bd prevalence
+## Bd prev
 ```{r}
-#| fig-height: 6
-#| fig-width: 8
-
-brm_prev = brm(
-  formula = bd_detected ~ taxon_capture,
-  family  = bernoulli(link = "logit"),
-  data    = bd_model,
-  chains  = 4, cores = 4, iter = 4000,
-  seed    = 42
-)
-
-saveRDS(brm_prev, file = here("panama_resilience_paper/pa_resilience_models/prev_model.rds"))
-
-summary(brm_prev)
-
-brm_prev_null = brm(
-  bd_detected ~ 1,
-  family = bernoulli(),
-  data = bd_model
-)
-
-saveRDS(brm_prev_null, file = here("panama_resilience_paper/pa_resilience_models/prev_model_null.rds"))
-
-bf_prev = bayes_factor(brm_prev, brm_prev_null)
-
-dput(get_variables(brm_prev))
-
-prev_draws = brm_prev %>%
+# prev_draws = brm_prev %>%
+prev_draws = mbd_full %>%
   spread_draws(
-    b_Intercept,
-    b_taxon_capturecolostethus_panamansis,
-    b_taxon_capturecraugastor_crassidigitus, 
-    b_taxon_capturecraugastor_fitzingeri,
-    b_taxon_capturedendrobates_auratus, 
-    b_taxon_captureespadarana_prosoblepon,
-    b_taxon_capturelithobates_warszewitschii, 
-    b_taxon_capturepristimantis_ridens,
-    b_taxon_capturerhaebo_haematiticus, 
-    b_taxon_capturerhinella_marina,
-    b_taxon_capturesachatamia_albomaculata, 
-    b_taxon_capturesilverstoneia_flotator,
-    # b_taxon_capturesilverstoneia_nubicola, 
-    b_taxon_capturesmilisca_sila) %>%
-  mutate(b_taxon_captureatelopus_varius = 0) %>%
-  pivot_longer(c("b_taxon_captureatelopus_varius",
-                 "b_taxon_capturecolostethus_panamansis",
-                 "b_taxon_capturecraugastor_crassidigitus", 
-                 "b_taxon_capturecraugastor_fitzingeri",
-                 "b_taxon_capturedendrobates_auratus", 
-                 "b_taxon_captureespadarana_prosoblepon",
-                 "b_taxon_capturelithobates_warszewitschii", 
-                 "b_taxon_capturepristimantis_ridens",
-                 "b_taxon_capturerhaebo_haematiticus", 
-                 "b_taxon_capturerhinella_marina",
-                 "b_taxon_capturesachatamia_albomaculata", 
-                 "b_taxon_capturesilverstoneia_flotator",
-                 # "b_taxon_capturesilverstoneia_nubicola", 
-                 "b_taxon_capturesmilisca_sila"),
+    b_hu_Intercept,
+    b_hu_taxon_capturecolostethus_panamansis,
+    b_hu_taxon_capturecraugastor_crassidigitus, 
+    b_hu_taxon_capturecraugastor_fitzingeri,
+    b_hu_taxon_capturedendrobates_auratus, 
+    b_hu_taxon_captureespadarana_prosoblepon,
+    b_hu_taxon_capturelithobates_warszewitschii, 
+    b_hu_taxon_capturepristimantis_ridens,
+    b_hu_taxon_capturerhaebo_haematiticus, 
+    b_hu_taxon_capturerhinella_marina,
+    b_hu_taxon_capturesachatamia_albomaculata, 
+    b_hu_taxon_capturesilverstoneia_flotator,
+    b_hu_taxon_capturesmilisca_sila) %>%
+  mutate(b_hu_taxon_captureatelopus_varius = 0) %>%
+  pivot_longer(c("b_hu_taxon_captureatelopus_varius",
+                 "b_hu_taxon_capturecolostethus_panamansis",
+                 "b_hu_taxon_capturecraugastor_crassidigitus", 
+                 "b_hu_taxon_capturecraugastor_fitzingeri",
+                 "b_hu_taxon_capturedendrobates_auratus", 
+                 "b_hu_taxon_captureespadarana_prosoblepon",
+                 "b_hu_taxon_capturelithobates_warszewitschii", 
+                 "b_hu_taxon_capturepristimantis_ridens",
+                 "b_hu_taxon_capturerhaebo_haematiticus", 
+                 "b_hu_taxon_capturerhinella_marina",
+                 "b_hu_taxon_capturesachatamia_albomaculata", 
+                 "b_hu_taxon_capturesilverstoneia_flotator",
+                 "b_hu_taxon_capturesmilisca_sila"),
                names_to = "param",
                values_to = "taxon_intercept") %>%
-  mutate(full_intercept = b_Intercept + taxon_intercept,
-         bd_prevalence = plogis(full_intercept),
-         taxon_capture = gsub("b_taxon_capture", "", param))
+  mutate(full_intercept = b_hu_Intercept + taxon_intercept,
+         bd_prevalence = plogis(1 - full_intercept),
+         taxon_capture = gsub("b_hu_taxon_capture", "", param))
 
 prev_draws_summary = prev_draws %>%
   group_by(taxon_capture) %>%
@@ -659,9 +630,13 @@ prev_rope_df =  as.data.frame(t(combn(taxon_list_prev, 2))) %>%
 #        width = 8)
 # 
 # plot_prev_draws
+prev_draws_summary_plot = prev_draws_summary %>%
+  mutate(species = factor(species, levels = prev_draws_summary %>%
+                            arrange(desc(prevalence_median)) %>%
+                            pull(species)))
 
 # draws summary
-plot_prev_draws_sum = ggplot(prev_draws_summary, aes(x = species, y = prevalence_mean, ymin = prevalence_ci05, ymax = prevalence_ci95)) +
+plot_prev_draws_sum = ggplot(prev_draws_summary_plot, aes(x = species, y = prevalence_mean, ymin = prevalence_ci05, ymax = prevalence_ci95)) +
   geom_pointrange() +
   labs(y = "Bd prevalence\n(posterior mean ± 95% CrI)",
        x = "Species",
@@ -670,10 +645,10 @@ plot_prev_draws_sum = ggplot(prev_draws_summary, aes(x = species, y = prevalence
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
-#        plot = plot_prev_draws_sum,
-#        height = 6,
-#        width = 8)
+ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
+       plot = plot_prev_draws_sum,
+       height = 6,
+       width = 8)
 
 plot_prev_draws_sum
 
@@ -707,10 +682,10 @@ plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = species_a, y = species_b, fill 
        caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
   theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
 
-# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
-#        plot = plot_prev_rope_05,
-#        height = 6,
-#        width = 8)
+ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
+       plot = plot_prev_rope_05,
+       height = 6,
+       width = 8)
 
 plot_prev_rope_05
 
@@ -721,33 +696,7 @@ plot_prev_rope_05
 #| fig-height: 6
 #| fig-width: 8
 
-#baysian model
-brm_load = brm(
-  formula = log_bd_positive_load ~ taxon_capture,
-  family = gaussian(),
-  data = bd_model,
-  chains = 4, cores = 4,
-  iter = 4000,
-  seed = 42
-)
-
-saveRDS(brm_load, file = here("panama_resilience_paper/pa_resilience_models/load_model.rds"))
-
-summary(brm_load)
-
-brm_load_null = brm(
-  log_bd_positive_load ~ 1,
-  family = gaussian(),
-  data = bd_model
-)
-
-saveRDS(brm_load_null, file = here("panama_resilience_paper/pa_resilience_models/load_model_null.rds"))
-
-bf_load = bayes_factor(brm_load, brm_load_null)
-
-dput(get_variables(brm_load))
-
-load_draws = brm_load %>%
+load_draws = mbd_full %>%
   spread_draws(
     b_Intercept,
     b_taxon_capturecolostethus_panamansis,
@@ -853,9 +802,13 @@ load_rope_df = as.data.frame(t(combn(taxon_list_load, 2))) %>%
 #        width = 8)
 # 
 # plot_load_draws
+load_draws_summary_plot = load_draws_summary %>%
+  mutate(species = factor(species, levels = load_draws_summary %>%
+                            arrange(desc(log_load_median)) %>%
+                            pull(species)))
 
 # draws summary
-plot_load_draws_sum = ggplot(load_draws_summary, aes(x = species, y = log_load_mean, ymin = log_load_ci05, ymax = log_load_ci95)) +
+plot_load_draws_sum = ggplot(load_draws_summary_plot, aes(x = species, y = log_load_mean, ymin = log_load_ci05, ymax = log_load_ci95)) +
   geom_pointrange() +
   labs(y = "log(Bd-positive load)\n(posterior mean ± 95% CrI)",
        x = "Species",
@@ -1086,7 +1039,8 @@ for (sp in species_levels) {
   )
 }
  
-ccdf_df <- bind_rows(ccdf_list)
+ccdf_df <- bind_rows(ccdf_list) %>%
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)))
  
 # plot
 p <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
@@ -1097,44 +1051,99 @@ p <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
     y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
     title = "Posterior complementary CDF of Bd infection load by species"
   ) +
-  theme_minimal(base_size = 12) 
+  theme_minimal(base_size = 12) +
   theme(legend.position = "none")
- 
-p
 
+# greyed
 
-label_df <- ccdf_df %>%
-  group_by(taxon_capture) %>%
-  slice_min(log_load, n = 1) %>%   # one row per species: its rightmost point
-  ungroup() %>%
-  mutate(species = str_to_sentence(gsub("_", "\n", taxon_capture)))
+# Define your two highlighted species
+highlight_taxa <- c("Colostethus panamansis", "Lithobates warszewitschii")
 
+ccdf_df_levels = ccdf_df %>%
+  filter(log_load == 0) %>%
+  arrange(median) %>%
+  pull(species)
 
-p_overlay <- ggplot(ccdf_df, aes(x = log_load, y = median, color = taxon_capture)) +
-  geom_ribbon(aes(ymin = q25, ymax = q75, fill = taxon_capture), alpha = 0.15, color = NA) +
-  geom_line(linewidth = 0.9) +
-  geom_text_repel(
-    data = label_df,
-    aes(x = log_load, y = median, label = species, color = taxon_capture),
-    # size = 3,
-    # fontface = "italic",
-    # direction = "y",
-    # hjust = 0,
-    # nudge_x = 0.3,          # push labels right of their anchor point
-    # segment.size = 0.3,
-    # max.overlaps = Inf,
-    show.legend = FALSE
+ccdf_df$species = factor(ccdf_df$species, levels = ccdf_df_levels)
+
+# Build a named color vector: highlighted taxa get distinct colors, rest get grey
+all_taxa <- unique(ccdf_df$species)
+
+color_vals <- setNames(
+  ifelse(all_taxa %in% highlight_taxa,
+         c("#E8593C", "#3B8BD4")[match(all_taxa[all_taxa %in% highlight_taxa], highlight_taxa)][
+           match(all_taxa, all_taxa[all_taxa %in% highlight_taxa])
+         ],
+         "grey70"),
+  all_taxa
+)
+
+# Simpler approach using case_when in a named vector:
+color_vals <- setNames(
+  sapply(all_taxa, function(x) {
+    if (x == highlight_taxa[1]) "#E8593C"
+    else if (x == highlight_taxa[2]) "#3B8BD4"
+    else "grey50"
+  }),
+  all_taxa
+)
+
+fill_vals <- setNames(
+  sapply(all_taxa, function(x) {
+    if (x == highlight_taxa[1]) "#E8593C"
+    else if (x == highlight_taxa[2]) "#3B8BD4"
+    else "grey75"
+  }),
+  all_taxa
+)
+
+label_df = ccdf_df %>%
+  filter(
+    #species %in% highlight_taxa,
+         log_load < 5.3) %>%
+  group_by(species) %>%
+  slice_max(log_load) %>%
+  ungroup()
+
+# Updated plot
+p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
+  geom_ribbon(
+    aes(ymin = q25, ymax = q75, fill = species),
+    alpha = 0.25
   ) +
+  # geom_line(aes(color = species, linewidth = species %in% highlight_taxa)) +
+  geom_line(aes(color = species)) +
+  scale_color_manual(values = color_vals) +
+  scale_fill_manual(values = fill_vals) +
+  # scale_linewidth_manual(values = c("TRUE" = 1.1, "FALSE" = 0.5)) +
   labs(
     x = "log(Bd load)",
     y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
     title = "Posterior complementary CDF of Bd infection load by species"
   ) +
-  theme_minimal(base_size = 12) +
+  theme_minimal() +
   theme(legend.position = "none") +
-  coord_cartesian(clip = "off")   # so labels nudged outside the panel aren't cut off
+  geom_text_repel(
+    data = label_df,
+    aes(x = log_load, y = median, label = species, color = species),
+    size = 5,
+    fontface = "italic",
+    nudge_x = 5,
+    nudge_y = 0.14,
+    direction = "y",
+    hjust = 0,
+    segment.size = 0.3,
+    segment.color = "grey25",
+    segment.linetype = "dotted",
+    box.padding = 0.1,
+    point.padding = 0,
+    show.legend = FALSE
+  )
+p_g
 
-p_overlay
-
+ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_ccdf_grey.png"),
+       plot = p_g,
+       height = 6,
+       width = 8)
 
 ```
