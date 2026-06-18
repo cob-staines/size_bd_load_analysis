@@ -1134,7 +1134,7 @@ p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
   geom_text_repel(
     data = label_df,
     aes(x = log_load, y = median, label = species, color = species),
-    size = 5,
+    size = 3.5,
     fontface = "italic",
     nudge_x = 5,
     nudge_y = 0.14,
