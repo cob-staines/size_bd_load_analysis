@@ -20,7 +20,7 @@ Illustrate differences in Bd prevalence and load across Panamanian species.
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, emmeans)
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, emmeans, ggrepel)
 
 ## Connect to DB
 dbcon = hopToDB("ribbitr", hopReg = FALSE)
@@ -163,16 +163,16 @@ bd_sample_valid = bd_population %>%
          !(site %in% drop_sites),
          year != 2017) %>%
   inner_join(db_bd %>%
-              filter(!is.na(detected)) %>%
+              filter(!is.na(bd_detected)) %>%
               group_by(sample_id) %>%
               slice_sample(n = 1) %>%
               ungroup() %>%
               select(sample_id,
-                     detected,
+                     bd_detected,
                      bd_its1_copies_per_swab),
             by = "sample_id") %>%
   select(sample_id,
-         detected,
+         bd_detected,
          bd_its1_copies_per_swab,
          sample_name,
          capture_id,
@@ -203,8 +203,7 @@ bd_sample_valid = bd_population %>%
 bd_model = bd_sample_valid %>%
   filter(!is.na(bd_its1_copies_per_swab),
          !is.na(svl_mm)) %>%
-  rename(bd_load = bd_its1_copies_per_swab,
-         bd_detected = detected) %>%
+  rename(bd_load = bd_its1_copies_per_swab) %>%
   mutate(log_bd_load = log(bd_load),
          bd_positive_load = if_else(bd_load > 0, bd_load, NA),
          log_bd_positive_load = log(bd_positive_load)) %>%
@@ -354,14 +353,12 @@ sample_stats = function(obs) {
               .groups = "drop")
 }
 
-
 obs_stats_adult = sample_stats(bd_model) %>%
   mutate(species = get_species_name(taxon_capture))
 
 ccdf_zeros = obs_stats_adult %>%
-  select(taxon_capture) %>%
-  distinct() %>%
-  mutate(log_bd_load = 20,
+  group_by(taxon_capture) %>%
+  mutate(log_bd_load = max_log_load_inf + 0.01,
          ccdf = 0,
          species = get_species_name(taxon_capture))
 
@@ -420,10 +417,10 @@ plot_prev = ggplot(obs_stats_adult, aes(y = bd_prevalence, x = species)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs_adult.png"),
-       plot = plot_prev,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult.png"),
+#        plot = plot_prev,
+#        height = 6,
+#        width = 8)
 
 plot_prev
 
@@ -451,37 +448,63 @@ plot_load = ggplot(bd_model %>%
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult.png"),
-       plot = plot_load,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_obs_adult.png"),
+#        plot = plot_load,
+#        height = 6,
+#        width = 8)
 
 plot_load
 
-plot_ccdf = ggplot(ccdf_extended_adult, aes(x = ccdf_x,
-                          y = ccdf_y,
+# plot_ccdf = ggplot(ccdf_extended_adult, aes(x = ccdf_x,
+#                           y = ccdf_y,
+#                           color = species)) +
+plot_ccdf = ggplot(ccdf_extended_adult, aes(x = log_bd_load,
+                          y = ccdf,
                           color = species)) +
   geom_line() +
   theme_minimal() +
   ggtitle("CCDF of observed Bd-positive load") +
-  labs(color = "Species",
-       fill = "Species") +
+  labs(color = "Species") +
   xlab("log(Bd load) [-]") +
   ylab("Complementary cumulative density (1 - CDF) [-]") +
   scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
-  ylim(0, 1) +
   theme_minimal()
-
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs_adult.png"),
-       plot = plot_ccdf,
-       height = 6,
-       width = 8)
+# 
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs_adult.png"),
+#        plot = plot_ccdf,
+#        height = 6,
+#        width = 8)
 
 plot_ccdf
 
 ```
 
 # Modeling
+
+## Single model
+```{r}
+
+mbd_full = brm(
+  formula = bf(
+    bd_load ~ taxon_capture,
+    hu ~ taxon_capture,
+    sigma ~ taxon_capture
+  ),
+  data = bd_model,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  seed = 125
+)
+
+saveRDS(mbd_full, file = here("panama_resilience_paper/pa_resilience_models/combined_model.rds"))
+
+summary(mbd_full)
+
+```
+
 ## Bd prevalence
 ```{r}
 #| fig-height: 6
@@ -495,6 +518,8 @@ brm_prev = brm(
   seed    = 42
 )
 
+saveRDS(brm_prev, file = here("panama_resilience_paper/pa_resilience_models/prev_model.rds"))
+
 summary(brm_prev)
 
 brm_prev_null = brm(
@@ -502,6 +527,8 @@ brm_prev_null = brm(
   family = bernoulli(),
   data = bd_model
 )
+
+saveRDS(brm_prev_null, file = here("panama_resilience_paper/pa_resilience_models/prev_model_null.rds"))
 
 bf_prev = bayes_factor(brm_prev, brm_prev_null)
 
@@ -547,7 +574,10 @@ prev_draws = brm_prev %>%
 prev_draws_summary = prev_draws %>%
   group_by(taxon_capture) %>%
   summarize(prevalence_mean = mean(bd_prevalence),
+            prevalence_median = median(bd_prevalence),
             prevalence_ci05 = quantile(bd_prevalence, 0.05),
+            prevalence_ci25 = quantile(bd_prevalence, 0.25),
+            prevalence_ci75 = quantile(bd_prevalence, 0.75),
             prevalence_ci95 = quantile(bd_prevalence, 0.95),
             .groups = "drop") %>%
   mutate(species = get_species_name(taxon_capture))
@@ -640,10 +670,10 @@ plot_prev_draws_sum = ggplot(prev_draws_summary, aes(x = species, y = prevalence
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
-       plot = plot_prev_draws_sum,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
+#        plot = plot_prev_draws_sum,
+#        height = 6,
+#        width = 8)
 
 plot_prev_draws_sum
 
@@ -677,10 +707,10 @@ plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = species_a, y = species_b, fill 
        caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
   theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
-       plot = plot_prev_rope_05,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
+#        plot = plot_prev_rope_05,
+#        height = 6,
+#        width = 8)
 
 plot_prev_rope_05
 
@@ -701,6 +731,8 @@ brm_load = brm(
   seed = 42
 )
 
+saveRDS(brm_load, file = here("panama_resilience_paper/pa_resilience_models/load_model.rds"))
+
 summary(brm_load)
 
 brm_load_null = brm(
@@ -708,6 +740,8 @@ brm_load_null = brm(
   family = gaussian(),
   data = bd_model
 )
+
+saveRDS(brm_load_null, file = here("panama_resilience_paper/pa_resilience_models/load_model_null.rds"))
 
 bf_load = bayes_factor(brm_load, brm_load_null)
 
@@ -752,7 +786,10 @@ load_draws = brm_load %>%
 load_draws_summary = load_draws %>%
   group_by(taxon_capture) %>%
   summarize(log_load_mean = mean(bd_log_load),
+            log_load_median = median(bd_log_load),
             log_load_ci05 = quantile(bd_log_load, 0.05),
+            log_load_ci25 = quantile(bd_log_load, 0.25),
+            log_load_ci75 = quantile(bd_log_load, 0.75),
             log_load_ci95 = quantile(bd_log_load, 0.95),
             .groups = "drop") %>%
   mutate(species = get_species_name(taxon_capture))
@@ -826,7 +863,7 @@ plot_load_draws_sum = ggplot(load_draws_summary, aes(x = species, y = log_load_m
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_draws_summary_adult.png"),
+ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_draws_summary_adult.png"),
        plot = plot_load_draws_sum,
        height = 6,
        width = 8)
@@ -863,7 +900,7 @@ plot_load_rope_1 = ggplot(load_rope_df, aes(x = species_a, y = species_b, fill =
        caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
   theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_rope_1_adult.png"),
+ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_rope_1_adult.png"),
        plot = plot_load_rope_1,
        height = 6,
        width = 8)
@@ -951,10 +988,10 @@ plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species, color =
   theme(legend.position = "none") +
   theme_minimal()
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
-       plot = plot_prev_region,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
+#        plot = plot_prev_region,
+#        height = 6,
+#        width = 8)
 
 plot_prev_region
 
@@ -982,15 +1019,122 @@ plot_load_region = ggplot(bd_model %>%
   theme(legend.position = "none") +
   theme_minimal()
 
-ggsave(filename = here("pa_resilience_paper_files", "pa_bd_load_obs_adult_region.png"),
-       plot = plot_load_region,
-       height = 6,
-       width = 8)
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_obs_adult_region.png"),
+#        plot = plot_load_region,
+#        height = 6,
+#        width = 8)
 
 plot_load_region
 
 ```
-
+## modeled ccdf
 ```{r}
+
+
+# pull taxa
+species_levels <- sort(unique(bd_model$taxon_capture))
+newdata_species <- data.frame(taxon_capture = species_levels)
+ 
+# extract draws with linpred
+mu_draws    <- posterior_linpred(mbd_full, newdata = newdata_species,
+                                  dpar = "mu", transform = TRUE, re_formula = NA)
+hu_draws    <- posterior_linpred(mbd_full, newdata = newdata_species,
+                                  dpar = "hu",    transform = TRUE, re_formula = NA)
+sigma_draws <- posterior_linpred(mbd_full, newdata = newdata_species,
+                                  dpar = "sigma", transform = TRUE, re_formula = NA)
+ 
+colnames(mu_draws)    <- species_levels
+colnames(hu_draws)    <- species_levels
+colnames(sigma_draws) <- species_levels
+ 
+n_draws <- nrow(mu_draws)
+ 
+# build resample grid
+pos_loads <- bd_model$bd_load[bd_model$bd_load > 0]
+log_grid_resolution <- 200   # <-- adjust resolution here
+log_grid <- seq(
+  from = 0,   # small padding below observed range
+  to   = log(max(pos_loads)) + 0.5,   # small padding above observed range
+  length.out = log_grid_resolution
+)
+ 
+# ccdf
+ccdf_list <- vector("list", length(species_levels))
+ 
+for (sp in species_levels) {
+ 
+  mu_d    <- mu_draws[, sp]      # length n_draws
+  sigma_d <- sigma_draws[, sp]   # length n_draws
+  hu_d    <- hu_draws[, sp]      # length n_draws
+ 
+  ## outer-product style: (n_draws x n_grid) matrix of z-scores
+  z_mat <- outer(log_grid, mu_d, FUN = function(x, mu) x - mu) # n_grid x n_draws
+  z_mat <- t(z_mat) / sigma_d                                   # n_draws x n_grid (sigma broadcast per row)
+ 
+  surv_lognormal <- 1 - pnorm(z_mat)        # P(log_load > x | non-structural-zero), n_draws x n_grid
+  surv_total <- (1 - hu_d) * surv_lognormal # multiply hu (n_draws) down each row
+ 
+  ## quantiles across draws (rows), per grid column
+  q <- apply(surv_total, 2, quantile, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+ 
+  ccdf_list[[sp]] <- data.frame(
+    taxon_capture = sp,
+    log_load = log_grid,
+    q25 = q[1, ],
+    median = q[2, ],
+    q75 = q[3, ]
+  )
+}
+ 
+ccdf_df <- bind_rows(ccdf_list)
+ 
+# plot
+p <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75, fill = taxon_capture), alpha = 0.25) +
+  geom_line(aes(color = taxon_capture), linewidth = 0.9) +
+  labs(
+    x = "log(Bd load)",
+    y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
+    title = "Posterior complementary CDF of Bd infection load by species"
+  ) +
+  theme_minimal(base_size = 12) 
+  theme(legend.position = "none")
+ 
+p
+
+
+label_df <- ccdf_df %>%
+  group_by(taxon_capture) %>%
+  slice_min(log_load, n = 1) %>%   # one row per species: its rightmost point
+  ungroup() %>%
+  mutate(species = str_to_sentence(gsub("_", "\n", taxon_capture)))
+
+
+p_overlay <- ggplot(ccdf_df, aes(x = log_load, y = median, color = taxon_capture)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75, fill = taxon_capture), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 0.9) +
+  geom_text_repel(
+    data = label_df,
+    aes(x = log_load, y = median, label = species, color = taxon_capture),
+    # size = 3,
+    # fontface = "italic",
+    # direction = "y",
+    # hjust = 0,
+    # nudge_x = 0.3,          # push labels right of their anchor point
+    # segment.size = 0.3,
+    # max.overlaps = Inf,
+    show.legend = FALSE
+  ) +
+  labs(
+    x = "log(Bd load)",
+    y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
+    title = "Posterior complementary CDF of Bd infection load by species"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none") +
+  coord_cartesian(clip = "off")   # so labels nudged outside the panel aren't cut off
+
+p_overlay
+
 
 ```
