@@ -1060,3 +1060,25 @@ p_load_temp = brms_data |>
 (p_prev_precip + p_prev_temp) / (p_load_precip + p_load_temp)
 
 ```
+
+# hylodes comparison
+```{r}
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-05-30.RData"))
+
+hyph = brms_data %>%
+  filter(taxon_capture == "hylodes_phyllodes") %>%
+  mutate(year = as.factor(year(date)))
+
+hyph_compare = hyph %>%
+  group_by(year) %>%
+  summarize(prevalence = sum(bd_detected_co)/n(),
+            median_pos = median(bd_load_co[bd_detected_co]),
+            mean_pos = mean(bd_load_co[bd_detected_co]))
+
+ggplot(hyph, aes(x = year, y = log10(1 + bd_load_co), alpha = 0.25)) +
+  geom_point()
+
+ggplot(hyph, aes(x = year, y = bd_load_co, alpha = 0.25)) +
+  geom_point()
+
+```
