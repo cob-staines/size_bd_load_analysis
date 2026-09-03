@@ -53,7 +53,7 @@ The data were classified into two seasons:
   - **Seca (dry)**: October - January
   
 ### Species selection criteria:
-Species were were included if at least 30 individuals with Bd swabs were present for that species.
+Species were included if at least 30 individuals with Bd swabs were present for that species.
 
 
 ```{r}
@@ -585,7 +585,7 @@ mbd_full = brm(
 )
 
 saveRDS(mbd_full, file = here("panama_resilience_paper/pa_resilience_models/combined_model.rds"))
-
+mbd_full = readRDS(file = here("panama_resilience_paper/pa_resilience_models/combined_model.rds"))
 summary(mbd_full)
 
 ```
@@ -718,6 +718,7 @@ prev_rope_df =  as.data.frame(t(combn(taxon_list_prev, 2))) %>%
 prev_draws_summary_plot = prev_draws_summary %>%
   mutate(species = factor(species, levels = prev_draws_summary %>%
                             arrange(desc(prevalence_median)) %>%
+                            # arrange(species) %>%
                             pull(species)))
 
 # draws summary
@@ -889,7 +890,8 @@ load_rope_df = as.data.frame(t(combn(taxon_list_load, 2))) %>%
 # plot_load_draws
 load_draws_summary_plot = load_draws_summary %>%
   mutate(species = factor(species, levels = load_draws_summary %>%
-                            arrange(desc(log_load_median)) %>%
+                            # arrange(desc(log_load_median)) %>%
+                            arrange(desc(species)) %>%
                             pull(species)))
 
 # draws summary
@@ -905,6 +907,14 @@ ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "
        plot = plot_load_draws_sum,
        height = 6,
        width = 8)
+
+draws_summary_table = prev_draws_summary_plot %>%
+  full_join(load_draws_summary_plot, by = c("species", "taxon_capture")) %>%
+  select(-taxon_capture) %>%
+  select(species,
+         everything())
+
+write_csv(load_draws_summary_plot, here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_adult_draws_summary.csv"))
 
 plot_load_draws_sum
 
