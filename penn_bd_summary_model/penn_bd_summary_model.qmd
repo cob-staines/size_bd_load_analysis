@@ -1,0 +1,793 @@
+---
+title: "Panama Resilience Paper"
+author: Cob Staines
+date: 2025-10-09
+format:
+  html:
+    toc: true
+df-print: kable
+---
+# Objective
+
+Illustrate differences in Bd prevalence and load across Panamanian species.
+
+## Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, emmeans, ggrepel, stan-dev/cmdstanr)
+
+## Connect to DB
+dbcon = hopToDB("ribbitr", hopReg = FALSE)
+
+# table pointers
+db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
+db_sample = tbl(dbcon, Id("survey_data", "sample"))
+db_capture = tbl(dbcon, Id("survey_data", "capture"))
+db_survey = tbl(dbcon, Id("survey_data", "survey"))
+db_visit = tbl(dbcon, Id("survey_data", "visit"))
+db_site = tbl(dbcon, Id("survey_data", "site"))
+db_region = tbl(dbcon, Id("survey_data", "region"))
+db_country = tbl(dbcon, Id("survey_data", "country"))
+
+bd_sample = db_sample %>%
+  right_join(db_capture, by = "capture_id") %>%
+  left_join(db_survey, by = "survey_id") %>%
+  left_join(db_visit, by = "visit_id") %>%
+  left_join(db_site, by = "site_id") %>%
+  left_join(db_region, by = "region_id") %>%
+  left_join(db_country, by = "country_id") %>%
+  filter(sample_type == "bd")
+```
+## Data selection
+
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show data collection code"
+
+# define life_stage_simple by SVL
+bd_population = bd_sample %>%
+  filter(region == "pennsylvania",
+         # life_stage %in% c("adult"),
+         !is.na(svl_mm)) %>%
+  mutate(life_stage_simple = case_when(
+    # us
+    # https://animaldiversity.org/accounts/Acris_blanchardi/
+    ((taxon_capture == "acris_blanchardi") & (svl_mm >= 16)) ~ "adult",
+    ((taxon_capture == "acris_blanchardi") & (svl_mm < 16)) ~ "subadult",
+    # Wright and Wright 1949
+    ((taxon_capture == "anaxyrus_americanus") & (svl_mm >= 54)) ~ "adult",
+    ((taxon_capture == "anaxyrus_americanus") & (svl_mm < 54)) ~ "subadult",
+    # Lannoo 2005 (Amphibian Declines: The Conservation Status of United States Species)
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 48)) ~ "adult",
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 48)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "anaxyrus_debilis") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "anaxyrus_debilis") & (svl_mm < 37)) ~ "subadult",
+    # Conant and Collins 1991
+    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm < 51)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm < 32)) ~ "subadult",
+    # Conant & Collins 1998
+    ((taxon_capture == "hyla_cinerea") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_cinerea") & (svl_mm < 32)) ~ "subadult",
+    # Johnson 1987
+    ((taxon_capture == "hyla_versicolor") & (svl_mm >= 32)) ~ "adult",
+    ((taxon_capture == "hyla_versicolor") & (svl_mm < 32)) ~ "subadult",
+    # Minton, 2001 / Lanoo 2005
+    ((taxon_capture == "lithobates_blairi") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "lithobates_blairi") & (svl_mm < 51)) ~ "subadult",
+    # Platz and Mecham 1963
+    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm >= 57)) ~ "adult",
+    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm < 57)) ~ "subadult",
+    # Minton 2001
+    ((taxon_capture == "lithobates_palustris") & (svl_mm >= 43)) ~ "adult",
+    ((taxon_capture == "lithobates_palustris") & (svl_mm < 43)) ~ "subadult",
+    # Conant and Collins, 1991
+    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm < 51)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 20)) ~ "adult",
+    ((taxon_capture == "pseudacris_crucifer") & (svl_mm < 20)) ~ "subadult",
+    # Hulse, C. and McCoy C. J. and Ellen Censky ,1998.
+    ((taxon_capture == "pseudacris_feriarum") & (svl_mm >= 19)) ~ "adult",
+    ((taxon_capture == "pseudacris_feriarum") & (svl_mm < 19)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "pseudacris_regilla") & (svl_mm >= 25)) ~ "adult",
+    ((taxon_capture == "pseudacris_regilla") & (svl_mm < 25)) ~ "subadult",
+    # Howard 1981
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 95)) ~ "adult",
+    ((taxon_capture == "rana_catesbeiana") & (svl_mm < 95)) ~ "subadult",
+    # Lannoo 2005
+    ((taxon_capture == "rana_clamitans") & (svl_mm >= 60)) ~ "adult",
+    ((taxon_capture == "rana_clamitans") & (svl_mm < 60)) ~ "subadult",
+    # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
+    ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
+    ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
+    # Knapp
+    ((taxon_capture == "rana_sierrae") & is.na(svl_mm)) ~ life_stage,
+    ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
+    ((taxon_capture == "rana_sierrae") & (svl_mm < 40)) ~ "subadult",
+    # Martof 1963
+    ((taxon_capture == "rana_sylvatica") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "rana_sylvatica") & (svl_mm < 37)) ~ "subadult",
+    # Conant and Collins, 1991
+    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm >= 44)) ~ "adult",
+    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm < 44)) ~ "subadult",
+    # Stebbins, 1985
+    ((taxon_capture == "spea_multiplicata") & (svl_mm >= 37)) ~ "adult",
+    ((taxon_capture == "spea_multiplicata") & (svl_mm < 37)) ~ "subadult",
+    .default = life_stage)) %>%
+  filter(life_stage_simple %in% "adult")
+
+# identify valid species & seasons
+bd_species_valid = bd_population %>%
+  filter(!is.na(taxon_capture)) %>%
+  group_by(taxon_capture) %>%
+  summarise(count = n(),
+            .groups = "drop") %>%
+  filter(count >= 30) %>%
+  arrange(desc(count)) %>%
+  collect()
+
+
+
+# identify valid samples
+bd_sample_valid = bd_population %>%
+  mutate(year = year(date),
+         month = month(date),
+         season = case_match(month,
+                             c(12, 1, 2) ~ "winter",
+                             c(3, 4, 5) ~ "spring",
+                             c(6, 7, 8) ~ "summer",
+                             c(9, 10, 11) ~ "fall",
+                             .default = NA_character_),
+         population = site) %>%
+  filter(taxon_capture %in% bd_species_valid$taxon_capture) %>%
+  filter(!is.na(life_stage_simple),
+         life_stage_simple == "adult") %>%
+  inner_join(db_bd %>%
+              filter(!is.na(bd_detected)) %>%
+              group_by(sample_id) %>%
+              slice_sample(n = 1) %>%
+              ungroup() %>%
+              select(sample_id,
+                     bd_detected,
+                     bd_its1_copies_per_swab),
+            by = "sample_id") %>%
+  select(sample_id,
+         bd_detected,
+         bd_its1_copies_per_swab,
+         sample_name,
+         capture_id,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         svl_mm,
+         body_mass_g,
+         sex,
+         observers_survey,
+         photo,
+         photo_id,
+         survey_id,
+         start_timestamp_utc,
+         date,
+         season,
+         transect,
+         site,
+         site_id,
+         geographic_area,
+         population,
+         region,
+         country) %>%
+  collect()
+
+# final data selection and cleaning for model
+bd_model = bd_sample_valid %>%
+  filter(!is.na(bd_its1_copies_per_swab),
+         !is.na(svl_mm)) %>%
+  rename(bd_load = bd_its1_copies_per_swab) %>%
+  mutate(log_bd_load = log(bd_load),
+         bd_positive_load = if_else(bd_load > 0, bd_load, NA),
+         log_bd_positive_load = log(bd_positive_load)) %>%
+  select(bd_load,
+         log_bd_load,
+         bd_positive_load,
+         log_bd_positive_load,
+         bd_detected,
+         svl_mm,
+         transect,
+         observers_survey,
+         photo,
+         photo_id,
+         site,
+         population,
+         taxon_capture,
+         life_stage,
+         life_stage_simple,
+         date,
+         season,
+         population,
+         region,
+         country)
+
+head(bd_model)
+```
+
+## Descriptive stats of data
+```{r}
+#| eval: true
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show selected data stats code"
+
+(bd_model_stats = bd_model %>%
+  filter(!is.na(season)) %>%
+  group_by(taxon_capture, region, season) %>%
+  summarise(population_n = n_distinct(population),
+            populations = paste(sort(unique(population)), collapse = ", "),
+            year_first = year(min(date)),
+            year_last = year(max(date)),
+            year_count = n_distinct(year(date)),
+            adult_n = sum(life_stage_simple == "adult"),
+            .groups = "drop") %>%
+  arrange(taxon_capture,
+          season))
+
+
+
+write_csv(bd_model_stats, here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_data_stats.csv"))
+
+# descriptive stats
+data_stats = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(site, taxon_capture, year) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop")
+
+data_stats_species = bd_model %>%
+  group_by(taxon_capture, region) %>%
+  summarize(adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop")
+
+data_grid_site_year = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(site, year) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(year, site) %>%
+  pivot_wider(names_from = "year",
+              values_from = "n_bd_swabs") %>%
+  arrange(site)
+
+data_grid_site_species = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(site, taxon_capture) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(taxon_capture, site) %>%
+  pivot_wider(names_from = "taxon_capture",
+              values_from = "n_bd_swabs")
+
+data_grid_species_year = bd_model %>%
+  mutate(year = year(date)) %>%
+  group_by(year, taxon_capture) %>%
+  summarise(n_bd_swabs = n(),
+            .groups = "drop") %>%
+  arrange(taxon_capture, year) %>%
+  pivot_wider(names_from = "year",
+              values_from = "n_bd_swabs")
+
+```
+# Observations
+## Process observations
+```{r}
+get_species_name = function(taxon) {
+  species_name = str_to_sentence(gsub("_", " ", taxon))
+}
+
+wilson_ci = function(p_hat, n, conf.level = 0.95) {
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  
+  denominator <- 1 + (z^2 / n)
+  centre_adjusted_probability <- p_hat + (z^2 / (2 * n))
+  adjusted_standard_deviation <- sqrt((p_hat * (1 - p_hat) / n) + (z^2 / (4 * n^2)))
+  
+  lower_bound <- (centre_adjusted_probability - z * adjusted_standard_deviation) / denominator
+  upper_bound <- (centre_adjusted_probability + z * adjusted_standard_deviation) / denominator
+  
+  return(c(lower_bound = lower_bound, upper_bound = upper_bound))
+}
+
+wilson_ci_lower = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[1])
+}
+
+wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
+  ws = wilson_ci(p_hat, n, conf.level)
+  return(ws[2])
+}
+
+sample_stats = function(obs) {
+  obs %>%
+    group_by(taxon_capture) %>%
+    summarise(n = n(),
+              n_pos = sum(bd_load > 0),
+              bd_prevalence = sum(bd_load > 0) / n(),
+              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
+              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
+              min_log_load_inf = min(log_bd_load[bd_load > 0]),
+              q_25_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.25),
+              q_50_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.50),
+              q_75_log_load_inf = quantile(log_bd_load[bd_load > 0], probs = 0.75),
+              max_log_load_inf = max(log_bd_load[bd_load > 0]),
+              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
+              .groups = "drop")
+}
+
+obs_stats_adult = sample_stats(bd_model) %>%
+  mutate(species = get_species_name(taxon_capture))
+
+ccdf_zeros = obs_stats_adult %>%
+  group_by(taxon_capture) %>%
+  mutate(log_bd_load = max_log_load_inf + 0.01,
+         ccdf = 0,
+         species = get_species_name(taxon_capture))
+
+ccdf_adult = bd_model %>%
+  mutate(species = get_species_name(taxon_capture),
+         density = 1) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(n = n(),
+         p = cumsum(density)) %>%
+  ungroup() %>%
+  group_by(taxon_capture, bd_detected)
+
+ccdf_extended_adult = ccdf_adult %>%
+  filter(!(bd_detected == FALSE) | row_number() == 1) %>%
+  ungroup() %>%
+  mutate(p = if_else(log_bd_load == -Inf, p - 1, p),
+         log_bd_load = if_else(log_bd_load == -Inf, log(0.3), log_bd_load),
+         ccdf = p / n) %>%
+  bind_rows(ccdf_zeros) %>%
+  arrange(taxon_capture, desc(log_bd_load)) %>%
+  group_by(taxon_capture) %>%
+  mutate(
+    ksmooth_result = list(ksmooth(x = log_bd_load,
+                                  y = ccdf,
+                                  x.points = log_bd_load,
+                                  kernel = "normal",
+                                  bandwidth = 1)),
+    ccdf_x = ksmooth_result[[1]]$x,
+    ccdf_y = ksmooth_result[[1]]$y
+  ) %>%
+  ungroup() %>%
+  select(-ksmooth_result)
+
+```
+
+
+## Visualize observations
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+plot_prev = ggplot(obs_stats_adult, aes(y = bd_prevalence, x = species)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  ggtitle("Observed Bd prevalence") +
+  xlab("Species") +
+  ylab("Bd prevalence [-]\n(with 95% CI)") +
+  geom_text(aes(label = paste0("n=", n), y = 1),
+          position = position_dodge(width = 0.5)) +
+  ylim(0, 1) +
+  theme(legend.position = "none") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult.png"),
+#        plot = plot_prev,
+#        height = 6,
+#        width = 8)
+
+plot_prev
+
+plot_load = ggplot(bd_model %>%
+         mutate(species = get_species_name(taxon_capture)) %>%
+         filter(bd_load > 0), aes(log_bd_load, x = species)) +
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle("Observed Bd-positive load") +
+  xlab("Species") +
+  ylab("log(Bd load) [-]") +
+  geom_text(
+    data = obs_stats_adult,
+    aes(
+      x = species,
+      y = max(bd_model$log_bd_load) * 1.05,
+      label = paste0("n=", n_pos)
+    ),
+    position = position_dodge(width = 0.75),
+    vjust = 0
+  ) +
+  ylim(log(0.3), 20) +
+  theme(legend.position = "none") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_obs_adult.png"),
+#        plot = plot_load,
+#        height = 6,
+#        width = 8)
+
+plot_load
+
+# plot_ccdf = ggplot(ccdf_extended_adult, aes(x = ccdf_x,
+#                           y = ccdf_y,
+#                           color = species)) +
+plot_ccdf = ggplot(ccdf_extended_adult, aes(x = log_bd_load,
+                          y = ccdf,
+                          color = species)) +
+  geom_line() +
+  theme_minimal() +
+  ggtitle("CCDF of observed Bd-positive load") +
+  labs(color = "Species") +
+  xlab("log(Bd load) [-]") +
+  ylab("Complementary cumulative density (1 - CDF) [-]") +
+  scale_x_continuous(limits = c(log(0.3), 20), expand = c(0, 0)) +
+  theme_minimal()
+# 
+# ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_ccdf_smooth_obs_adult.png"),
+#        plot = plot_ccdf,
+#        height = 6,
+#        width = 8)
+
+plot_ccdf
+
+```
+
+# Modeling
+
+## Single model
+```{r}
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+mbd_full = brm(
+  formula = bf(
+    bd_load ~ taxon_capture + (1 | population) + season,
+    hu ~ taxon_capture + (1 | population) + season,
+    sigma ~ taxon_capture
+  ),
+  data = bd_model,
+  family = hurdle_lognormal(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  seed = 125,
+  backend = "cmdstanr"
+)
+
+saveRDS(mbd_full, file = here("panama_resilience_paper/penn_resilience_models/penn_combined_model.rds"))
+mbd_full = readRDS(file = here("panama_resilience_paper/penn_resilience_models/penn_combined_model.rds"))
+summary(mbd_full)
+
+```
+
+# marginal effects
+
+```{r}
+
+# marginal means for taxon_capture, averaged over season, on response scale
+em_hu    = emmeans(mbd_full, ~ taxon_capture, dpar = "hu",    re_formula = NA, type = "response")
+em_mu    = emmeans(mbd_full, ~ taxon_capture, dpar = "mu",    re_formula = NA)  # identity link already
+em_sigma = emmeans(mbd_full, ~ taxon_capture, dpar = "sigma", re_formula = NA, type = "response")
+
+# season effects, averaged over taxon_capture (sigma has no season term, will just replicate)
+em_hu_season = emmeans(mbd_full, ~ season, dpar = "hu", re_formula = NA, type = "response")
+em_mu_season = emmeans(mbd_full, ~ season, dpar = "mu", re_formula = NA)
+
+summary(em_hu)
+summary(em_mu)
+summary(em_sigma)
+summary(em_hu_season)
+summary(em_mu_season)
+
+
+```
+# outputs
+
+## species
+```{r}
+
+# ---- 1. Reference grids ----
+
+# taxon_capture grid, averaged over season (population dropped via re_formula = NA)
+grid_taxon <- bd_model %>%
+  distinct(taxon_capture) %>%
+  mutate(season = NA)  # placeholder; we'll cross below
+
+# safer: cross taxon_capture with all season levels, then average draws over season
+grid_taxon_season <- bd_model %>%
+  distinct(taxon_capture, season)
+
+# season grid, averaged over taxon_capture
+grid_season_taxon <- bd_model %>%
+  distinct(taxon_capture, season)
+
+# ---- 2. Get draws for hu, mu, sigma at taxon_capture level (averaged over season) ----
+
+draws_taxon <- grid_taxon_season %>%
+  add_epred_draws(mbd_full, dpar = c("hu", "mu", "sigma"), re_formula = NA) %>%
+  ungroup() %>%
+  group_by(taxon_capture, .draw) %>%
+  summarize(hu = mean(hu), mu = mean(mu), sigma = mean(sigma), .groups = "drop")
+
+# hu: keep all taxa
+draws_hu <- draws_taxon %>%
+  mutate(prev = 1 - hu)
+
+# mu/sigma: drop the taxon whose hu is ~1 (no lognormal signal, prior-driven)
+draws_mu_sigma <- draws_taxon %>%
+  filter(taxon_capture != "plethodon_cinereus")
+
+# ---- 3. Summarize each dpar ----
+
+hu_summary    <- summarize_draws(draws_hu,        "prev",    taxon_capture)
+mu_summary    <- summarize_draws(draws_mu_sigma,  "mu",    taxon_capture)
+sigma_summary <- summarize_draws(draws_mu_sigma,  "sigma", taxon_capture)
+
+# ---- 4. Order factor levels by median (descending), then plot ----
+
+make_pointrange_plot <- function(summary_df, ylab, title) {
+  summary_df <- summary_df %>%
+    mutate(species = gsub("_", "\n", str_to_sentence(taxon_capture)))
+
+  ggplot(summary_df, aes(x = species, y = mean, ymin = ci05, ymax = ci95)) +
+    geom_pointrange() +
+    labs(y = ylab, x = "Species", title = title) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+}
+
+plot_prev    <- make_pointrange_plot(hu_summary,    "Prevalence Pr(Bd positive)\n(posterior mean ± 95% CrI)",       "Mean Bd prevalence (1 - hu)")
+plot_mu    <- make_pointrange_plot(mu_summary,    "log(Bd load)\n(posterior mean ± 95% CrI)",         "Mean Bd-positive log-load (mu)")
+plot_sigma <- make_pointrange_plot(sigma_summary, "log-scale Bd SD\n(posterior mean ± 95% CrI)",         "Residual Bd-positive SD (sigma)")
+
+
+plot_hu
+plot_mu
+plot_sigma
+
+ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_prev_draws_summary.png"),
+       plot = plot_prev,
+       height = 6,
+       width = 8))
+
+ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_load_draws_summary.png"),
+       plot = plot_mu,
+       height = 6,
+       width = 8))
+
+ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_sigma_draws_summary.png"),
+       plot = plot_sigma,
+       height = 6,
+       width = 8))
+
+
+draws_summary_combined = hu_summary %>%
+  rename_with(~ paste0("prev_", .), -taxon_capture) %>%
+  left_join(mu_summary %>%
+              rename_with(~ paste0("mu_", .), -taxon_capture), by = "taxon_capture") %>%
+  left_join(sigma_summary %>%
+              rename_with(~ paste0("sigma_", .), -taxon_capture), by = "taxon_capture") %>%
+  rename(species = taxon_capture)
+  
+
+write_csv(draws_summary_combined, here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_species_summary.csv"))
+
+```
+
+## season
+```{r}
+# note: sigma has no season term in your formula, so leave it out here
+
+draws_season <- grid_season_taxon %>%
+  add_epred_draws(mbd_full, dpar = c("hu", "mu"), re_formula = NA) %>%
+  ungroup() %>%
+  mutate(prev = 1 - hu) %>%
+  group_by(season, .draw) %>%
+  summarize(prev = mean(prev), mu = mean(mu), .groups = "drop") %>%
+  pivot_longer(cols = c(prev, mu), names_to = "dpar", values_to = "value")
+
+season_summary <- draws_season %>%
+  group_by(season, dpar) %>%
+  summarize(
+    mean = mean(value),
+    ci05 = quantile(value, 0.025),
+    ci95 = quantile(value, 0.975),
+    .groups = "drop"
+  ) %>%
+  mutate(dpar = factor(dpar, levels = c("prev", "mu"),
+                        labels = c("Mean Bd prevalence (1 - hu)", "Mean Bd-positive log-load (mu)")))
+
+plot_season <- ggplot(season_summary, aes(x = season, y = mean, ymin = ci05, ymax = ci95)) +
+  geom_pointrange() +
+  facet_wrap(~ dpar, scales = "free_y") +
+  labs(y = "Posterior mean ± 95% CrI", x = "Season", title = "Season effects") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+plot_season
+
+ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_season_draws_summary.png"),
+       plot = plot_season,
+       height = 6,
+       width = 8))
+
+season_summary_wide = season_summary %>%
+  mutate(dpar = recode_values(dpar,
+    "Mean Bd-positive log-load (mu)" ~ "mu",
+    "Mean Bd prevalence (1 - hu)" ~ "prev"
+  )) %>%
+  pivot_wider(id_cols = "season",
+              names_from = "dpar",
+              values_from = c("mean", "ci05", "ci95")) %>%
+  select("season",
+         "mean_prev",
+         "ci05_prev",
+         "ci95_prev",
+         "mean_mu",
+         "ci05_mu",
+         "ci95_mu")
+
+write_csv(season_summary_wide, here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_seasons_summary.csv"))
+
+```
+
+# ccdf
+```{r}
+## modeled ccdf (season-averaged version)
+
+# pull taxa
+species_levels <- sort(unique(bd_model$taxon_capture))
+season_levels  <- unique(bd_model$season)
+
+# grid crosses taxon x season so we can average over season per draw
+newdata_grid <- expand.grid(
+  taxon_capture = species_levels,
+  season = season_levels,
+  stringsAsFactors = FALSE
+)
+
+# extract linpred draws on response scale (n_draws x n_grid_rows)
+mu_draws_full    <- posterior_linpred(mbd_full, newdata = newdata_grid,
+                                       dpar = "mu",    transform = TRUE, re_formula = NA)
+hu_draws_full    <- posterior_linpred(mbd_full, newdata = newdata_grid,
+                                       dpar = "hu",    transform = TRUE, re_formula = NA)
+sigma_draws_full <- posterior_linpred(mbd_full, newdata = newdata_grid,
+                                       dpar = "sigma", transform = TRUE, re_formula = NA)
+
+n_draws <- nrow(mu_draws_full)
+
+# average each taxon's columns (across season) per draw -> n_draws x n_taxa
+average_over_season <- function(draw_mat, grid, taxa) {
+  out <- matrix(NA_real_, nrow = nrow(draw_mat), ncol = length(taxa))
+  colnames(out) <- taxa
+  for (sp in taxa) {
+    cols <- which(grid$taxon_capture == sp)
+    out[, sp] <- rowMeans(draw_mat[, cols, drop = FALSE])
+  }
+  out
+}
+
+mu_draws    <- average_over_season(mu_draws_full,    newdata_grid, species_levels)
+hu_draws    <- average_over_season(hu_draws_full,    newdata_grid, species_levels)
+sigma_draws <- average_over_season(sigma_draws_full, newdata_grid, species_levels)
+# (sigma has no season term, so this just deduplicates identical columns)
+
+# build resample grid (unchanged)
+pos_loads <- bd_model$bd_load[bd_model$bd_load > 0]
+log_grid_resolution <- 200
+log_grid <- seq(
+  from = 0,
+  to   = log(max(pos_loads)) + 0.5,
+  length.out = log_grid_resolution
+)
+
+# ccdf (unchanged from your original loop)
+ccdf_list <- vector("list", length(species_levels))
+
+for (sp in species_levels) {
+
+  mu_d    <- mu_draws[, sp]
+  sigma_d <- sigma_draws[, sp]
+  hu_d    <- hu_draws[, sp]
+
+  z_mat <- outer(log_grid, mu_d, FUN = function(x, mu) x - mu)
+  z_mat <- t(z_mat) / sigma_d
+
+  surv_lognormal <- 1 - pnorm(z_mat)
+  surv_total <- (1 - hu_d) * surv_lognormal
+
+  q <- apply(surv_total, 2, quantile, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+  ccdf_list[[sp]] <- data.frame(
+    taxon_capture = sp,
+    log_load = log_grid,
+    q25 = q[1, ],
+    median = q[2, ],
+    q75 = q[3, ]
+  )
+}
+
+ccdf_df <- bind_rows(ccdf_list) %>%
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)))
+
+# define labels
+label_df = ccdf_df %>%
+  filter(
+    #species %in% highlight_taxa,
+         log_load < 4.8) %>%
+  group_by(species) %>%
+  slice_max(log_load) %>%
+  ungroup()
+
+# Updated plot
+p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
+  geom_ribbon(
+    aes(ymin = q25, ymax = q75, fill = species),
+    alpha = 0.25
+  ) +
+  # geom_line(aes(color = species, linewidth = species %in% highlight_taxa)) +
+  geom_line(aes(color = species)) +
+  # scale_linewidth_manual(values = c("TRUE" = 1.1, "FALSE" = 0.5)) +
+  labs(
+    x = "log(Bd load)",
+    y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
+    title = "Posterior complementary CDF of Bd infection load by species"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  geom_text_repel(
+    data = label_df,
+    aes(x = log_load, y = median, label = species, color = species),
+    size = 3.5,
+    fontface = "italic",
+    nudge_x = 8,
+    nudge_y = 0.14,
+    direction = "y",
+    hjust = 0,
+    segment.size = 0.3,
+    segment.color = "grey25",
+    segment.linetype = "dotted",
+    box.padding = 0.1,
+    point.padding = 0,
+    show.legend = FALSE
+  )
+p_g
+
+ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_ccdf.png"),
+       plot = p_g,
+       height = 6,
+       width = 8)
+
+
+```
