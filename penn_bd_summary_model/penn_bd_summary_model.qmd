@@ -485,8 +485,8 @@ mbd_full = brm(
   backend = "cmdstanr"
 )
 
-saveRDS(mbd_full, file = here("panama_resilience_paper/penn_resilience_models/penn_combined_model.rds"))
-mbd_full = readRDS(file = here("panama_resilience_paper/penn_resilience_models/penn_combined_model.rds"))
+saveRDS(mbd_full, file = here("penn_bd_summary_model/penn_summary_models/penn_combined_model.rds"))
+mbd_full = readRDS(file = here("penn_bd_summary_model/penn_summary_models/penn_combined_model.rds"))
 summary(mbd_full)
 
 ```
@@ -576,17 +576,17 @@ plot_hu
 plot_mu
 plot_sigma
 
-ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_prev_draws_summary.png"),
+ggsave(ggsave(filename = here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_prev_draws_summary.png"),
        plot = plot_prev,
        height = 6,
        width = 8))
 
-ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_load_draws_summary.png"),
+ggsave(ggsave(filename = here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_load_draws_summary.png"),
        plot = plot_mu,
        height = 6,
        width = 8))
 
-ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_sigma_draws_summary.png"),
+ggsave(ggsave(filename = here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_sigma_draws_summary.png"),
        plot = plot_sigma,
        height = 6,
        width = 8))
@@ -601,7 +601,7 @@ draws_summary_combined = hu_summary %>%
   rename(species = taxon_capture)
   
 
-write_csv(draws_summary_combined, here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_species_summary.csv"))
+write_csv(draws_summary_combined, here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_species_summary.csv"))
 
 ```
 
@@ -637,7 +637,7 @@ plot_season <- ggplot(season_summary, aes(x = season, y = mean, ymin = ci05, yma
 
 plot_season
 
-ggsave(ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_season_draws_summary.png"),
+ggsave(ggsave(filename = here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_season_draws_summary.png"),
        plot = plot_season,
        height = 6,
        width = 8))
@@ -658,7 +658,7 @@ season_summary_wide = season_summary %>%
          "ci05_mu",
          "ci95_mu")
 
-write_csv(season_summary_wide, here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_adult_seasons_summary.csv"))
+write_csv(season_summary_wide, here("penn_bd_summary_model", "penn_bd_files", "penn_bd_adult_seasons_summary.csv"))
 
 ```
 
@@ -784,7 +784,7 @@ p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
   )
 p_g
 
-ggsave(filename = here("panama_resilience_paper", "penn_resilience_paper_files", "penn_bd_ccdf.png"),
+ggsave(filename = here("penn_bd_summary_model", "penn_bd_files", "penn_bd_ccdf.png"),
        plot = p_g,
        height = 6,
        width = 8)
