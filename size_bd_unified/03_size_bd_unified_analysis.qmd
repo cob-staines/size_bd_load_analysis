@@ -8,7 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, helixcn/phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-22.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-16_th10.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
@@ -51,9 +51,16 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
 # m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 # m11c_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigtax_p10t30_20260514_034956.rds")
-m11e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30_20260524_013046.rds")
+# m11e_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigma_taxpopkg_p10t30_20260524_013046.rds")
+# m11b_th1_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11b_m11b_th1_20260917_204802_with_loo.rds"))
+# 
+# m11b_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11b_m11b_th10_20260917_210442_with_loo.rds"))
+# 
+# m11d_th1_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th1_20260922_234433_with_loo.rds"))
 
-model_select = m11e_zln
+m11d_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th10_20260922_164525_with_loo.rds"))
+
+model_select = m11d_th10_zln
 
 ```
 
@@ -480,7 +487,7 @@ ggplot(combined_agg_single, aes(x = prevalence_median, y = sigma_median)) +
        ) +
   scale_color_brewer(palette = "Set2")
 
-ggplot(combined_agg_single, aes(x = hu_contrast_median, y = hu_median)) +
+ggplot(combined_agg_single, aes(x = -hu_contrast_median, y = -hu_median)) +
   geom_point() +
   geom_text_repel(aes(label = taxon_capture),
                   color = "#888") +
@@ -684,9 +691,10 @@ cor_get_pval(simple_cor)
 ### Jetz & Pyron 2018
 https://datadryad.org/dataset/doi:10.5061/dryad.cc3n6j5#usage
 ```{r}
-jp_all = read.nexus(file = here("data", "tree-pruner-a1f34500-26bc-45a2-a777-afe418ddad90", "output.nex"))
+jp_all = read.nexus(file = here("data", "tree-pruner-24db8a87-ec70-4602-967c-0753257fd63d", "output.nex"))
 
-jp_sample_100 = jp_all[sample(1000, 100)]
+# jp_sample_100 = jp_all[sample(1000, 100)]
+jp_sample_100 = jp_all
 
 consensus_100 = consensus(jp_sample_100)
 
@@ -707,7 +715,8 @@ jp_species_list = tibble(jp_sn = jp_raw$tip.label) %>%
   mutate(jp_genus = str_split_fixed(jp_sn, "_", 2)[,1],
          species = str_split_fixed(jp_sn, "_", 2)[,2],
          jp = TRUE)
-  
+
+peace = setdiff(jp_species_list$jp_sn, jk_species_list$sn)
 
 peace = jk_species_list %>%
   left_join(jp_species_list, by = "species") %>%
@@ -727,6 +736,7 @@ species_list_j = bd_model_env_stats %>%
                                "Lithobates_chiricahuensis" ~ "Rana_chiricahuensis",
                                "Lithobates_palustris" ~ "Rana_palustris",
                                "Lithobates_sphenocephalus" ~ "Rana_sphenocephala",
+                               "Boana_faber" ~ "Hypsiboas_faber",
                                default = sn))
 
 # Prune to species list
@@ -1894,7 +1904,8 @@ ggplot(popyr_tax_agg_combined %>%
               alpha = 0.5) + 
   geom_point(alpha = 0.3) +
   facet_wrap("taxon_capture") +
-  theme_minimal()
+  theme_minimal() +
+  theme(legend.position="none")
 
 ggplot(popyr_tax_agg_combined %>%
          filter(!is.na(hu_adult_median),
@@ -1905,7 +1916,8 @@ ggplot(popyr_tax_agg_combined %>%
               alpha = 0.5) + 
   geom_point(alpha = 0.3) +
   facet_wrap("taxon_capture") +
-  theme_minimal()
+  theme_minimal() +
+  theme(legend.position="none")
 
 ```
 
