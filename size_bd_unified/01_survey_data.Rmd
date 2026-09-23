@@ -276,7 +276,7 @@ region_valid_pa = c("altos_de_campana",
                     "santa_fe")
 
 ## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
+dbcon = hopToDB("railway", hopReg = FALSE)
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -653,7 +653,7 @@ bofa_valid = bofa_clean %>%
 ```{r}
 
 ## populations
-pops_in = read.csv(here("data", "size_load_pop_1_2026-05-30.csv"))
+pops_in = read.csv(here("data", "size_load_pop_1_2026-09-11.csv"))
 
 all_populations = pops_in %>%
   select(site, pop_id) %>%
@@ -681,11 +681,24 @@ bd_model = bind_rows(rabo_valid,
                      ) %>%
   left_join(all_populations, by = "site") %>%
   mutate(year = year(date),
-         bd_load_co = if_else(bd_its_copies < 10,
+         bd_load_co10 = if_else(bd_its_copies < 10,
                               0,
                               bd_its_copies),
-         bd_detected_co = bd_load_co > 0,
-         bd_load_co_density = bd_load_co / svl_mm)
+         bd_detected_co10 = bd_load_co10 > 0,
+         bd_load_co10_density = bd_load_co10 / svl_mm,
+         
+         bd_load_co50 = if_else(bd_its_copies < 50,
+                              0,
+                              bd_its_copies),
+         bd_detected_co50 = bd_load_co50 > 0,
+         bd_load_co50_density = bd_load_co50 / svl_mm,
+         
+         bd_load_co100 = if_else(bd_its_copies < 100,
+                              0,
+                              bd_its_copies),
+         bd_detected_co100 = bd_load_co100 > 0,
+         bd_load_co100_density = bd_load_co100 / svl_mm)
+
 
 # checks
 sum(is.na(bd_model$bd_load_co_density))
@@ -854,7 +867,9 @@ count_na = function(df, cols) {
                  values_to = "n_na")
 }
 
-check_na_cols = c("bd_load_co_density",
+check_na_cols = c("bd_load_co10_density",
+                  "bd_load_co50_density",
+                  "bd_load_co100_density",
                   "life_stage_simple",
                   "taxon_capture",
                   "precip_mm_10_z",
@@ -879,6 +894,8 @@ brms_data = bd_env_kg
 save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
+
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-16_th10.RData"))
 
 ```
 
@@ -1067,7 +1084,8 @@ load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-05-30.R
 
 hyph = brms_data %>%
   filter(taxon_capture == "hylodes_phyllodes") %>%
-  mutate(year = as.factor(year(date)))
+  mutate(year = as.factor(year(date))) %>%
+  arrange(year)
 
 hyph_compare = hyph %>%
   group_by(year) %>%
@@ -1080,5 +1098,28 @@ ggplot(hyph, aes(x = year, y = log10(1 + bd_load_co), alpha = 0.25)) +
 
 ggplot(hyph, aes(x = year, y = bd_load_co, alpha = 0.25)) +
   geom_point()
+
+ggplot(hyph, aes(x=bd_its_copies)) +
+  geom_density() +
+  facet_wrap("year") +
+  xlim(0, 50)
+
+
+```
+# cutoff sensitivity
+```{r}
+ggplot(brms_data, aes(x = bd_its_copies)) +
+  geom_histogram() +
+  scale_x_log10() +
+  facet_grid(taxon_capture ~ ., scales = "free_y")
+
+th = 1
+
+sens_anal = brms_data %>%
+  group_by(taxon_capture) %>%
+  summarize(p_zero = sum(bd_its_copies == 0) / n(),
+            p_mid = sum(bd_its_copies > 0 & bd_its_copies < th) / n(),
+            p_high = sum(bd_its_copies >= th) / n(),
+            .groups = "drop")
 
 ```
