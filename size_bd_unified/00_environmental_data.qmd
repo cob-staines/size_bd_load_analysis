@@ -385,7 +385,7 @@ write_csv(site_date_post_2017, here("python", "environmental_timeseries_pull", "
 
 # Import timeseries
 ```{r}
-env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-04-22.csv")) %>%
+env_in = read_csv(here("python", "environmental_timeseries_pull", "outputs", "all_sites_combined_chirps_chirts_2026-09-11.csv")) %>%
   dplyr::rename(site = site_name,
          precipitation_mm = precip_mm,
          temperature_max_c = tmax_c)
