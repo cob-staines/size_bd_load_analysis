@@ -25,18 +25,34 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, stan-dev/
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-04-22.RData"))
-
-brms_data = brms_data %>%
-  mutate(population = if_else(population == "Santa Virginia", "santa_virginia", population))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-16_th10.RData"))
 
 # checks
-sum(is.na(brms_data$bd_load_co_density))
-sum(is.na(brms_data$precip_mm_30_day_sum))
-sum(is.na(brms_data$temperature_max_c))
-sum(is.na(brms_data$past_year_weekly_precipitation_mm_sd))
-sum(is.na(brms_data$past_year_weekly_tempurature_max_c_sd))
+count_na = function(df, cols) {
+  df |>
+    summarise(across(all_of(cols), ~sum(is.na(.)))) |>
+    pivot_longer(everything(),
+                 names_to  = "column",
+                 values_to = "n_na")
+}
 
+check_na_cols = c("bd_load_co_density",
+                  "life_stage_simple",
+                  "taxon_capture",
+                  "precip_mm_10_z",
+                  "temp_c_30_z",
+                  "kg_code_3",
+                  "population",
+                  "date",
+                  "year")
+
+na_col_check = count_na(brms_data, check_na_cols)
+
+if (sum(na_col_check$n_na) > 0) {
+  warning("NAs found in model variable columns. Please review.")
+}
+
+# summary table
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%
   summarise(regions = paste(sort(unique(region)), collapse = ", "),
@@ -52,84 +68,6 @@ bd_model_env_stats = brms_data %>%
             .groups = "drop") %>%
   arrange(country,
           taxon_capture)
-
-## KG zones
-kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
-  select(-rgb) %>%
-  rename_with(function(x) { paste0("kg_", x) })
-
-all_sites = brms_data %>%
-  group_by(site, population, country) %>%
-  summarize(site_latitude = mean(site_latitude),
-            site_longitude = mean(site_longitude),
-            taxa = paste0(sort(unique(taxon_capture)), collapse = ", "),
-            taxa_n = n_distinct(taxon_capture),
-            adult_n = sum(life_stage_simple == "adult"),
-            subadult_n = sum(life_stage_simple == "subadult"),
-            .groups = "drop")
-
-site_coords = cbind(lon = all_sites$site_longitude,
-                    lat = all_sites$site_latitude)
-
-kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
-
-kg_extract = extract(kg_rast, site_coords) %>%
-  dplyr::rename(kg_id = koppen_geiger_0p00833333) %>%
-  mutate(kg_id = if_else(kg_id == 29, 19, kg_id))
-
-all_sites_kg = bind_cols(all_sites,
-                          kg_extract) %>%
-  left_join(kg_key, by = "kg_id")
-
-brms_data = brms_data %>%
-  dplyr::select(-site_latitude,
-                -site_longitude) %>%
-  left_join(all_sites_kg %>%
-  dplyr::select(site,
-                site_latitude,
-                site_longitude,
-                kg_code_1,
-                kg_code_2,
-                kg_code_3), by = "site")
-
-peace = get_dupes(all_sites_kg, site)
-
-# cluster means
-mmode = function(x) {
-  ux = unique(x)
-  ux[which.max(tabulate(match(x, ux)))]
-}
-
-brms_data = brms_data %>%
-  group_by(taxon_capture) %>%
-  mutate(precip_mm_10_cm = mean(precip_mm_10_z),
-         temp_c_30_cm = mean(temp_c_30_z),
-         kg_code_3_cm = mmode(kg_code_3)) %>%
-  ungroup
-
-# save(brms_data, file = "/home/cob/Documents/ribbitr/repos/r-brms-contained/data/bd_model_env_unified_2026-04-22.RData")
-
-```
-
-# visualize
-```{r}
-ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
-  geom_bar() +
-  scale_y_log10()
-
-ggplot(brms_data, aes(x = kg_code_3)) +
-  geom_bar()
-
-ggplot(brms_data, aes(x = precip_mm_10_cm)) +
-  geom_bar() +
-  scale_y_log10()
-
-ggplot(brms_data, aes(x = precip_mm_10_day_sum, fill = taxon_capture)) +
-  geom_histogram() +
-  scale_x_log10()
-
-ggplot(brms_data, aes(x = temp_c_30_day_mean, fill = taxon_capture)) +
-  geom_histogram()
 
 ```
 
@@ -204,8 +142,8 @@ null_zln <- brm(
   family = hurdle_lognormal(),
   control = list(adapt_delta = 0.95, max_treedepth = 12),
   chains = 4,
-  iter = 2000,
-  warmup = 1000,
+  iter = 4000,
+  warmup = 2000,
   seed = 124,
   cores = 4,
   backend = "cmdstanr"
@@ -1265,7 +1203,7 @@ m11b_zln <- brm(
 m11b_zln <- add_criterion(m11b_zln, "loo")
 
 saveRDS(m11b_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
-m11b_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
+m11b_zln = readRDS(file = "unified_models/unified_models_2026_06/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_p10t30.rds")
 
 # simpler sigma effects
 m11c_zln <- brm(
@@ -1423,8 +1361,6 @@ m11f_zln <- add_criterion(m11f_zln, "loo")
 saveRDS(m11f_zln, file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigmatax_popkg_p10t30_20260526_171916.rds")
 m11f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxacorpt2poplsyrkg3_sigmatax_popkg_p10t30_20260526_171916.rds")
 
-
-
 ```
 
 ## Model comparison
@@ -1434,44 +1370,57 @@ m11f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 #| code-summary: "Show model comparison code"
 # model comparison and selection
 
-(loo_comp_out = loo_compare(null_zln,
-                            # # nullb_zln, # no density
-                            # # m1_zln,
-                            # # m2_zln,
-                            # # m2b_zln,
-                            # # m3_zln,
-                            # # m3b_zln,  # no density
-                            # # m4_zln,
-                            # # m5_zln,
-                            # # m5b_zln,
-                            # # m5c_zln,
-                            # # m5d_zln,
-                            # # m5e_zln,
-                            # # m5f_zln,
-                            # # m5g_zln
-                            # # m6_zln,
-                            # # m6b_zln,
-                            # # m6c_zln,
-                            # # m6d_zln,
-                            # # m8_zln,
-                            m9a_zln,
-                            m9b_zln,
-                            # # m9b_30_zln
-                            m9c_zln,
-                            m9d_zln,
-                            m9e_zln,
-                            m9f_zln,
-                            m9g_zln,
-                            m9h_zln,
-                            m9i_zln,
-                            m10b_zln,
-                            m11a_zln,
-                            m11b_zln,
-                            m11c_zln,
-                            m11d_zln,
-                            m11e_zln,
-                            m11f_zln
-                            ))
+m11b_th1_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11b_m11b_th1_20260917_204802_with_loo.rds"))
+
+m11b_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11b_m11b_th10_20260917_210442_with_loo.rds"))
+
+m11d_th1_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th1_20260922_234433_with_loo.rds"))
+
+m11d_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th10_20260922_164525_with_loo.rds"))
+# 
+# (loo_comp_out = loo_compare(null_zln,
+#                             # # nullb_zln, # no density
+#                             # # m1_zln,
+#                             # # m2_zln,
+#                             # # m2b_zln,
+#                             # # m3_zln,
+#                             # # m3b_zln,  # no density
+#                             # # m4_zln,
+#                             # # m5_zln,
+#                             # # m5b_zln,
+#                             # # m5c_zln,
+#                             # # m5d_zln,
+#                             # # m5e_zln,
+#                             # # m5f_zln,
+#                             # # m5g_zln
+#                             # # m6_zln,
+#                             # # m6b_zln,
+#                             # # m6c_zln,
+#                             # # m6d_zln,
+#                             # # m8_zln,
+#                             m9a_zln,
+#                             m9b_zln,
+#                             # # m9b_30_zln
+#                             m9c_zln,
+#                             m9d_zln,
+#                             m9e_zln,
+#                             m9f_zln,
+#                             m9g_zln,
+#                             m9h_zln,
+#                             m9i_zln,
+#                             m10b_zln,
+#                             m11a_zln,
+#                             m11b_zln,
+#                             m11c_zln,
+#                             m11d_zln,
+#                             m11e_zln,
+#                             m11f_zln
+#                             ))
+
+(loo_comp_out = loo_compare(m11b_th1_zln,
+                            m11b_th10_zln,
+                            m11d_th1_zln,
+                            m11d_th10_zln))
 ```
 
 
@@ -1485,7 +1434,7 @@ m11f_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2
 #| fig-height: 6
 #| fig-width: 8
 
-model_select = m11e_zln
+model_select = m11b_th1_zln
 
 summary(model_select)
 plot((model_select), ask = FALSE)
