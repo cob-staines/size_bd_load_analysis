@@ -23,7 +23,7 @@ Illustrate differences in Bd prevalence and load across Panamanian species.
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, brms, tidybayes, ggplot2, emmeans, ggrepel)
 
 ## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
+dbcon = hopToDB("railway", hopReg = FALSE)
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -482,8 +482,7 @@ plot_ccdf
 ## by region
 ```{r}
 region_species = c("lithobates_warszewitschii",
-                   "colostethus_panamansis",
-                   "sachatamia_albomaculata")
+                   "colostethus_panamansis")
 
 bd_model_plot = bd_model %>%
          mutate(species = gsub(" ", "\n", get_species_name(taxon_capture)),
@@ -512,20 +511,23 @@ plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species, color =
                 width = 0.2,
                 position = position_dodge(width = 0.5)) +
   theme_minimal() +
-  ggtitle("Observed prevalence") +
+  # ggtitle("Observed prevalence") +
   xlab("Species") +
   ylab("Bd prevalence [-]\n(with 95% CI)") +
+  labs(color = "Region") +
   # geom_text(aes(label = paste0("n=", n), y = 1),
   #         position = position_dodge(width = 1)) +
   ylim(0, 1) +
-  theme(legend.position = "none") +
-  theme_minimal() +
+  theme_classic() +
+  theme(
+    # legend.position = "none",
+        axis.text.x = element_text(face = "italic")) +
   scale_color_brewer(palette = "Dark2")
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
        plot = plot_prev_region,
-       height = 6,
-       width = 8)
+       height = 4,
+       width = 6)
 
 plot_prev_region
 
@@ -537,9 +539,10 @@ plot_load_region = ggplot(bd_model_plot %>%
                                    taxon_capture %in% region_species), aes(log_bd_load, x = species, color = region)) +
   geom_boxplot() + 
   theme_minimal() +
-  ggtitle("Observed Bd-positive load") +
+  # ggtitle("Observed Bd-positive load") +
   xlab("Species") +
   ylab("log(Bd load) [-]") +
+  labs(color = "Region") +
   # geom_text(
   #   data = bd_region,
   #   aes(
@@ -551,14 +554,16 @@ plot_load_region = ggplot(bd_model_plot %>%
   #   vjust = 0
   # ) +
   ylim(log(0.3), 20) +
-  theme(legend.position = "none") +
-  theme_minimal() +
+  theme_classic() +
+  theme(
+    # legend.position = "none",
+        axis.text.x = element_text(face = "italic")) +
   scale_color_brewer(palette = "Dark2")
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_obs_adult_region.png"),
        plot = plot_load_region,
-       height = 6,
-       width = 8)
+       height = 4,
+       width = 6)
 
 plot_load_region
 
@@ -578,17 +583,18 @@ mbd_full = brm(
   data = bd_model,
   family = hurdle_lognormal(),
   chains = 4,
-  iter = 2000,
-  warmup = 1000,
+  iter = 4000,
+  warmup = 2000,
   cores = 4,
   seed = 125
 )
 
-saveRDS(mbd_full, file = here("panama_resilience_paper/pa_resilience_models/combined_model.rds"))
-mbd_full = readRDS(file = here("panama_resilience_paper/pa_resilience_models/combined_model.rds"))
+saveRDS(mbd_full, file = here(paste0("panama_resilience_paper/pa_resilience_models/combined_model_", today(), ".rds")))
+mbd_full = readRDS(file = here("panama_resilience_paper/pa_resilience_models/combined_model_2026-09-22.rds"))
 summary(mbd_full)
 
 ```
+
 ## Bd prev
 ```{r}
 # prev_draws = brm_prev %>%
@@ -638,7 +644,7 @@ prev_draws_summary = prev_draws %>%
             .groups = "drop") %>%
   mutate(species = get_species_name(taxon_capture))
 
-emm_prev = emmeans(brm_prev, ~ taxon_capture, type = "response")
+emm_prev = emmeans(mbd_full, ~ taxon_capture, type = "response")
 emm_prev
 
 pairwise_comparison_prev = pairs(emm_prev, adjust = "tukey")
@@ -668,7 +674,7 @@ f_rope = function(draws, col, taxon_a, taxon_b, epsilon, factor=1) {
 
 
 taxon_list_prev = emm_prev_df %>%
-  arrange(desc(response)) %>%
+  arrange(desc(emmean)) %>%
   select(taxon_capture) %>%
   distinct() %>%
   pull(taxon_capture) %>%
@@ -726,15 +732,17 @@ plot_prev_draws_sum = ggplot(prev_draws_summary_plot, aes(x = species, y = preva
   geom_pointrange() +
   labs(y = "Bd prevalence\n(posterior mean ± 95% CrI)",
        x = "Species",
-       title = "Bd prevalence") +
+       # title = "Bd prevalence"
+       ) +
   ylim(0,1) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic"),
+        plot.margin = margin(t = 5, r = 5, b = 5, l = 40))  # increase l until the label fits)
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
        plot = plot_prev_draws_sum,
-       height = 6,
-       width = 8)
+       height = 5,
+       width = 7)
 
 plot_prev_draws_sum
 
@@ -758,20 +766,22 @@ plot_prev_draws_sum
 # rope
 plot_prev_rope_05 = ggplot(prev_rope_df, aes(x = species_a, y = species_b, fill = rope_05)) +
   geom_tile(color = "black") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic"),
+        axis.text.y = element_text(face = "italic")) +
   geom_text(aes(label = sig_txt), color = "white", size = 4) +
-  labs(title = "Pairwise comparison of Bd prevalence",
+  labs(
+    # title = "Pairwise comparison of Bd prevalence",
        fill = "Proportion in\nROPE (± 0.05)",
        x = "Species",
        y = "Species",
        caption = "* ~ < 0.05 \n** ~ < 0.01 \n*** ~ < 0.001") +
-  theme(plot.caption = element_text(hjust = 1.2, vjust = 75))
+  theme(plot.caption = element_text(hjust = 1.4, vjust = 75))
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_rope_05_adult.png"),
        plot = plot_prev_rope_05,
-       height = 6,
-       width = 8)
+       height = 5,
+       width = 7)
 
 plot_prev_rope_05
 
@@ -830,7 +840,7 @@ load_draws_summary = load_draws %>%
   mutate(species = get_species_name(taxon_capture))
 
 # emmeans
-emm_load = emmeans(brm_load, ~ taxon_capture, type = "response")
+emm_load = emmeans(mbd_full, ~ taxon_capture, type = "response")
 emm_load
 
 pairwise_comparison_load = pairs(emm_load, adjust = "tukey")
@@ -899,9 +909,10 @@ plot_load_draws_sum = ggplot(load_draws_summary_plot, aes(x = species, y = log_l
   geom_pointrange() +
   labs(y = "log(Bd-positive load)\n(posterior mean ± 95% CrI)",
        x = "Species",
-       title = "Bd-positive load") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+       # title = "Bd-positive load"
+       ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic"))
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_load_draws_summary_adult.png"),
        plot = plot_load_draws_sum,
@@ -938,10 +949,12 @@ plot_load_draws_sum
 # rope
 plot_load_rope_1 = ggplot(load_rope_df, aes(x = species_a, y = species_b, fill = rope_1)) +
   geom_tile(color = "black") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic"),
+        axis.text.y = element_text(face = "italic")) +
   geom_text(aes(label = sig_txt), color = "white", size = 4) +
-    labs(title = "Pairwise comparison of Bd prevalence",
+    labs(
+      # title = "Pairwise comparison of Bd prevalence",
        fill = "Proportion in\nROPE (± 1)",
        x = "Species",
        y = "Species",
@@ -1089,7 +1102,7 @@ all_taxa <- unique(ccdf_df$species)
 
 color_vals <- setNames(
   ifelse(all_taxa %in% highlight_taxa,
-         c("#E8593C", "#3B8BD4")[match(all_taxa[all_taxa %in% highlight_taxa], highlight_taxa)][
+         c("#33a02c", "#1f78b4")[match(all_taxa[all_taxa %in% highlight_taxa], highlight_taxa)][
            match(all_taxa, all_taxa[all_taxa %in% highlight_taxa])
          ],
          "grey70"),
@@ -1099,8 +1112,8 @@ color_vals <- setNames(
 # Simpler approach using case_when in a named vector:
 color_vals <- setNames(
   sapply(all_taxa, function(x) {
-    if (x == highlight_taxa[1]) "#E8593C"
-    else if (x == highlight_taxa[2]) "#3B8BD4"
+    if (x == highlight_taxa[1]) "#33a02c"
+    else if (x == highlight_taxa[2]) "#1f78b4"
     else "grey50"
   }),
   all_taxa
@@ -1108,17 +1121,18 @@ color_vals <- setNames(
 
 fill_vals <- setNames(
   sapply(all_taxa, function(x) {
-    if (x == highlight_taxa[1]) "#E8593C"
-    else if (x == highlight_taxa[2]) "#3B8BD4"
+    if (x == highlight_taxa[1]) "#33a02c"
+    else if (x == highlight_taxa[2]) "#1f78b4"
     else "grey75"
   }),
   all_taxa
 )
 
 label_df = ccdf_df %>%
+  mutate(order_num = 13 - as.integer(factor(species, levels = ccdf_df_levels)))  %>%
   filter(
     #species %in% highlight_taxa,
-         log_load < 5.3) %>%
+         log_load < (5.1 + order_num * 0.05)) %>%
   group_by(species) %>%
   slice_max(log_load) %>%
   ungroup()
@@ -1137,9 +1151,9 @@ p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
   labs(
     x = "log(Bd load)",
     y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
-    title = "Posterior complementary CDF of Bd infection load by species"
+    # title = "Posterior complementary CDF of Bd infection load by species"
   ) +
-  theme_minimal() +
+  theme_classic() +
   theme(legend.position = "none") +
   geom_text_repel(
     data = label_df,
@@ -1156,13 +1170,15 @@ p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
     box.padding = 0.1,
     point.padding = 0,
     show.legend = FALSE
-  )
+  ) +
+  scale_x_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0)))
 p_g
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_ccdf_grey.png"),
        plot = p_g,
-       height = 6,
-       width = 8)
+       height = 4,
+       width = 6,
+       device = ragg::agg_png)
 
 ```
 
