@@ -1,0 +1,129 @@
+---
+title: "th_sensitivity_analysis"
+output: html_document
+---
+
+## Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here)
+
+```
+
+## Load data
+
+Compare combined-effects estimates aggregated at two Bd load detection thresholds
+(th1 vs th10) from `intermediates/th_sensitivity_analysis/`.
+
+```{r}
+m11b_th1 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11b_th1.csv")) %>%
+  mutate(threshold = "th1",
+         model = "m11b",
+         mth = "m11b_th1")
+
+m11b_th10 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11b_th10.csv")) %>%
+  mutate(threshold = "th10",
+         model = "m11b",
+         mth = "m11b_th10")
+
+m11d_th1 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11d_th1.csv")) %>%
+  mutate(threshold = "th1",
+         model = "m11d",
+         mth = "m11d_th1")
+
+m11d_th10 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11d_th10.csv")) %>%
+  mutate(threshold = "th10",
+         model = "m11d",
+         mth = "m11d_th10")
+
+th_combined = bind_rows(m11b_th1,
+                        m11b_th10,
+                        m11d_th1,
+                        m11d_th10) %>%
+  mutate(threshold = factor(threshold, levels = c("th1", "th10")),
+         model = factor(model, levels = c("m11b", "m11d")),
+         mth = factor(mth, levels = c("m11b_th1", "m11d_th1", "m11b_th10", "m11d_th10")))
+
+```
+
+## Reshape
+
+Pivot each parameter's median/50%/95% interval columns into a common long format
+so each can be plotted as a boxplot summary (box = 50% CI, whiskers = 95% CI,
+midline = median).
+
+```{r}
+param_prefixes = c("hu", "prevalence", "sigma", "hu_contrast", "mu_contrast")
+
+th_long = map_dfr(param_prefixes, function(p) {
+  th_combined %>%
+    select(taxon_capture, mth, contrast,
+           lower_95 = paste0(p, "_lower_95"),
+           lower_50 = paste0(p, "_lower_50"),
+           median = paste0(p, "_median"),
+           upper_50 = paste0(p, "_upper_50"),
+           upper_95 = paste0(p, "_upper_95")) %>%
+    mutate(parameter = p)
+})
+
+```
+
+## Boxplot comparison by species
+
+```{r}
+#| fig.height: 8
+#| fig.width: 10
+
+plot_th_comparison = function(param) {
+  th_long %>%
+    filter(parameter == param) %>%
+    ggplot(aes(x = mth, fill = mth)) +
+    geom_boxplot(aes(ymin = lower_95, lower = lower_50, middle = median,
+                      upper = upper_50, ymax = upper_95),
+                 stat = "identity") +
+    facet_wrap("taxon_capture", scales = "free_y") +
+    labs(title = param, y = param, x = "threshold/model") +
+    theme_minimal()
+}
+
+```
+
+```{r}
+#| fig.height: 16
+#| fig.width: 12
+plot_th_comparison("hu")
+
+```
+
+```{r}
+#| fig.height: 16
+#| fig.width: 12
+plot_th_comparison("prevalence")
+
+```
+
+```{r}
+#| fig.height: 16
+#| fig.width: 12
+plot_th_comparison("sigma")
+
+```
+
+```{r}
+#| fig.height: 16
+#| fig.width: 12
+plot_th_comparison("hu_contrast")
+
+```
+
+```{r}
+#| fig.height: 16
+#| fig.width: 12
+plot_th_comparison("mu_contrast")
+
+```
