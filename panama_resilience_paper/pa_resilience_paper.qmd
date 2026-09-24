@@ -505,24 +505,26 @@ bd_region = bd_model_plot %>%
               .groups = "drop") %>%
   mutate(species = gsub(" ", "\n", get_species_name(taxon_capture)))
 
-plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species, color = region)) +
-  geom_point(position = position_dodge(width = 0.5)) +
+
+
+species_cols <- c("Colostethus\npanamansis"    = "#33a02c",
+                  "Lithobates\nwarszewitschii" = "#1f78b4")
+
+plot_prev_region = ggplot(bd_region, aes(y = bd_prevalence, x = species,
+                                         color = species, shape = region,
+                                         group = region)) +
+  geom_point(size = 2.5, position = position_dodge(width = 0.5)) +
   geom_errorbar(aes(ymin = bd_prevalence_ci_lower, ymax = bd_prevalence_ci_upper),
                 width = 0.2,
                 position = position_dodge(width = 0.5)) +
-  theme_minimal() +
-  # ggtitle("Observed prevalence") +
   xlab("Species") +
   ylab("Bd prevalence [-]\n(with 95% CI)") +
-  labs(color = "Region") +
-  # geom_text(aes(label = paste0("n=", n), y = 1),
-  #         position = position_dodge(width = 1)) +
+  labs(shape = "Region") +
   ylim(0, 1) +
   theme_classic() +
-  theme(
-    # legend.position = "none",
-        axis.text.x = element_text(face = "italic")) +
-  scale_color_brewer(palette = "Dark2")
+  theme(axis.text.x = element_text(face = "italic")) +
+  scale_color_manual(values = species_cols, guide = "none") +
+  scale_shape_manual(values = c(16, 17, 15, 18, 8))  # circle, triangle, square, diamond
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_obs_adult_region.png"),
        plot = plot_prev_region,
@@ -530,8 +532,6 @@ ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "
        width = 6)
 
 plot_prev_region
-
-
 
 # load
 plot_load_region = ggplot(bd_model_plot %>%
@@ -728,16 +728,21 @@ prev_draws_summary_plot = prev_draws_summary %>%
                             pull(species)))
 
 # draws summary
-plot_prev_draws_sum = ggplot(prev_draws_summary_plot, aes(x = species, y = prevalence_mean, ymin = prevalence_ci05, ymax = prevalence_ci95)) +
+highlight_cols <- c("Colostethus panamansis"    = "#33a02c",
+                    "Lithobates warszewitschii" = "#1f78b4")
+
+plot_prev_draws_sum = ggplot(prev_draws_summary_plot,
+                             aes(x = species, y = prevalence_mean,
+                                 ymin = prevalence_ci05, ymax = prevalence_ci95,
+                                 color = species)) +
   geom_pointrange() +
+  scale_color_manual(values = highlight_cols, na.value = "black", guide = "none") +
   labs(y = "Bd prevalence\n(posterior mean ± 95% CrI)",
-       x = "Species",
-       # title = "Bd prevalence"
-       ) +
-  ylim(0,1) +
+       x = "Species") +
+  ylim(0, 1) +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, face = "italic"),
-        plot.margin = margin(t = 5, r = 5, b = 5, l = 40))  # increase l until the label fits)
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, face = "italic"),
+        plot.margin = margin(t = 5, r = 5, b = 5, l = 40))
 
 ggsave(filename = here("panama_resilience_paper", "pa_resilience_paper_files", "pa_bd_prev_draws_summary_adult.png"),
        plot = plot_prev_draws_sum,
@@ -1071,7 +1076,8 @@ for (sp in species_levels) {
 }
  
 ccdf_df <- bind_rows(ccdf_list) %>%
-  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)))
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)),
+         log10_load = log_load / log(10))
  
 # plot
 p <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
@@ -1129,38 +1135,29 @@ fill_vals <- setNames(
 )
 
 label_df = ccdf_df %>%
-  mutate(order_num = 13 - as.integer(factor(species, levels = ccdf_df_levels)))  %>%
-  filter(
-    #species %in% highlight_taxa,
-         log_load < (5.1 + order_num * 0.05)) %>%
+  mutate(order_num = 13 - as.integer(factor(species, levels = ccdf_df_levels))) %>%
+  filter(log10_load < (5.1 + order_num * 0.05) / log(10)) %>%   # was in ln units
   group_by(species) %>%
-  slice_max(log_load) %>%
+  slice_max(log10_load) %>%
   ungroup()
 
-# Updated plot
-p_g <- ggplot(ccdf_df, aes(x = log_load, y = median)) +
-  geom_ribbon(
-    aes(ymin = q25, ymax = q75, fill = species),
-    alpha = 0.25
-  ) +
-  # geom_line(aes(color = species, linewidth = species %in% highlight_taxa)) +
+p_g <- ggplot(ccdf_df, aes(x = log10_load, y = median)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75, fill = species), alpha = 0.25) +
   geom_line(aes(color = species)) +
   scale_color_manual(values = color_vals) +
   scale_fill_manual(values = fill_vals) +
-  # scale_linewidth_manual(values = c("TRUE" = 1.1, "FALSE" = 0.5)) +
   labs(
-    x = "log(Bd load)",
-    y = "Median P(Bd load > x)\nwith 25-75% posterior envelope",
-    # title = "Posterior complementary CDF of Bd infection load by species"
+    x = expression(log[10]*"(Bd load)"),
+    y = "Median P(Bd load > x)\nwith 25-75% posterior envelope"
   ) +
   theme_classic() +
   theme(legend.position = "none") +
   geom_text_repel(
     data = label_df,
-    aes(x = log_load, y = median, label = species, color = species),
+    aes(x = log10_load, y = median, label = species, color = species),
     size = 3.5,
     fontface = "italic",
-    nudge_x = 5,
+    nudge_x = 5 / log(10),        # ~2.17, same visual offset as before
     nudge_y = 0.14,
     direction = "y",
     hjust = 0,
