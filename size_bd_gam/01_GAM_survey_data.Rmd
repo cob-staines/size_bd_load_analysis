@@ -12,7 +12,7 @@ output: html_document
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janitor, here, brms, cmdstanr, tidybayes, patchwork)
+librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janitor, here, brms, cmdstanr, tidybayes, patchwork, terra)
 
 ```
 
@@ -21,6 +21,17 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 ## environmental
 ```{r}
 env_agg = read_csv(here("data", "unified_env_agg.csv"))
+
+# env standardization from the unified model data (m11d_co100 was fit to this file)
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-23.RData"))
+
+unified_env_scale = list(
+  precip_mean = mean(brms_data$precip_mm_10_day_sum),
+  precip_sd = sd(brms_data$precip_mm_10_day_sum),
+  temp_mean = mean(brms_data$temp_c_30_day_mean),
+  temp_sd = sd(brms_data$temp_c_30_day_mean))
+
+rm(brms_data)
 
 # to_life_stage_simple = function(df, taxa, group_name, svl_min, svl_max) {
 #   df_out = df
@@ -58,11 +69,13 @@ raca_clean = raca_raw %>%
          country = "usa",
          project = "RACA",
          taxon_capture = "rana_cascadae") %>%
-  filter(!is.na(bd_its1_copies_per_swab))
+  filter(!is.na(bd_its1_copies_per_swab)) %>%
+  mutate(year = year(date))
 
 raca_valid = raca_clean %>%
   select(taxon_capture,
          date,
+         year,
          site,
          population,
          bd_its1_copies_per_swab,
@@ -79,7 +92,7 @@ raca_valid = raca_clean %>%
 # RIBBiTR
 ```{r}
 ## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
+dbcon = hopToDB("railway", hopReg = FALSE)
 
 # table pointers
 db_bd = tbl(dbcon, Id("survey_data", "bd_qpcr_results"))
@@ -109,8 +122,18 @@ bd_sample = db_sample %>%
                      bd_its1_copies_per_swab), by = "sample_id")
 
 # load populations
-site_year_pop = read.csv(here("data", "sn_resilience_trajectory_classification_pop_lookup_2026-02-28.csv")) %>%
-  mutate(site = as.character(site))
+# site_year_pop = read.csv(here("data", "sn_resilience_trajectory_classification_pop_lookup_2026-02-28.csv")) %>%
+#   mutate(site = as.character(site))
+
+pops_in = read.csv(here("data", "size_load_pop_1_2026-09-11.csv"))
+
+all_populations = pops_in %>%
+  select(site, pop_id) %>%
+  dplyr::rename(population = pop_id) %>%
+  mutate(population = if_else(!is.na(population), paste0(as.character(population), "_pop"), site),
+         site = as.character(site)) %>%
+  select(site,
+         population)
 
 # define life stage simple
 bd_life_stage_ranarasi = bd_sample %>%
@@ -184,7 +207,7 @@ bd_life_stage_nae = bd_sample %>%
 
 
 ranarasi_valid = bd_life_stage_ranarasi %>%
-  filter(site %in% site_year_pop$site) %>%
+  filter(site %in% all_populations$site) %>%
   select(sample_id,
          bd_its1_copies_per_swab,
          sample_name,
@@ -200,10 +223,12 @@ ranarasi_valid = bd_life_stage_ranarasi %>%
          year,
          site,
          site_id,
+         site_latitude,
+         site_longitude,
          region,
          country) %>%
   collect() %>%
-  left_join(site_year_pop, by = c("site", "year")) %>%
+  left_join(all_populations, by = "site") %>%
   filter(!is.na(bd_its1_copies_per_swab)) %>%
   mutate(year = year(date))
 
@@ -223,6 +248,8 @@ panama_valid = bd_life_stage_panama %>%
          year,
          site,
          site_id,
+         site_latitude,
+         site_longitude,
          population,
          region,
          country) %>%
@@ -245,6 +272,8 @@ nae_valid = bd_life_stage_nae %>%
          year,
          site,
          site_id,
+         site_latitude,
+         site_longitude,
          population,
          region,
          country) %>%
@@ -273,17 +302,86 @@ brms_data = bind_rows(ranarasi_valid,
   mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")),
          is_metamorph = as.numeric(life_stage_simple == "metamorph"),
          is_not_metamorph = as.numeric(life_stage_simple != "metamorph"),
-         bd_load_co = if_else(bd_its1_copies_per_swab < 10,
-                              0,
-                              bd_its1_copies_per_swab),
-         bd_detected_co = bd_load_co > 0,
-         bd_load_co_density = bd_load_co / svl_mm) %>%
+         bd_load_co100 = if_else(bd_its1_copies_per_swab < 100,
+                                 0,
+                                 bd_its1_copies_per_swab),
+         bd_detected_co100 = bd_load_co100 > 0,
+         bd_load_co100_density = bd_load_co100 / svl_mm) %>%
+  # standardize with the unified data's mean/sd so env slopes (and priors from the
+  # unified model) are on the same scale
   mutate(
-    precip_mm_10_z = as.numeric(scale(precip_mm_10_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE)))
+    precip_mm_10_z = (precip_mm_10_day_sum - unified_env_scale$precip_mean) / unified_env_scale$precip_sd,
+    temp_c_30_z = (temp_c_30_day_mean - unified_env_scale$temp_mean) / unified_env_scale$temp_sd)
 
 # check for good alignment with environmental data
 env_alignment_check = any(is.na(brms_data$precip_mm_10_day_sum)) | any(is.na(brms_data$temp_c_30_day_mean))
+
+```
+
+# KG zones
+```{r}
+# use the unified pipeline's site-level KG assignments (size_bd_unified/01_survey_data.Rmd)
+unified_sites_kg = read_csv(here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv")) %>%
+  mutate(site = as.character(site)) %>%
+  select(site,
+         kg_id,
+         kg_code_1,
+         kg_code_2,
+         kg_code_3)
+
+# fallback: extract KG for any GAM sites not in the unified site table, as in the unified pipeline
+kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
+  select(-rgb) %>%
+  rename_with(function(x) { paste0("kg_", x) })
+
+missing_sites = brms_data %>%
+  filter(!(site %in% unified_sites_kg$site)) %>%
+  group_by(site) %>%
+  summarise(site_latitude = mean(site_latitude, na.rm = TRUE),
+            site_longitude = mean(site_longitude, na.rm = TRUE),
+            .groups = "drop")
+
+if (nrow(missing_sites) > 0) {
+  kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
+
+  missing_sites_kg = missing_sites %>%
+    bind_cols(extract(kg_rast, cbind(lon = missing_sites$site_longitude,
+                                     lat = missing_sites$site_latitude))) %>%
+    dplyr::rename(kg_id = koppen_geiger_0p00833333) %>%
+    mutate(kg_id = if_else(kg_id == 29, 19, kg_id)) %>%
+    left_join(kg_key, by = "kg_id") %>%
+    select(site,
+           kg_id,
+           kg_code_1,
+           kg_code_2,
+           kg_code_3)
+
+  unified_sites_kg = bind_rows(unified_sites_kg, missing_sites_kg)
+}
+
+missing_sites
+
+brms_data = brms_data %>%
+  left_join(unified_sites_kg, by = "site")
+
+# checks
+check_na_cols = c("bd_load_co100_density",
+                  "life_stage_simple",
+                  "taxon_capture",
+                  "precip_mm_10_z",
+                  "temp_c_30_z",
+                  "kg_code_3",
+                  "population",
+                  "date",
+                  "year")
+
+(na_col_check = brms_data %>%
+  summarise(across(all_of(check_na_cols), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_na"))
+
+if (sum(na_col_check$n_na) > 0) {
+  warning("NAs found in model variable columns. Please review.")
+}
 
 save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))
 
