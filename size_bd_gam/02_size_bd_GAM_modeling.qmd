@@ -23,7 +23,7 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-05-30.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-09-28.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%
@@ -56,133 +56,86 @@ sifl_data = brms_data %>%
 # Load unified model
 
 ```{r}
-# m9a_zln
-unified_model = readRDS(file = here("size_bd_unified", "unified_models/unified_model_results_zln_life_tax_env2_renvpoptls_30.rds"))
+# m11d_zln
+unified_model = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
 
-# hu
+# new-taxon predictive prior for the env slopes (precip, temp, temp^2).
+# per draw: fixed effect + a new taxon offset drawn from the m11d taxon RE distribution,
+# N(0, Sigma) with Sigma from sd_taxon_capture and cor_taxon_capture. this uses no
+# species-specific r_taxon_capture, so each species' data is not counted twice
+# (once in the prior, again in its GAM). the prior is therefore the same for all species.
+env_terms = c("precip_mm_10_z", "temp_c_30_z", "Itemp_c_30_zE2")
 
-taxon_linear_hu <- spread_draws(unified_model,
-    b_hu_precip_mm_10_z,
-    b_hu_temp_c_30_z,
-    r_taxon_capture__hu[taxon_capture, term]
-  ) |>
-  filter(taxon_capture %in% species_list$taxon_capture) |>
-  pivot_wider(names_from = term, values_from = r_taxon_capture__hu) |>
-  mutate(
-    precip_linear_total = b_hu_precip_mm_10_z + precip_mm_10_z,
-    temp_linear_total   = b_hu_temp_c_30_z + temp_c_30_z
-  ) |>
-  group_by(taxon_capture) |>
-  summarise(
-    precip_linear_hu_mean = mean(precip_linear_total),
-    precip_linear_hu_sd   = sd(precip_linear_total),
-    temp_linear_hu_mean   = mean(temp_linear_total),
-    temp_linear_hu_sd     = sd(temp_linear_total)
-  )
+new_taxon_env_draws = function(model, dpar_prefix = "") {
+  draws = as.data.frame(model)
+  terms = paste0(dpar_prefix, env_terms)
+  
+  b = as.matrix(draws[, paste0("b_", terms)])
+  sds = as.matrix(draws[, paste0("sd_taxon_capture__", terms)])
+  
+  offsets = t(sapply(seq_len(nrow(draws)), function(i) {
+    R = diag(length(terms))
+    for (j in 1:(length(terms) - 1)) {
+      for (k in (j + 1):length(terms)) {
+        R[j, k] = R[k, j] = draws[[paste0("cor_taxon_capture__", terms[j], "__", terms[k])]][i]
+      }
+    }
+    Sigma = diag(sds[i, ]) %*% R %*% diag(sds[i, ])
+    MASS::mvrnorm(1, mu = rep(0, length(terms)), Sigma = Sigma)
+  }))
+  
+  total = b + offsets
+  colnames(total) = c("precip_linear", "temp_linear", "temp_quad")
+  as_tibble(total)
+}
 
-fixed_quad_hu <- spread_draws(unified_model,
-    b_hu_Iprecip_mm_10_zE2,
-    b_hu_Itemp_c_30_zE2
-  ) |>
-  summarise(
-    precip_quad_hu_mean = mean(b_hu_Iprecip_mm_10_zE2),
-    precip_quad_hu_sd   = sd(b_hu_Iprecip_mm_10_zE2),
-    temp_quad_hu_mean   = mean(b_hu_Itemp_c_30_zE2),
-    temp_quad_hu_sd     = sd(b_hu_Itemp_c_30_zE2)
-  )
+set.seed(124)
+new_taxon_hu = new_taxon_env_draws(unified_model, "hu_")
+new_taxon_b = new_taxon_env_draws(unified_model, "")
 
-# b
-taxon_weather_hu = taxon_linear_hu %>%
-  cross_join(fixed_quad_hu)
+# correlation among env slopes in the predictive prior (independent normals ignore this)
+round(cor(new_taxon_hu), 2)
+round(cor(new_taxon_b), 2)
 
-taxon_linear_b <- spread_draws(unified_model,
-    b_precip_mm_10_z,
-    b_temp_c_30_z,
-    r_taxon_capture[taxon_capture, term]
-  ) |>
-  filter(taxon_capture %in% species_list$taxon_capture) |>
-  pivot_wider(names_from = term, values_from = r_taxon_capture) |>
-  mutate(
-    precip_linear_total = b_precip_mm_10_z + precip_mm_10_z,
-    temp_linear_total   = b_temp_c_30_z + temp_c_30_z
-  ) |>
-  group_by(taxon_capture) |>
-  summarise(
-    precip_linear_b_mean = mean(precip_linear_total),
-    precip_linear_b_sd   = sd(precip_linear_total),
-    temp_linear_b_mean   = mean(temp_linear_total),
-    temp_linear_b_sd     = sd(temp_linear_total)
-  )
-
-fixed_quad_b <- spread_draws(unified_model,
-    b_Iprecip_mm_10_zE2,
-    b_Itemp_c_30_zE2
-  ) |>
-  summarise(
-    precip_quad_b_mean = mean(b_Iprecip_mm_10_zE2),
-    precip_quad_b_sd   = sd(b_Iprecip_mm_10_zE2),
-    temp_quad_b_mean   = mean(b_Itemp_c_30_zE2),
-    temp_quad_b_sd     = sd(b_Itemp_c_30_zE2)
-  )
-
-taxon_weather_b = taxon_linear_b %>%
-  cross_join(fixed_quad_b)
-
-taxon_weather = taxon_weather_hu %>%
-  left_join(taxon_weather_b, by = "taxon_capture")
+# marginal summary of the predictive prior (for reference)
+bind_rows(hu = summarise(new_taxon_hu, across(everything(), list(mean = mean, sd = sd))),
+          mu = summarise(new_taxon_b, across(everything(), list(mean = mean, sd = sd))),
+          .id = "dpar")
 ```
 
 # Modeling
 ## Model setup
 ```{r}
-# build prior
+# multivariate normal prior on the env slopes [precip, temp, temp^2], from the
+# new-taxon predictive draws (keeps their correlations; independent normals do not).
+# b and b_hu are ordered [precip_mm_10_z, temp_c_30_z, Itemp_c_30_zE2]: the intercept
+# is separate (centered) and smooth fixed parts are in bs, so b[1:3] is the env block.
+# added to lprior (not target) so priorsense sees it; the b coefs keep brms' default
+# flat prior, so this is their only prior. same prior for all species.
+build_env_stanvars = function(new_taxon_b, new_taxon_hu) {
+  stanvar(x = colMeans(new_taxon_b), name = "env_prior_mean_b") +
+    stanvar(x = cov(new_taxon_b), name = "env_prior_cov_b") +
+    stanvar(x = colMeans(new_taxon_hu), name = "env_prior_mean_hu") +
+    stanvar(x = cov(new_taxon_hu), name = "env_prior_cov_hu") +
+    stanvar(scode = paste(
+      "  lprior += multi_normal_lpdf(b[1:3] | env_prior_mean_b, env_prior_cov_b);",
+      "  lprior += multi_normal_lpdf(b_hu[1:3] | env_prior_mean_hu, env_prior_cov_hu);",
+      sep = "\n"),
+      block = "tparameters", position = "end")
+}
 
-build_spp_prior <- function(species, taxon_weather) {
-  
-  spp_weather <- taxon_weather |> filter(taxon_capture == species)
-  
-  # Extract all values first as plain numerics
-  pl_b_m  <- spp_weather$precip_linear_b_mean
-  pl_b_s  <- spp_weather$precip_linear_b_sd
-  pq_b_m  <- spp_weather$precip_quad_b_mean
-  pq_b_s  <- spp_weather$precip_quad_b_sd
-  tl_b_m  <- spp_weather$temp_linear_b_mean
-  tl_b_s  <- spp_weather$temp_linear_b_sd
-  tq_b_m  <- spp_weather$temp_quad_b_mean
-  tq_b_s  <- spp_weather$temp_quad_b_sd
+env_stanvars = build_env_stanvars(new_taxon_b, new_taxon_hu)
 
-  pl_hu_m <- spp_weather$precip_linear_hu_mean
-  pl_hu_s <- spp_weather$precip_linear_hu_sd
-  pq_hu_m <- spp_weather$precip_quad_hu_mean
-  pq_hu_s <- spp_weather$precip_quad_hu_sd
-  tl_hu_m <- spp_weather$temp_linear_hu_mean
-  tl_hu_s <- spp_weather$temp_linear_hu_sd
-  tq_hu_m <- spp_weather$temp_quad_hu_mean
-  tq_hu_s <- spp_weather$temp_quad_hu_sd
-
-  sp_prior <- c(
-    # mu submodel (class = "b")
-    prior_string(paste0("normal(", pl_b_m, ",", pl_b_s, ")"),
-                 class = "b", coef = "precip_mm_10_z"),
-    prior_string(paste0("normal(", pq_b_m, ",", pq_b_s, ")"),
-                 class = "b", coef = "Iprecip_mm_10_zE2"),
-    prior_string(paste0("normal(", tl_b_m, ",", tl_b_s, ")"),
-                 class = "b", coef = "temp_c_30_z"),
-    prior_string(paste0("normal(", tq_b_m, ",", tq_b_s, ")"),
-                 class = "b", coef = "Itemp_c_30_zE2"),
-
-    # hu submodel (class = "b", dpar = "hu")
-    prior_string(paste0("normal(", pl_hu_m, ",", pl_hu_s, ")"),
-                 class = "b", dpar = "hu", coef = "precip_mm_10_z"),
-    prior_string(paste0("normal(", pq_hu_m, ",", pq_hu_s, ")"),
-                 class = "b", dpar = "hu", coef = "Iprecip_mm_10_zE2"),
-    prior_string(paste0("normal(", tl_hu_m, ",", tl_hu_s, ")"),
-                 class = "b", dpar = "hu", coef = "temp_c_30_z"),
-    prior_string(paste0("normal(", tq_hu_m, ",", tq_hu_s, ")"),
-                 class = "b", dpar = "hu", coef = "Itemp_c_30_zE2")
-  )
-  
-  return(sp_prior)
+# guard: the stanvars assume b[1:3] / b_hu[1:3] are the env terms in this order
+check_env_order = function(model_formula, model_data) {
+  sdata = make_standata(model_formula, data = model_data, family = hurdle_lognormal())
+  env_cols = c("precip_mm_10_z", "temp_c_30_z", "Itemp_c_30_zE2")
+  for (x in c("X", "X_hu")) {
+    cols = setdiff(colnames(sdata[[x]]), "Intercept")
+    if (!identical(cols[1:3], env_cols)) {
+      stop(paste0(x, " columns are not [", paste(env_cols, collapse = ", "), "]: ", paste(cols, collapse = ", ")))
+    }
+  }
 }
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
@@ -286,39 +239,48 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 # saveRDS(m2_zln_rasi, file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
 # m2_zln_rasi = readRDS(file = here("size_bd_gam/models/size_bd_gam_model_zln_m2_rasi.rds"))
 
-m3_formula = bf(
-  bd_load_co_density ~  1 + 
-    life_stage_simple * taxon_capture +
-    (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
-    (1 | kg_code_3) +
-    (1 | population:life_stage_simple) +
-    (0 + life_stage_simple | population:year),
-  
-  hu ~ 1 + 
-    life_stage_simple * taxon_capture +
-    (precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)) +
-    (1 | kg_code_3) +
-    (1 | population:life_stage_simple) +
-    (0 + life_stage_simple | population:year),
-  
-  sigma ~ 1 + (1 | population) + (1 | kg_code_3)
-)
+# size structure: metamorph baseline (intercept) + SVL smooth over non-metamorphs.
+# numeric-by smooths are uncentered, so the smooth's constant is the non-metamorph
+# offset; adding is_metamorph as well (as in m2) is rank deficient.
+# species without metamorphs (is_not_metamorph all 1) get a plain centered smooth.
+# (1 | kg_code_3) dropped: species span only 2-4 KG zones; population REs absorb site climate.
+build_spp_formula = function(model_data) {
+  svl_term = if (any(model_data$is_metamorph == 1)) {
+    "s(svl_mm, by = is_not_metamorph)"
+  } else {
+    "s(svl_mm)"
+  }
 
-model_svl_by_species = function(model_data, taxon_weather) {
+  rhs = paste("1 +",
+              svl_term,
+              "+ precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2)",
+              "+ (1 | population:life_stage_simple)",
+              "+ (0 + life_stage_simple | population:year)")
+
+  bf(as.formula(paste("bd_load_co100_density ~", rhs)),
+     as.formula(paste("hu ~", rhs)),
+     sigma ~ 1 + (1 | population))
+}
+
+model_svl_by_species = function(model_data, env_stanvars) {
   # check model_data
   species_name = unique(model_data$taxon_capture)
   if (length(species_name) > 1) {
     stop("Multiple taxon_capture values found in model_data, aborting.")
   }
   cat(paste0("Modeling Bd vs SVL for: ", species_name), "\n")
-  
-  m3_spp_prior = build_spp_prior(species_name, taxon_weather)
-  
+
+  # drop unused life stages (e.g. no metamorphs) so RE terms have no empty columns
+  model_data = droplevels(model_data)
+
+  m3_formula = build_spp_formula(model_data)
+  check_env_order(m3_formula, model_data)
+
   m3_zln <- brm(
     formula  =  m3_formula,
     data     = model_data,
     family   = hurdle_lognormal(),
-    prior = m3_spp_prior,
+    stanvars = env_stanvars,
     control = list(adapt_delta = 0.95, max_treedepth = 12),
     chains = 4, iter = 2000, warmup = 1000,
     seed = 124, cores = 4, backend = "cmdstanr"
@@ -332,16 +294,55 @@ model_svl_by_species = function(model_data, taxon_weather) {
   cat("Done.\n")
 }
 
-model_svl_by_species(copa_data, taxon_weather)
-model_svl_by_species(liwa_data, taxon_weather)
-model_svl_by_species(pscr_data, taxon_weather)
-model_svl_by_species(raca_data, taxon_weather)
-model_svl_by_species(racb_data, taxon_weather)
-model_svl_by_species(racl_data, taxon_weather)
-model_svl_by_species(ramu_data, taxon_weather)
-model_svl_by_species(rapi_data, taxon_weather)
-model_svl_by_species(rasi_data, taxon_weather)
-model_svl_by_species(sifl_data, taxon_weather)
+model_svl_by_species(copa_data, env_stanvars)
+model_svl_by_species(liwa_data, env_stanvars)
+model_svl_by_species(pscr_data, env_stanvars)
+model_svl_by_species(raca_data, env_stanvars)
+model_svl_by_species(racb_data, env_stanvars)
+model_svl_by_species(racl_data, env_stanvars)
+model_svl_by_species(ramu_data, env_stanvars)
+model_svl_by_species(rapi_data, env_stanvars)
+model_svl_by_species(rasi_data, env_stanvars)
+model_svl_by_species(sifl_data, env_stanvars)
 
 
+```
+
+## Prior sensitivity
+```{r}
+#| eval: false
+# install.packages("priorsense")
+library(priorsense)
+
+# power-scaling sensitivity of the env slopes to the new-taxon MVN prior.
+# priorsense scales lprior, which includes the stanvars MVN prior.
+# prior_sd / post_sd: posterior sd relative to prior sd (near 1 = data add little)
+env_vars = c("b_precip_mm_10_z", "b_temp_c_30_z", "b_Itemp_c_30_zE2",
+             "b_hu_precip_mm_10_z", "b_hu_temp_c_30_z", "b_hu_Itemp_c_30_zE2")
+
+env_prior_sd = setNames(c(sqrt(diag(cov(new_taxon_b))), sqrt(diag(cov(new_taxon_hu)))),
+                        env_vars)
+
+env_sensitivity = species_list$taxon_capture |>
+  map(function(sp) {
+    fit = readRDS(here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", sp, ".rds")))
+    post_sd = posterior_summary(fit, variable = env_vars)[, "Est.Error"]
+    powerscale_sensitivity(fit, variable = env_vars) |>
+      as_tibble() |>
+      mutate(taxon_capture = sp,
+             prior_sd = env_prior_sd[variable],
+             post_sd = post_sd[variable],
+             post_prior_sd_ratio = post_sd / prior_sd)
+  }) |>
+  list_rbind()
+
+env_sensitivity |>
+  filter(diagnosis != "-")
+
+ggplot(env_sensitivity, aes(x = prior, y = variable, color = diagnosis)) +
+  geom_vline(xintercept = 0.05, linetype = "dashed") +
+  geom_point() +
+  facet_wrap(~ taxon_capture) +
+  theme_classic() +
+  labs(x = "Prior sensitivity (power-scaling)", y = NULL)
 ```
