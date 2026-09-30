@@ -8,7 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, helixcn/phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-16_th10.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-23.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
@@ -21,9 +21,9 @@ bd_model_env_stats = brms_data %>%
             year_last = year(max(date)),
             year_count = n_distinct(year(date)),
             adult_n = sum(life_stage_simple == "adult"),
-            adult_n_pos = sum(life_stage_simple == "adult" & bd_detected_co),
+            adult_n_pos = sum(life_stage_simple == "adult" & bd_detected_co100),
             subadult_n = sum(life_stage_simple == "subadult"),
-            subadult_n_pos = sum(life_stage_simple == "subadult" & bd_detected_co),
+            subadult_n_pos = sum(life_stage_simple == "subadult" & bd_detected_co100),
             .groups = "drop") %>%
   arrange(country,
           taxon_capture) %>%
@@ -58,9 +58,15 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # 
 # m11d_th1_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th1_20260922_234433_with_loo.rds"))
 
-m11d_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th10_20260922_164525_with_loo.rds"))
+# m11d_th10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_11d_m11d_th10_20260922_164525_with_loo.rds"))
 
-model_select = m11d_th10_zln
+# m11d_co10_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co10_20260926_194019_with_loo.rds"))
+# 
+# m11d_co50_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co50_20260926_130018_with_loo.rds"))
+
+m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
+
+model_select = m11d_co100_zln
 
 ```
 
@@ -261,7 +267,7 @@ combined_agg_single = combined_agg %>%
 
 ```
 
-## Obsevations and predictions
+## Observations and predictions
 ```{r}
 
 # # epred draws
@@ -696,9 +702,9 @@ jp_all = read.nexus(file = here("data", "tree-pruner-24db8a87-ec70-4602-967c-075
 # jp_sample_100 = jp_all[sample(1000, 100)]
 jp_sample_100 = jp_all
 
-consensus_100 = consensus(jp_sample_100)
-
-jp_raw = consensus.edges(jp_sample_100, consensus.tree = consensus_100)
+# maximum clade credibility tree: a single sampled tree, so it stays binary and ultrametric.
+# (consensus.edges averaged edge lengths per split, giving root-to-tip depths of 112-287)
+jp_raw = phangorn::maxCladeCred(jp_sample_100)
 
 # plot(jp_raw)
 
@@ -1154,7 +1160,7 @@ precip_30_seq <- seq(min(brms_data$precip_mm_30_day_sum),
 
 
 # scale them using the original parameters
-nd_precip <- model_select$data |>
+nd_precip <- brms_data |>
   group_by(taxon_capture, life_stage_simple) %>%
   summarize(past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
             .groups = "drop") |>
@@ -1262,7 +1268,7 @@ temp_seq   <- seq(min(brms_data$temp_c_30_day_mean),
                   max(brms_data$temp_c_30_day_mean),
                   length.out = 100)
 
-nd_temp <- model_select$data |>
+nd_temp <- brms_data |>
   group_by(taxon_capture, life_stage_simple) %>%
   summarize(past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
             .groups = "drop") |>
