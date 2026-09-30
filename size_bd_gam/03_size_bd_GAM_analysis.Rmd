@@ -87,7 +87,7 @@ metamorph_svl_prev_epred = function(species_fit, cutoff_mm, taxon_capture) {
     
     # aggregate metamorph stats
     prev_met_agg = hu_met |>
-      mutate(prevalence = 1 - plogis(hu)) |>
+      mutate(prevalence = 1 - hu) |>
       median_qi(prevalence, .width = c(0.5, 0.95)) |>
       pivot_wider(id_cols = c(svl_mm, prevalence, is_metamorph),
                   names_from = .width,
@@ -97,10 +97,11 @@ metamorph_svl_prev_epred = function(species_fit, cutoff_mm, taxon_capture) {
   }
   
   
-  # draws for post-metamorphs
+  # draws for post-metamorphs, over the non-metamorph svl range the smooth was fit on
+  svl_notmet = species_data$svl_mm[species_data$life_stage_simple != "metamorph"]
   nd_notmet <- tibble(
-    svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
-                          max(species_data$svl_mm, na.rm = TRUE),
+    svl_mm          = seq(min(svl_notmet, na.rm = TRUE),
+                          max(svl_notmet, na.rm = TRUE),
                           length.out = 200),
     is_metamorph    = 0,
     is_not_metamorph = 1,
@@ -114,7 +115,7 @@ metamorph_svl_prev_epred = function(species_fit, cutoff_mm, taxon_capture) {
   
   # post-metamorph: median + interval over svl sequence
   prev_notmet_agg <- hu_notmet |>
-    mutate(prevalence = 1 - plogis(hu)) |>    # adjust if hu is already on prob scale
+    mutate(prevalence = 1 - hu) |>    # hu (dpar column) is already on the probability scale
     group_by(svl_mm) |>
     median_qi(prevalence, .width = c(0.5, 0.95)) |>
     pivot_wider(id_cols = c(svl_mm, prevalence),
@@ -147,7 +148,7 @@ metamorph_svl_load_epred = function(species_fit, cutoff_mm, taxon_capture) {
   
   # check if at least 1 positive metamorph
   life_stage_counts_positive = species_data %>%
-    filter(bd_load_co_density > 0) %>%
+    filter(bd_load_co100_density > 0) %>%
     group_by(life_stage_simple) %>%
     count()
   
@@ -178,10 +179,11 @@ metamorph_svl_load_epred = function(species_fit, cutoff_mm, taxon_capture) {
     mu_met_agg = tibble(is_metamorph = 1)
   }
   
-  # post-metamorphs
+  # post-metamorphs, over the non-metamorph svl range the smooth was fit on
+  svl_notmet = species_data$svl_mm[species_data$life_stage_simple != "metamorph"]
   nd_notmet <- tibble(
-    svl_mm          = seq(min(species_data$svl_mm, na.rm = TRUE),
-                          max(species_data$svl_mm, na.rm = TRUE),
+    svl_mm          = seq(min(svl_notmet, na.rm = TRUE),
+                          max(svl_notmet, na.rm = TRUE),
                           length.out = 200),
     is_metamorph    = 0,
     is_not_metamorph = 1,
@@ -255,6 +257,8 @@ taxon_list
 
 ## visualize
 ```{r}
+#| fig-height: 12
+#| fig-width: 6
 metamorph_svl_prev_plot = function(svl_agg) {
   all_spp = svl_agg %>%
     select(taxon_capture,
@@ -392,34 +396,5 @@ ggsave(here("size_bd_gam", "gam_figures", "03_metamorph_svl_combined_m3_load.png
 
 p_prev
 p_load
-
-```
-
-# Recreate groups
-```{r}
-hu_draws_groups = hu_draws %>%
-  mutate(life_stage_simple = case_when(
-    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
-    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
-    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
-    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
-  ))
-
-mu_draws_groups = mu_draws %>%
-  mutate(life_stage_simple = case_when(
-    taxon_capture == "rana_cascadae" & svl_mm >= 50 ~ "adult",
-    taxon_capture == "rana_cascadae" & svl_mm < 50 ~ "subadult",
-    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm >= 40 ~ "adult",
-    taxon_capture %in% c("rana_muscosa", "rana_sierrae") & svl_mm < 40 ~ "subadult"
-  ))
-
-hu_groups_agg = hu_draws_groups %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  median_qi(hu, .width = c(.89))
-
-mu_groups_agg = mu_draws_groups %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  median_qi(mu, .width = c(.89))
-
 
 ```
