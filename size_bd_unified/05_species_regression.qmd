@@ -18,8 +18,8 @@ librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio
 # Load models and data
 ```{r}
 # load model
-m11a_zln = readRDS(file = "unified_models/unified_model_results_zln_life_tax_pt2_rgrtaxapt2poplsyrkg3_p10t30.rds")
-model_select = m11a_zln
+m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
+model_select = m11d_co100_zln
 
 # load life history
 ls_in = read_csv(here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
@@ -29,7 +29,9 @@ ls_clean = ls_in %>%
 
 # phylogenetic tree
 jp_phylo_tree = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk"))
-jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = FALSE)
+# correlation matrix (diag = 1) so sd_taxon_capture is on the same scale as sigma
+# and the phylogenetic signal hypotheses below read as Pagel's lambda
+jp_phylo_cov = ape::vcv.phylo(jp_phylo_tree, corr = TRUE)
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 ```
@@ -70,13 +72,17 @@ nd_spp_lss = model_select$data |>
   left_join(nd_env_subadult %>%
               select(-life_stage_simple), by = "taxon_capture")
 
+# include taxon-specific env slopes (fixed + r_taxon_capture) so each species' linpred
+# at its median env uses its own slopes, not the population-average slopes.
+# sigma has no taxon env slopes in m11d, so this is equivalent to NA for sigma.
+re_spp_env = ~ (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture)
 
 # hu contrast
 hu_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "hu",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>%
   ungroup()
 
@@ -98,7 +104,7 @@ mu_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "mu",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>% ungroup()
 
 mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
@@ -110,12 +116,12 @@ mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
   mutate(mu_contrast = subadult - adult,
          contrast = "subadult - adult")
 
-# sigma 
+# sigma (link scale, i.e. log(sigma))
 sigma_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "sigma",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>% ungroup()
 
 sigma_spp_draws = sigma_spp_lss_draws |>
@@ -156,6 +162,7 @@ spp_lss_draws = hu_spp_lss_draws %>%
 
 
 # # load linpred draws
+# # NOTE: 03 uses re_formula = NA, so these draws are not equivalent to the above
 # spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
 ```
@@ -183,12 +190,18 @@ spp_lss_agg = spp_lss_draws %>%
             sigma_lss_sd = sd(sigma),
             .groups = "drop")
 
-spp_agg = spp_lss_agg %>%
+# average across life stages within each draw first, then summarise across draws,
+# so the sd reflects the covariance between adult and subadult draws
+spp_agg = spp_lss_draws %>%
+  group_by(taxon_capture, .draw) %>%
+  summarise(hu = mean(hu),
+            sigma = mean(sigma),
+            .groups = "drop") %>%
   group_by(taxon_capture) %>%
-  summarise(hu_mean = mean(hu_lss_mean),
-            hu_sd = mean(hu_lss_sd),
-            sigma_mean = mean(sigma_lss_mean),
-            sigma_sd = mean(sigma_lss_sd))
+  summarise(hu_mean = mean(hu),
+            hu_sd = sd(hu),
+            sigma_mean = mean(sigma),
+            sigma_sd = sd(sigma))
 
 spp_contrast_agg = spp_lss_draws %>%
   pivot_wider(id_cols = c("taxon_capture", ".draw"),
@@ -224,17 +237,49 @@ data_names = unique(metrics_ls$taxon_capture)
 # Check for mismatches
 setdiff(data_names, mat_names)  # in data but not matrix
 setdiff(mat_names, data_names)  # in matrix but not data
+
+# within-species correlation of estimation error between responses.
+# se() treats each response's sd as independent; large |r| here means
+# the meta-model understates shared measurement error across responses
+spp_error_cor = spp_lss_draws %>%
+  pivot_wider(id_cols = c("taxon_capture", ".draw"),
+              names_from = "life_stage_simple",
+              values_from = c("hu", "mu", "sigma")) %>%
+  mutate(hu = (hu_adult + hu_subadult) / 2,
+         sigma = (sigma_adult + sigma_subadult) / 2,
+         hu_contrast = hu_subadult - hu_adult,
+         mu_contrast = mu_subadult - mu_adult) %>%
+  group_by(taxon_capture) %>%
+  summarise(r_hu_hucontrast = cor(hu, hu_contrast),
+            r_hu_mucontrast = cor(hu, mu_contrast),
+            r_hu_sigma = cor(hu, sigma),
+            r_hucontrast_mucontrast = cor(hu_contrast, mu_contrast),
+            r_hucontrast_sigma = cor(hu_contrast, sigma),
+            r_mucontrast_sigma = cor(mu_contrast, sigma),
+            .groups = "drop")
+
+spp_error_cor %>%
+  pivot_longer(-taxon_capture, names_to = "pair", values_to = "r") %>%
+  ggplot(aes(x = r, y = pair)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(alpha = 0.5) +
+  theme_classic() +
+  labs(x = "Within-species posterior correlation", y = NULL)
 ```
 
 # Model
 ```{r}
+# measurement error via se(sd, sigma = TRUE): y ~ N(mu, sqrt(sigma^2 + sd^2)).
+# equivalent to mi(sd) on the response, but integrates out the latent true values
+# so log_lik is per observation and LOO is valid
 
 m1_lspr = brm(
   mvbf(
-    hu_mean | mi(hu_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    hu_contrast_mean | mi(hu_contrast_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    mu_contrast_mean | mi(mu_contrast_sd)  ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    sigma_mean | mi(sigma_sd) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A))
+    hu_mean | se(hu_sd, sigma = TRUE) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    hu_contrast_mean | se(hu_contrast_sd, sigma = TRUE) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    mu_contrast_mean | se(mu_contrast_sd, sigma = TRUE)  ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    sigma_mean | se(sigma_sd, sigma = TRUE) ~ habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    rescor = FALSE
   ),
   data  = metrics_ls,
   data2 = list(A = jp_phylo_cov),
@@ -244,20 +289,22 @@ m1_lspr = brm(
   warmup = 2000,
   seed = 124,
   cores = 4,
-  backend = "cmdstanr"
+  backend = "cmdstanr",
+  save_pars = save_pars(all = TRUE)
 )
 
-m1_lspr = add_criterion(m1_lspr, "loo")
+m1_lspr = add_criterion(m1_lspr, "loo", moment_match = TRUE)
 
 saveRDS(m1_lspr, file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
 m1_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1_lspr.rds"))
 
 m1b_lspr = brm(
   mvbf(
-    hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-    sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A))
+    hu_mean | se(hu_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    hu_contrast_mean | se(hu_contrast_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    mu_contrast_mean | se(mu_contrast_sd, sigma = TRUE)  ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    sigma_mean | se(sigma_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
+    rescor = FALSE
   ),
   data  = metrics_ls,
   data2 = list(A = jp_phylo_cov),
@@ -266,52 +313,30 @@ m1b_lspr = brm(
   iter = 4000,
   warmup = 2000,
   cores = 4,
-  backend = "cmdstanr"
+  backend = "cmdstanr",
+  save_pars = save_pars(all = TRUE)
 )
 
-m1b_lspr = add_criterion(m1b_lspr, "loo")
+m1b_lspr = add_criterion(m1b_lspr, "loo", moment_match = TRUE)
 
 saveRDS(m1b_lspr, file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
 m1b_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1b_lspr.rds"))
 
-# lognormal for sigma
-m1c_lspr = brm(
-  mvbf(
-    bf(hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-       family = gaussian()),
-    bf(hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-       family = gaussian()),
-    bf(mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-       family = gaussian()),
-    bf(sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + (1 | p | gr(taxon_capture, cov = A)),
-       family = lognormal())
-  ),
-  data  = metrics_ls,
-  data2 = list(A = jp_phylo_cov),
-  control = list(adapt_delta = 0.98),
-  chains = 4,
-  iter = 4000,
-  warmup = 2000,
-  cores = 4,
-  backend = "cmdstanr"
-)
-
-m1c_lspr = add_criterion(m1c_lspr, "loo")
-
-saveRDS(m1c_lspr, file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
-m1c_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1c_lspr.rds"))
+# m1c (lognormal for sigma) removed: sigma_mean is log(sigma) from linpred_draws
+# (link scale, can be negative), so gaussian is the correct family and m1c == m1b
 
 # include development mode
 m1d_lspr = brm(
   mvbf(
-    bf(hu_mean | mi(hu_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+    bf(hu_mean | se(hu_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
        family = gaussian()),
-    bf(hu_contrast_mean | mi(hu_contrast_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+    bf(hu_contrast_mean | se(hu_contrast_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
        family = gaussian()),
-    bf(mu_contrast_mean | mi(mu_contrast_sd)  ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+    bf(mu_contrast_mean | se(mu_contrast_sd, sigma = TRUE)  ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
        family = gaussian()),
-    bf(sigma_mean | mi(sigma_sd) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
-       family = lognormal())
+    bf(sigma_mean | se(sigma_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + development_stage + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    rescor = FALSE
   ),
   data  = metrics_ls,
   data2 = list(A = jp_phylo_cov),
@@ -320,10 +345,11 @@ m1d_lspr = brm(
   iter = 4000,
   warmup = 2000,
   cores = 4,
-  backend = "cmdstanr"
+  backend = "cmdstanr",
+  save_pars = save_pars(all = TRUE)
 )
 
-m1d_lspr = add_criterion(m1d_lspr, "loo")
+m1d_lspr = add_criterion(m1d_lspr, "loo", moment_match = TRUE)
 
 saveRDS(m1d_lspr, file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
 m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
@@ -333,12 +359,11 @@ m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_ls
 # model comparison
 ```{r}
 (loo_comp_out = loo_compare(
-  # m1_lspr,
-  #                           m1b_lspr,
-                            m1c_lspr,
-                            m1d_lspr))
+  m1_lspr,
+  m1b_lspr,
+  m1d_lspr))
 
-bayes_R2(m1b_lspr)
+bayes_R2(m1d_lspr)
 ```
 
 # model evaluation
@@ -348,10 +373,9 @@ summary(model_select)
 plot((model_select), ask = FALSE)
 plot(conditional_effects(model_select), ask = FALSE)
 VarCorr(m1_lspr)
-hyp <- paste("sd_taxon_capture__Intercept^2 /",
-             "(sd_taxon_capture__Intercept^2 + sigma^2) = 0")
-hypothesis(m1_lspr, hyp, class = NULL)
 
+# phylogenetic signal per response: sd_phylo^2 / (sd_phylo^2 + sigma^2)
+# (mv model has per-response sd and sigma; sigma excludes the known se)
 hyp_hu = paste("sd_taxon_capture__humean_Intercept^2 /",
              "(sd_taxon_capture__humean_Intercept^2 + sigma_humean^2) = 0")
 hyp_mu_contrast = paste("sd_taxon_capture__mucontrastmean_Intercept^2 /",
@@ -361,10 +385,16 @@ hyp_hu_contrast = paste("sd_taxon_capture__hucontrastmean_Intercept^2 /",
 hyp_sigma = paste("sd_taxon_capture__sigmamean_Intercept^2 /",
              "(sd_taxon_capture__sigmamean_Intercept^2 + sigma_sigmamean^2) = 0")
 
-ht_hu_contrast = hypothesis(m1b_lspr, hyp_hu_contrast, class = NULL)
-ht_mu_contrast = hypothesis(m1b_lspr, hyp_mu_contrast, class = NULL)
-ht_hu = hypothesis(m1b_lspr, hyp_hu, class = NULL)
-ht_sigma = hypothesis(m1b_lspr, hyp_sigma, class = NULL)
+# all responses in one table
+hypothesis(model_select, c(hu = hyp_hu,
+                           hu_contrast = hyp_hu_contrast,
+                           mu_contrast = hyp_mu_contrast,
+                           sigma = hyp_sigma), class = NULL)
+
+ht_hu_contrast = hypothesis(m1d_lspr, hyp_hu_contrast, class = NULL)
+ht_mu_contrast = hypothesis(m1d_lspr, hyp_mu_contrast, class = NULL)
+ht_hu = hypothesis(m1d_lspr, hyp_hu, class = NULL)
+ht_sigma = hypothesis(m1d_lspr, hyp_sigma, class = NULL)
 
 ht_hu_contrast
 ht_mu_contrast
@@ -377,29 +407,25 @@ pp_check(model_select,
          resp = "humean",
          type = "dens_overlay",
          prefix = "ppc",
-         ndraws = 100) +
-  scale_x_log10()
+         ndraws = 100)
 
 pp_check(model_select,
          resp = "hucontrastmean",
          type = "dens_overlay",
          prefix = "ppc",
-         ndraws = 100) +
-  scale_x_log10()
+         ndraws = 100)
 
 pp_check(model_select,
          resp = "mucontrastmean",
          type = "dens_overlay",
          prefix = "ppc",
-         ndraws = 100) +
-  scale_x_log10()
+         ndraws = 100)
 
 pp_check(model_select,
          resp = "sigmamean",
          type = "dens_overlay",
          prefix = "ppc",
-         ndraws = 100) +
-  scale_x_log10()
+         ndraws = 100)
 
 ```
 
@@ -412,7 +438,7 @@ m_fixed_draws = model_select %>%
            sep = "_", extra = "merge")
 
 ggplot(m_fixed_draws, aes(x = .value, y = term, color = response, fill = response)) +
-  stat_halfeye(alpha = 0.6, .width = c(0.5, 0.89)) +
+  stat_halfeye(alpha = 0.6, .width = c(0.5, 0.89), density = "bounded", normalize = "panels") +
   geom_vline(xintercept = 0, linetype = "dashed") +
   facet_wrap(~ response, scales = "free_x") +
   theme_classic() +
@@ -424,6 +450,10 @@ ggplot(m_fixed_draws, aes(x = .value, y = term, color = response, fill = respons
 
 # explore specific groups
 ```{r}
+#| eval: false
+# stale: written for an earlier meta-model (fit_mv / meta_summary no longer exist).
+# kept for reference; update to model_select and current predictors before running.
+
 # Example: IUCN category effect on hu_mean
 iucn_grid <- expand_grid(
     iucn_redlist_category = unique(meta_summary$iucn_redlist_category),
