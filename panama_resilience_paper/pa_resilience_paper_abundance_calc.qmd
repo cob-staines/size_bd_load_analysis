@@ -23,7 +23,7 @@ Calculate species list and abundance of panama species from 2016 - 2025
 librarian::shelf(tidyverse, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr)
 
 ## Connect to DB
-dbcon = hopToDB("ribbitr", hopReg = FALSE)
+dbcon = hopToDB("railway", hopReg = FALSE)
 
 # table pointers
 db_capture = tbl(dbcon, Id("survey_data", "capture"))
@@ -65,7 +65,8 @@ data_capture = db_capture %>%
          site,
          region,
          country,
-         capture_id) %>%
+         capture_id,
+         visit_id) %>%
   collect() %>%
   mutate(off_transect = ((grepl("off", comments_capture, ignore.case = TRUE) &
                            grepl("transect|time", comments_capture, ignore.case = TRUE)) |
@@ -101,7 +102,8 @@ data_visual = db_ves %>%
          site,
          region,
          country,
-         ves_id) %>%
+         ves_id,
+         visit_id) %>%
   collect() %>%
   mutate(off_transect = (grepl("off", comments_ves, ignore.case = TRUE) &
                            grepl("transect|time", comments_ves, ignore.case = TRUE) |
@@ -136,7 +138,8 @@ data_aural = db_aural %>%
          site,
          region,
          country,
-         aural_id) %>%
+         aural_id,
+         visit_id) %>%
   collect() %>%
   mutate(off_transect = (grepl("off", comments_aural, ignore.case = TRUE) &
                            grepl("transect|time", comments_aural, ignore.case = TRUE) |
@@ -150,6 +153,10 @@ data_aural = db_aural %>%
 
 # Filter data
 ```{r}
+tadpole_only_visits = c("a4860a9d-2ef4-5153-845d-f35ff2a894e1",
+                        "c08795fd-21e9-5ebe-9127-e51788277a2d",
+                        "66299313-1c9a-566b-a2c0-96a7a669fc68")
+
 data_abundance = bind_rows(data_capture,
                            data_visual) %>%
   mutate(count = if_else(is.na(count), 1, count),
@@ -160,15 +167,11 @@ data_abundance = bind_rows(data_capture,
            .default = NA
          )) %>%
   filter(year != 2017,
-         !(life_stage %in% c("tadpole")),
+         !(life_stage %in% c("larva", "eggmass")),
          !(animal_state %in% c("dead")),
          !off_transect,
-         !is.na(taxon))
-
-peace = data_abundance %>%
-  filter(taxon == "silverstoneia_flotator") %>%
-  arrange(date)
-
+         !is.na(taxon),
+         !(visit_id %in% tadpole_only_visits))
 
 data_presence = bind_rows(data_capture,
                           data_visual,
@@ -195,7 +198,8 @@ site_surveys = db_survey %>%
          site %in% c("guabal", "rio_blanco"),
          date >= "2012-01-01",
          date <= "2025-12-31",
-         detection_type %in% c("capture", "visual")
+         detection_type %in% c("capture", "visual"),
+         !(visit_id %in% tadpole_only_visits) # drop tadpole only surveys
          ) %>%
   select(detection_type,
          duration_minutes,
@@ -203,6 +207,7 @@ site_surveys = db_survey %>%
          comments_survey,
          number_observers,
          time_of_day,
+         survey_id,
          site,
          date,
          visit_id,
@@ -227,6 +232,18 @@ surveys_clean = site_surveys %>%
            .default = NA
          )) %>%
   filter(year != 2017)
+
+visits_clean = surveys_clean %>%
+  select(visit_id,
+         distance_surveyed_m,
+         time_of_day,
+         site,
+         date,
+         year,
+         survey_period) %>%
+  distinct() %>%
+  ungroup()
+  
 
 survey_stats_site_year = surveys_clean %>%
   group_by(site, year) %>%
@@ -264,37 +281,101 @@ survey_stats = surveys_clean %>%
 
 # Abundance calc
 ```{r}
-abundance_annual = data_abundance %>%
-  group_by(taxon, year, survey_period) %>%
+abundance_survey = data_abundance %>%
+  group_by(taxon, year, visit_id) %>%
   summarize(total = sum(count),
             .groups = "drop") %>%
-  left_join(survey_stats_year, by = "year") %>%
-  mutate(abundance_km = total * 1000 / total_distance_m)
-
-abundance_annual_wide = abundance_annual %>%
-  arrange(year) %>%
-  pivot_wider(id_cols = "taxon",
-              names_from = "year",
-              values_from = "abundance_km",
+  pivot_wider(id_cols = "visit_id",
+              names_from = "taxon",
+              values_from = "total",
               values_fill = 0) %>%
-  arrange(taxon)
+  full_join(visits_clean %>%
+              select(visit_id), by = "visit_id") %>%
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0))) %>%
+  pivot_longer(cols = -visit_id,
+               names_to = "taxon",
+               values_to = "total") %>%
+  left_join(visits_clean, by = "visit_id") %>%
+  mutate(abundance_km = total * 1000 / distance_surveyed_m)
 
-abundance_sd = abundance_annual %>%
+abundance_survey_period <- abundance_survey %>%
+  mutate(km = distance_surveyed_m / 1000) %>%
   group_by(taxon, survey_period) %>%
-  summarize(annual_n = n(),
-            abundance_annual_sd = sd(abundance_km, na.rm = TRUE),
-            .groups = "drop")
+  summarize(
+    n_surveys = n(),
+    abundance_total = sum(total),
+    km_total = sum(km),
+    abundance_km = abundance_total / km_total,
+    var_er = n_surveys / (km_total^2 * (n_surveys - 1)) *
+             sum(km^2 * (total / km - abundance_km)^2),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    abundance_km_se = sqrt(var_er),
+    cv = abundance_km_se / abundance_km,
+    t_crit = qt(0.975, df = n_surveys - 1),
+    C = exp(t_crit * sqrt(log(1 + cv^2))),
+    abundance_km_ci95_lower = if_else(abundance_total == 0, 0, abundance_km / C),
+    abundance_km_ci95_upper = if_else(abundance_total == 0,
+                                      qchisq(0.975, df = 2) / 2 / km_total,
+                                      abundance_km * C)
+  ) %>%
+  group_by(taxon) %>%
+  mutate(observed = sum(abundance_total) > 1) %>%
+  ungroup() %>%
+  filter(observed,
+         taxon != "pristimantis") %>%
+  arrange(survey_period, taxon) %>%
+  select(survey_period,
+         taxon,
+         abundance_total,
+         n_surveys,
+         km_total,
+         abundance_km,
+         abundance_km_se,
+         abundance_km_ci95_lower,
+         abundance_km_ci95_upper)
 
-abundance_total = data_abundance %>%
-  group_by(taxon, survey_period) %>%
-  summarize(total_count = sum(count),
-            .groups = "drop") %>%
-  left_join(survey_stats, by = "survey_period") %>%
-  mutate(abundance_per_km = total_count * 1000 / total_distance_m) %>%
-  left_join(abundance_sd, by = c("taxon", "survey_period")) %>%
-  arrange(survey_period, taxon)
 
-write.csv(abundance_total, here("pa_resilience_paper_files", paste0("abundance_calc_", today(), ".csv")), row.names = FALSE)
-write.csv(data_presence, here("pa_resilience_paper_files", paste0("presence_", today(), ".csv")), row.names = FALSE)
+#### pick up here ##### ^^^^^
+# 
+# abundance_annual = data_abundance %>%
+#   group_by(taxon, year, survey_period) %>%
+#   summarize(total = sum(count),
+#             .groups = "drop") %>%
+#   left_join(survey_stats_year, by = "year") %>%
+#   mutate(abundance_km = total * 1000 / total_distance_m)
+# 
+# abundance_annual_wide = abundance_annual %>%
+#   arrange(year) %>%
+#   pivot_wider(id_cols = "taxon",
+#               names_from = "year",
+#               values_from = "abundance_km",
+#               values_fill = 0) %>%
+#   arrange(taxon)
+# 
+# abundance_sd = abundance_annual %>%
+#   group_by(taxon, survey_period) %>%
+#   summarize(annual_n = n(),
+#             abundance_annual_sd = sd(abundance_km, na.rm = TRUE),
+#             .groups = "drop")
+# 
+# abundance_total = data_abundance %>%
+#   group_by(taxon, survey_period) %>%
+#   summarize(total_count = sum(count),
+#             .groups = "drop") %>%
+#   left_join(survey_stats, by = "survey_period") %>%
+#   mutate(abundance_per_km = total_count * 1000 / total_distance_m) %>%
+#   left_join(abundance_sd, by = c("taxon", "survey_period")) %>%
+#   arrange(survey_period, taxon)
 
+write.csv(abundance_survey_period, here("panama_resilience_paper", "pa_resilience_paper_files", paste0("abundance_calc_", today(), ".csv")), row.names = FALSE)
+write.csv(data_presence, here("panama_resilience_paper", "pa_resilience_paper_files", paste0("presence_", today(), ".csv")), row.names = FALSE)
+
+```
+
+# disconnect
+```{r}
+
+dbDisconnect(dbcon)
 ```
