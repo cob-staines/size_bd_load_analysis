@@ -23,7 +23,7 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-09-28.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-10-02.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%
@@ -46,6 +46,14 @@ pscr_data = brms_data %>%
   filter(taxon_capture == "pseudacris_crucifer")
 copa_data = brms_data %>%
   filter(taxon_capture == "colostethus_panamansis")
+
+lich_data = brms_data %>%
+  filter(taxon_capture == "lithobates_chiricahuensis")
+lisp_data = brms_data %>%
+  filter(taxon_capture == "lithobates_sphenocephalus")
+novi_data = brms_data %>%
+  filter(taxon_capture == "notophthalmus_viridescens")
+
 liwa_data = brms_data %>%
   filter(taxon_capture == "lithobates_warszewitschii")
 sifl_data = brms_data %>%
@@ -282,7 +290,7 @@ model_svl_by_species = function(model_data, env_stanvars) {
     family   = hurdle_lognormal(),
     stanvars = env_stanvars,
     control = list(adapt_delta = 0.95, max_treedepth = 12),
-    chains = 4, iter = 2000, warmup = 1000,
+    chains = 4, iter = 4000, warmup = 2000,
     seed = 124, cores = 4, backend = "cmdstanr"
   )
   
@@ -295,6 +303,11 @@ model_svl_by_species = function(model_data, env_stanvars) {
 }
 
 model_svl_by_species(copa_data, env_stanvars)
+
+model_svl_by_species(lich_data, env_stanvars)
+model_svl_by_species(lisp_data, env_stanvars)
+model_svl_by_species(novi_data, env_stanvars)
+
 model_svl_by_species(liwa_data, env_stanvars)
 model_svl_by_species(pscr_data, env_stanvars)
 model_svl_by_species(raca_data, env_stanvars)

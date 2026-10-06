@@ -19,7 +19,10 @@ librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork, arrow)
 
 # taxon names
 taxon_list = list("colostethus_panamansis",
+                  "lithobates_chiricahuensis",
+                  "lithobates_sphenocephalus",
                   "lithobates_warszewitschii",
+                  "notophthalmus_viridescens",
                   "pseudacris_crucifer",
                   "rana_cascadae",
                   "rana_catesbeiana",
@@ -34,7 +37,10 @@ model_list = purrr::map(taxon_list, ~readRDS(file = here(paste0("size_bd_gam/mod
 
 # subadult cutoffs
 co_list = c(18.8,
+            57,
+            51,
             35,
+            NA,
             20,
             50,
             95,
@@ -257,7 +263,7 @@ taxon_list
 
 ## visualize
 ```{r}
-#| fig-height: 12
+#| fig-height: 16
 #| fig-width: 6
 metamorph_svl_prev_plot = function(svl_agg) {
   all_spp = svl_agg %>%
