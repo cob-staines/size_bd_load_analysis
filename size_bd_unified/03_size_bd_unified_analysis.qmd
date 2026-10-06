@@ -136,13 +136,17 @@ nd_spp_lss = model_select$data |>
   left_join(nd_env_subadult %>%
               select(-life_stage_simple), by = "taxon_capture")
 
+# include taxon-specific env slopes (fixed + r_taxon_capture) so each species' linpred
+# at its median env uses its own slopes, not the population-average slopes (as in 05).
+# contrasts are unaffected (slopes do not vary by life stage); sigma has no env terms.
+re_spp_env = ~ (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture)
 
 # hu contrast
 hu_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "hu",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>%
   ungroup()
 
@@ -164,7 +168,7 @@ mu_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "mu",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>% ungroup()
 
 mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
@@ -181,7 +185,7 @@ sigma_spp_lss_draws = model_select |>
   linpred_draws(
     newdata    = nd_spp_lss,
     dpar       = "sigma",
-    re_formula = NA
+    re_formula = re_spp_env
   ) %>% ungroup()
 
 sigma_spp_draws = sigma_spp_lss_draws |>
@@ -1148,25 +1152,21 @@ precip_10_sc = scale(brms_data$precip_mm_10_day_sum)
 precip_30_sc = scale(brms_data$precip_mm_30_day_sum)
 temp_30_sc = scale(brms_data$temp_c_30_day_mean)
 
-# define sequences over real-world ranges
-precip_10_seq <- seq(min(brms_data$precip_mm_10_day_sum),
-                  max(brms_data$precip_mm_10_day_sum),
-                  length.out = 100)
+# use taxon-specific env slopes (re_spp_env, defined in Linpred Draws) so each species'
+# curve uses its own slopes, not the population-average slopes.
+# note: the previous re_formula ~ (1 | taxon_capture:life_stage_simple) is not a model
+# term, so brms dropped it and those curves were equivalent to re_formula = NA
 
-precip_30_seq <- seq(min(brms_data$precip_mm_30_day_sum),
-                  max(brms_data$precip_mm_30_day_sum),
-                  length.out = 100)
-
-
-
-# scale them using the original parameters
+# species-specific sequences over each species' observed range (avoid extrapolating
+# species slopes), holding temperature at the species median
 nd_precip <- brms_data |>
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarize(past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
-            .groups = "drop") |>
-  cross_join(tibble(precip_mm_10_day_sum = precip_10_seq)) |>
+  group_by(taxon_capture) |>
+  reframe(precip_mm_10_day_sum = seq(min(precip_mm_10_day_sum),
+                                     max(precip_mm_10_day_sum),
+                                     length.out = 100),
+          temp_c_30_day_mean = median(temp_c_30_day_mean)) |>
+  cross_join(tibble(life_stage_simple = c("adult", "subadult"))) |>
   mutate(
-    temp_c_30_day_mean   = remove_scale(0, temp_30_sc),
     precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
     temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc)
   )
@@ -1176,10 +1176,13 @@ hu_draws_precip <- model_select |>
   linpred_draws(
     newdata    = nd_precip,
     dpar       = "hu",
-    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+    re_formula = re_spp_env
   )
 
+# average life stages on the link scale within each draw (as for species prevalence)
 hu_agg_precip = hu_draws_precip |>
+  group_by(taxon_capture, precip_mm_10_day_sum, .draw) |>
+  summarise(hu = mean(hu), .groups = "drop") |>
   mutate(prevalence = 1 - plogis(hu)) |>
   group_by(taxon_capture, precip_mm_10_day_sum) |>
   median_qi(prevalence) %>%
@@ -1190,10 +1193,12 @@ mu_draws_precip <- model_select |>
   linpred_draws(
     newdata    = nd_precip,
     dpar       = "mu",
-    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+    re_formula = re_spp_env
   )
 
 mu_agg_precip = mu_draws_precip |>
+  group_by(taxon_capture, precip_mm_10_day_sum, .draw) |>
+  summarise(mu = mean(mu), .groups = "drop") |>
   group_by(taxon_capture, precip_mm_10_day_sum) |>
   median_qi(mu) %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
@@ -1264,19 +1269,18 @@ p_precip_mu
 
 ### Temp
 ```{r}
-temp_seq   <- seq(min(brms_data$temp_c_30_day_mean),
-                  max(brms_data$temp_c_30_day_mean),
-                  length.out = 100)
-
+# species-specific sequences over each species' observed range, holding precipitation
+# at the species median (re_spp_env defined in precip chunk)
 nd_temp <- brms_data |>
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarize(past_year_weekly_tempurature_max_c_sd = median(past_year_weekly_tempurature_max_c_sd),
-            .groups = "drop") |>
-  cross_join(tibble(temp_c_30_day_mean = temp_seq)) |>
+  group_by(taxon_capture) |>
+  reframe(temp_c_30_day_mean = seq(min(temp_c_30_day_mean),
+                                   max(temp_c_30_day_mean),
+                                   length.out = 100),
+          precip_mm_10_day_sum = median(precip_mm_10_day_sum)) |>
+  cross_join(tibble(life_stage_simple = c("adult", "subadult"))) |>
   mutate(
-    precip_mm_10_day_sum   = remove_scale(0, precip_10_sc),
     precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
-    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc),
+    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc)
   )
 
 
@@ -1285,10 +1289,13 @@ hu_draws_temp <- model_select |>
   linpred_draws(
     newdata    = nd_temp,
     dpar       = "hu",
-    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+    re_formula = re_spp_env
   )
 
+# average life stages on the link scale within each draw (as for species prevalence)
 hu_agg_temp = hu_draws_temp |>
+  group_by(taxon_capture, temp_c_30_day_mean, .draw) |>
+  summarise(hu = mean(hu), .groups = "drop") |>
   mutate(prevalence = 1 - plogis(hu)) |>
   group_by(taxon_capture, temp_c_30_day_mean) |>
   median_qi(prevalence) %>%
@@ -1299,10 +1306,12 @@ mu_draws_temp <- model_select |>
   linpred_draws(
     newdata    = nd_temp,
     dpar       = "mu",
-    re_formula = ~ (1 | taxon_capture:life_stage_simple)
+    re_formula = re_spp_env
   )
 
 mu_agg_temp = mu_draws_temp |>
+  group_by(taxon_capture, temp_c_30_day_mean, .draw) |>
+  summarise(mu = mean(mu), .groups = "drop") |>
   group_by(taxon_capture, temp_c_30_day_mean) |>
   median_qi(mu) %>%
   mutate(species = get_species_name(taxon_capture, newline = TRUE))
