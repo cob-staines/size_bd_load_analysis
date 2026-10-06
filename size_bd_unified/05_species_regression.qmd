@@ -162,7 +162,8 @@ spp_lss_draws = hu_spp_lss_draws %>%
 
 
 # # load linpred draws
-# # NOTE: 03 uses re_formula = NA, so these draws are not equivalent to the above
+# # NOTE: 03 now uses the same re_spp_env, so these draws are equivalent to the above
+# # (only if 03 has been re-run since that change)
 # spp_lss_draws = read_parquet(here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
 ```
