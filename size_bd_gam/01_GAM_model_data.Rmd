@@ -1,0 +1,136 @@
+---
+title: "01_GAM_model_data"
+output: html_document
+---
+
+Run order: `00_GAM_survey_data.Rmd` (samples and GAM site registry) ->
+`python/environmental_timeseries_pull/update_env_cache.py` with both registries ->
+this script (climate and KG joins, model data).
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, janitor, terra, arrow)
+
+source(here("size_bd_unified", "env_functions.R"))
+
+bd_gam_clean = readRDS(here("size_bd_gam", "intermediates", "bd_survey_gam_clean.rds"))
+
+```
+
+# Environmental data
+```{r}
+#| warning: false
+
+# same climate cache and rolling windows as the unified pipeline (env_functions.R)
+site_cells = read_site_cells(here("size_bd_gam", "intermediates", "site_registry_gam_cells.csv"),
+                             bd_gam_clean$site)
+
+env_agg_all = build_env_agg(unique(site_cells$cell_id))
+
+bd_gam_env = join_env(bd_gam_clean, site_cells, env_agg_all)
+
+# env standardization from the unified model data, so env slopes (and the env prior built from
+# m11d co100) are on the same scale. must be the data file m11d co100 was fit to
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
+
+unified_env_scale = list(
+  precip_mean = mean(brms_data$precip_mm_10_day_sum),
+  precip_sd = sd(brms_data$precip_mm_10_day_sum),
+  temp_mean = mean(brms_data$temp_c_30_day_mean),
+  temp_sd = sd(brms_data$temp_c_30_day_mean))
+
+rm(brms_data)
+
+brms_data = bd_gam_env %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("metamorph", "subadult", "adult")),
+         is_metamorph = as.numeric(life_stage_simple == "metamorph"),
+         is_not_metamorph = as.numeric(life_stage_simple != "metamorph"),
+         precip_mm_10_z = (precip_mm_10_day_sum - unified_env_scale$precip_mean) / unified_env_scale$precip_sd,
+         temp_c_30_z = (temp_c_30_day_mean - unified_env_scale$temp_mean) / unified_env_scale$temp_sd)
+
+```
+
+# KG zones
+```{r}
+# use the unified pipeline's site-level KG assignments (size_bd_unified/01_model_data.Rmd)
+unified_sites_kg = read_csv(here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv")) %>%
+  mutate(site = as.character(site)) %>%
+  select(site,
+         kg_id,
+         kg_code_1,
+         kg_code_2,
+         kg_code_3)
+
+# fallback: extract KG for any GAM sites not in the unified site table, as in the unified pipeline
+kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
+  select(-rgb) %>%
+  rename_with(function(x) { paste0("kg_", x) })
+
+missing_sites = brms_data %>%
+  filter(!(site %in% unified_sites_kg$site)) %>%
+  group_by(site) %>%
+  summarise(site_latitude = mean(site_latitude, na.rm = TRUE),
+            site_longitude = mean(site_longitude, na.rm = TRUE),
+            .groups = "drop")
+
+if (nrow(missing_sites) > 0) {
+  kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
+
+  missing_sites_kg = missing_sites %>%
+    bind_cols(extract(kg_rast, cbind(lon = missing_sites$site_longitude,
+                                     lat = missing_sites$site_latitude))) %>%
+    dplyr::rename(kg_id = koppen_geiger_0p00833333) %>%
+    mutate(kg_id = if_else(kg_id == 29, 19, kg_id)) %>%
+    left_join(kg_key, by = "kg_id") %>%
+    select(site,
+           kg_id,
+           kg_code_1,
+           kg_code_2,
+           kg_code_3)
+
+  unified_sites_kg = bind_rows(unified_sites_kg, missing_sites_kg)
+}
+
+missing_sites
+
+brms_data = brms_data %>%
+  left_join(unified_sites_kg, by = "site")
+
+```
+
+# checks
+```{r}
+check_na_cols = c("bd_load_co100_density",
+                  "life_stage_simple",
+                  "taxon_capture",
+                  "svl_mm",
+                  "precip_mm_10_z",
+                  "temp_c_30_z",
+                  "kg_code_3",
+                  "population",
+                  "date",
+                  "year")
+
+(na_col_check = brms_data %>%
+  summarise(across(all_of(check_na_cols), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "n_na"))
+
+if (sum(na_col_check$n_na) > 0) {
+  print(filter(na_col_check, n_na > 0))
+  stop("NAs found in model variable columns. Please review.")
+}
+
+```
+
+# save data
+```{r}
+save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))
+
+```

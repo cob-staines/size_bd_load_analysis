@@ -23,7 +23,7 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-10-02.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-10-28.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%

@@ -21,17 +21,19 @@ value, source, pulled_at)
 A cell-date is "covered" once it has a cache row; rows with value NaN record
 dates the product returned no data for, so they are not requested again.
 
-Registry CSV (written by size_bd_unified/00_survey_data.Rmd)
+Registry CSV (written by size_bd_unified/00_survey_data.Rmd and size_bd_gam/00_GAM_survey_data.Rmd)
     site, latitude, longitude, date_min, date_max
 Each site needs [date_min - buffer_days, date_max]; a cell needs the union of its
 sites' windows. For each registry, the site -> cell lookup is written next to it
 as <registry>_cells.csv.
 
 Usage (from this directory, conda env "ribbitr")
-    # report what would be pulled
-    python update_env_cache.py --registry ../../size_bd_unified/intermediates/site_registry.csv --dry-run
+    # report what would be pulled for the unified and GAM pipelines
+    python update_env_cache.py --registry ../../size_bd_unified/intermediates/site_registry.csv \
+        ../../size_bd_gam/intermediates/site_registry_gam.csv --dry-run
     # pull it
-    python update_env_cache.py --registry ../../size_bd_unified/intermediates/site_registry.csv
+    python update_env_cache.py --registry ../../size_bd_unified/intermediates/site_registry.csv \
+        ../../size_bd_gam/intermediates/site_registry_gam.csv
     # one-off: seed the cache from an earlier site-based pull
     python update_env_cache.py --seed outputs/all_sites_combined_chirps_chirts_2026-09-11.csv
 """
