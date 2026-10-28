@@ -35,6 +35,7 @@ rabo_clean = kupferberg_raw %>%
            svl_mm >= 38 ~ "adult",
            svl_mm < 38 ~ "subadult"),
          date = as.Date(eventdate),
+         # Ze is per swab (per-reaction quantity x extract dilution, quantityDetected x dilution).
          # zoospore equivalents -> ITS copies (x60, SNARL estimate for Bd in R. muscosa/sierrae)
          bd_its_copies = Ze * 60,
          taxon_capture = tolower(paste0(Genus, "_", species)),
@@ -177,6 +178,7 @@ ralu_clean = ralu_raw[[4]] %>%
                                            "ADULT" ~ "adult",
                                            "JUVENILE" ~ "subadult",
                                            "METAMORPH" ~ "metamorph"),
+         # actual_bd_load is per swab (per-reaction quantity already corrected for dilution).
          # zoospore equivalents -> ITS copies (x60, SNARL estimate for Bd in R. muscosa/sierrae)
          bd_its_copies = actual_bd_load * 60,
          sex = tolower(sex),
@@ -571,7 +573,7 @@ bofa_clean = bofa_raw %>%
       svl_mm >= 63 ~ "adult",
       .default = NA),
     # single qPCR replicate per sample, as for other datasets: Q1, or Q2 where Q1 failed ("N/A").
-    # samples with no value in either replicate are treated as negative
+    # samples with no value in either replicate are negatives (confirmed with the data source)
     bd_its_copies = coalesce(suppressWarnings(as.numeric(bd_q1)), suppressWarnings(as.numeric(bd_q2))),
     bd_its_copies = if_else(is.na(bd_its_copies), 0, bd_its_copies),
     taxon_capture = "boana_faber",
@@ -929,13 +931,13 @@ ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = past_year_weekly_precipitati
 ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = temp_c_30_day_mean, color = region)) +
   geom_point(alpha = 0.2)
 
-ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = log(bd_load_co_density))) +
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = log(bd_load_co100_density))) +
   geom_point(alpha = 0.2)
 
-ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load_co_density), color = taxon_capture)) +
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
   geom_point(alpha = 0.05)
 
-ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co_density), color = taxon_capture)) +
+ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
   geom_point(alpha = 0.05)
 ```
 
@@ -956,7 +958,7 @@ ggplot(sites_kg, aes(x = kg_code_3)) +
 
 ```
 
-# investigate bias in species absolute loads and env data
+# sampling coverage by species: projects, climate zones and environmental ranges
 ```{r}
 # who is missing projects?
 peace = brms_data %>%
@@ -990,120 +992,5 @@ brms_data |>
        x = NULL, y = "30-day mean temperature (°C)") +
   theme_minimal()
 
-# compute taxon-level means
-taxon_env_load = brms_data |>
-  group_by(taxon_capture) |>
-  summarise(
-    mean_precip    = mean(precip_mm_10_day_sum, na.rm = TRUE),
-    mean_temp      = mean(temp_c_30_day_mean, na.rm = TRUE),
-    mean_prevalence = mean(bd_detected_co, na.rm = TRUE),
-    mean_load      = mean(log1p(bd_load_co_density[bd_detected_co]), na.rm = TRUE),  # log scale
-    n              = n(),
-    .groups        = "drop"
-  )
-
-# prevalence vs environment
-p_prev_precip = ggplot(taxon_env_load, aes(x = mean_precip, y = mean_prevalence)) +
-  geom_point(aes(size = n)) +
-  geom_smooth(method = "lm", se = TRUE) +
-  # geom_text_repel(aes(label = taxon_capture), size = 3) +
-  labs(x = "Species mean precipitation (mm)",
-       y = "Species mean prevalence",
-       title = "Between-taxon: prevalence vs precipitation") +
-  theme_minimal()
-
-p_prev_temp = ggplot(taxon_env_load, aes(x = mean_temp, y = mean_prevalence)) +
-  geom_point(aes(size = n)) +
-  geom_smooth(method = "lm", se = TRUE) +
-  # geom_text_repel(aes(label = taxon_capture), size = 3) +
-  labs(x = "Species mean temperature (°C)",
-       y = "Species mean prevalence",
-       title = "Between-taxon: prevalence vs temperature") +
-  theme_minimal()
-
-# load vs environment (log scale, non-zero only)
-p_load_precip = brms_data |>
-  filter(bd_load_co_density > 0) |>
-  group_by(taxon_capture) |>
-  summarise(
-    mean_precip = mean(precip_mm_10_day_sum, na.rm = TRUE),
-    mean_load   = mean(log(bd_load_co_density), na.rm = TRUE),
-    n           = n(),
-    .groups     = "drop"
-  ) |>
-  ggplot(aes(x = mean_precip, y = mean_load)) +
-  geom_point(aes(size = n)) +
-  geom_smooth(method = "lm", se = TRUE) +
-  # geom_text_repel(aes(label = taxon_capture), size = 3) +
-  labs(x = "Species mean precipitation (mm)",
-       y = "Species mean log load (non-zero)",
-       title = "Between-taxon: load vs precipitation") +
-  theme_minimal()
-
-p_load_temp = brms_data |>
-  filter(bd_load_co_density > 0) |>
-  group_by(taxon_capture) |>
-  summarise(
-    mean_temp = mean(temp_c_30_day_mean, na.rm = TRUE),
-    mean_load = mean(log(bd_load_co_density), na.rm = TRUE),
-    n         = n(),
-    .groups   = "drop"
-  ) |>
-  ggplot(aes(x = mean_temp, y = mean_load)) +
-  geom_point(aes(size = n)) +
-  geom_smooth(method = "lm", se = TRUE) +
-  # geom_text_repel(aes(label = taxon_capture), size = 3) +
-  labs(x = "Species mean temperature (°C)",
-       y = "Species mean log load (non-zero)",
-       title = "Between-taxon: load vs temperature") +
-  theme_minimal()
-
-(p_prev_precip + p_prev_temp) / (p_load_precip + p_load_temp)
-
-```
-
-# hylodes comparison
-```{r}
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-05-30.RData"))
-
-hyph = brms_data %>%
-  filter(taxon_capture == "hylodes_phyllodes") %>%
-  mutate(year = as.factor(year(date))) %>%
-  arrange(year)
-
-hyph_compare = hyph %>%
-  group_by(year) %>%
-  summarize(prevalence = sum(bd_detected_co)/n(),
-            median_pos = median(bd_load_co[bd_detected_co]),
-            mean_pos = mean(bd_load_co[bd_detected_co]))
-
-ggplot(hyph, aes(x = year, y = log10(1 + bd_load_co), alpha = 0.25)) +
-  geom_point()
-
-ggplot(hyph, aes(x = year, y = bd_load_co, alpha = 0.25)) +
-  geom_point()
-
-ggplot(hyph, aes(x=bd_its_copies)) +
-  geom_density() +
-  facet_wrap("year") +
-  xlim(0, 50)
-
-
-```
-# cutoff sensitivity
-```{r}
-ggplot(brms_data, aes(x = bd_its_copies)) +
-  geom_histogram() +
-  scale_x_log10() +
-  facet_grid(taxon_capture ~ ., scales = "free_y")
-
-th = 1
-
-sens_anal = brms_data %>%
-  group_by(taxon_capture) %>%
-  summarize(p_zero = sum(bd_its_copies == 0) / n(),
-            p_mid = sum(bd_its_copies > 0 & bd_its_copies < th) / n(),
-            p_high = sum(bd_its_copies >= th) / n(),
-            .groups = "drop")
 
 ```
