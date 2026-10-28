@@ -19,42 +19,34 @@ librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/r
 ## Datasets
 ### RABO
 ```{r}
-# Amphibian Disease Portal
-adp_raw = read_csv(here("data", "amphibian_disease_data_processed.csv"))
+# Kupferberg et al. 2021 (doi:10.1002/eco.2395) skin swabs only. qPCR by the Briggs (UCSB) and
+# Catenazzi (FIU) labs, both reported as zoospore equivalents at 80x dilution. Belasen et al. and
+# the Amphibian Disease Portal records were not used: they largely duplicate these samples and
+# add data from other labs/standards
+kupferberg_raw = import(here("data", "Kupferberg_et_al._2021_doi10.1002_eco.2395.xlsx"), which = "SkinSwabSamples")
 
-adp_filter = adp_raw %>%
-  filter(!is.na(length),
-         !is.na(decimalLatitude),
-         diseaseTested == "Bd",
-         testMethod %in% c("quantitative PCR", "realtime PCR"),
-         basisOfRecord == "LivingSpecimen")
-
-adp_group = adp_filter %>%
-  group_by(projectId, diagnosticLab, family, order, genus, specificEpithet, length >= 38) %>%
-  count()
-
-# peace = adp_filter %>%
-#   select(testMethod) %>%
-#   distinct()
-
-adp_select = adp_filter %>%
-  filter(genus == "Rana",
-         specificEpithet == "boylii",
-         diagnosticLab == "Briggs Lab, University of California Santa Barbara")
-
-rabo_clean = adp_select %>%
+rabo_clean = kupferberg_raw %>%
+  filter(species == "boylii",
+         stage %in% c("JUV", "Adult"),
+         !is.na(length)) %>%
+  dplyr::rename(sample_id = materialSampleID) %>%
   mutate(svl_mm = length,
          life_stage_simple = case_when(
            svl_mm >= 38 ~ "adult",
            svl_mm < 38 ~ "subadult"),
-         date = as.Date(verbatimEventDate),
+         date = as.Date(eventdate),
          # zoospore equivalents -> ITS copies (x60, SNARL estimate for Bd in R. muscosa/sierrae)
-         bd_its_copies = quantityDetected * as.numeric(dilutionFactor) * 60,
-         taxon_capture = "rana_boylii",
-         site = tolower(gsub(",", "", gsub(" ", "_", locality))),
+         bd_its_copies = Ze * 60,
+         taxon_capture = tolower(paste0(Genus, "_", species)),
+         site = tolower(gsub(",", "", gsub(" ", "_", LocalityStreamReach))),
+         site = recode_values(site,
+                              c("coyote", "grapevinespring") ~ "coyote_grapevine",
+                              default = site),
          region = "california",
          country = "usa",
-         project = "RABO")
+         project = "kupferberg2022")
+
+write_csv(rabo_clean, here("data", "rabo_clean.csv"))
 
 rabo_sites = rabo_clean %>%
   group_by(site) %>%
@@ -62,11 +54,10 @@ rabo_sites = rabo_clean %>%
             site_longitude = mean(decimalLongitude, na.rm = TRUE))
 
 rabo_valid = rabo_clean %>%
-  select(taxon_capture,
+  select(sample_id,
+         taxon_capture,
          date,
          site,
-         # dilutionFactor,
-         # quantityDetected,
          bd_its_copies,
          life_stage_simple,
          sex,
@@ -100,8 +91,12 @@ raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv
     region = "W",
     country = "usa",
     project = "RACA",
-    taxon_capture = "rana_cascadae") %>%
-  filter(!is.na(bd_its_copies))
+    taxon_capture = "rana_cascadae",
+    sample_id = paste0(bd_swab_id, "_", svl_mm)) %>%
+  filter(!is.na(bd_its_copies)) %>%
+  group_by(sample_id) %>%
+  slice_head(n = 1) %>%
+  ungroup()
 
 
 raca_sites = raca_clean %>%
@@ -128,7 +123,8 @@ raca_sites_ll = raca_sites %>%
 
 raca_valid = raca_clean %>%
   left_join(raca_sites_ll, by = "site") %>%
-  select(taxon_capture,
+  select(sample_id,
+         taxon_capture,
          date,
          site,
          bd_its_copies,
@@ -170,7 +166,8 @@ ralu_sites_ll = ralu_sites %>%
 
 ralu_clean = ralu_raw[[4]] %>%
   clean_names() %>%
-  dplyr::rename(life_stage = age_class) %>%
+  dplyr::rename(life_stage = age_class,
+                sample_id = unique_id_frog) %>%
   mutate(taxon_capture = "rana_luteiventris",
          date = as.Date(bd_sample_date),
          site = tolower(pond_name),
@@ -194,7 +191,8 @@ ralu_clean = ralu_raw[[4]] %>%
 
 ralu_valid = ralu_clean %>%
   left_join(ralu_sites_ll, by = "site") %>%
-  select(taxon_capture,
+  select(sample_id,
+         taxon_capture,
          date,
          site,
          bd_its_copies,
@@ -222,7 +220,8 @@ usgs_clean = usgs_raw %>%
          svl_mm = body_length,
          life_stage = age,
          region = reg,
-         bd_its_copies = copy_num) %>%
+         bd_its_copies = copy_num,
+         sample_id = swab_id) %>%
   mutate(taxon_capture = tolower(gsub(" ", "_", scientific_name)),
          life_stage_simple = tolower(life_stage),
          life_stage_simple = recode_values(life_stage_simple,
@@ -231,11 +230,15 @@ usgs_clean = usgs_raw %>%
          date = mdy(collection_date),
          site = paste0("usgs_", site_id),
          project = "usgs",
-         country = "usa") %>%
+         country = "usa",
+         sample_id = paste0(date, "_", sample_id)) %>%
   filter(!is.na(taxon_capture),
          !is.na(bd_its_copies),
          !is.na(svl_mm),
-         life_stage_simple %in% c("subadult", "adult"))
+         life_stage_simple %in% c("subadult", "adult")) %>%
+  group_by(sample_id) %>%
+  slice_head(n = 1) %>%
+  ungroup()
 
 usgs_taxon_valid = usgs_clean %>%
   group_by(taxon_capture) %>%
@@ -248,7 +251,8 @@ usgs_taxon_valid = usgs_clean %>%
 
 usgs_valid = usgs_clean %>%
   filter(taxon_capture %in% usgs_taxon_valid$taxon_capture) %>%
-  select(taxon_capture,
+  select(sample_id,
+         taxon_capture,
          svl_mm,
          sex,
          life_stage_simple,
@@ -266,6 +270,8 @@ usgs_spp = usgs_valid %>%
   group_by(taxon_capture,
            life_stage_simple) %>%
   count()
+
+peace = get_dupes(usgs_clean, sample_id)
 
 ```
 
@@ -505,8 +511,7 @@ bd_sample_valid = bd_life_stage %>%
   group_by(capture_id) %>%
   slice_sample(n = 1, seed = 97) %>%
   ungroup() %>%
-  select(sample_id,
-         bd_detected,
+  select(bd_detected,
          bd_its1_copies_per_swab,
          sample_name,
          capture_id,
@@ -529,8 +534,10 @@ bd_sample_valid = bd_life_stage %>%
 
 # final data selection and cleaning for model
 ribbitr_valid = bd_sample_valid %>%
-  dplyr::rename(bd_its_copies = bd_its1_copies_per_swab) %>%
-  select(bd_its_copies,
+  dplyr::rename(bd_its_copies = bd_its1_copies_per_swab,
+                sample_id = sample_name) %>%
+  select(sample_id,
+         bd_its_copies,
          taxon_capture,
          life_stage,
          life_stage_simple,
@@ -591,7 +598,8 @@ bofa_sites = bofa_clean %>%
 
 bofa_valid = bofa_clean %>%
   left_join(bofa_sites, by = "site") %>%
-  select(taxon_capture,
+  select(sample_id,
+         taxon_capture,
          date,
          site,
          site_latitude,
@@ -638,6 +646,10 @@ bd_model = bind_rows(rabo_valid,
   # the Qiagen-RZ pipeline and ~1-3 template copies per reaction (rz-snarl-qpcr-comparison).
   # co300 and co1000 (PrepMan-SNARL 50% detection) are sensitivity analyses.
   mutate(year = year(date),
+         # harmonise sex labels across sources (F/Female/f, M/Male/m; U/Unknown/not determined/NA)
+         sex = case_when(tolower(sex) %in% c("f", "female") ~ "female",
+                         tolower(sex) %in% c("m", "male") ~ "male",
+                         .default = "unknown"),
          bd_load_co100 = if_else(bd_its_copies < 100,
                               0,
                               bd_its_copies),
@@ -737,6 +749,8 @@ site_pop_dist <- site_dist_mat |>
          ) %>%
   arrange(distance_km)
 
+peace = get_dupes(bd_model, sample_id)
+(peace)
 ```
 ## Environmental data
 To support comparing Bd prevalence and loads between sites and species across a range of environmental conditions, I incorporated local (~5 km) daily maximum temperature (CHIRTS) and daily precipitation (CHIRPS) time series. Following Sonn et al. 2019 [sonn2019effects], I created 15-day and 30-day means (for tempurature) and sums (for precipitation). Preliminary model fitting showed stronger relationships between Bd prevalence and 15-day lag products, while Bd load showed stronger relationships with 30-day lag products, similar to Sonn et al. 2019.

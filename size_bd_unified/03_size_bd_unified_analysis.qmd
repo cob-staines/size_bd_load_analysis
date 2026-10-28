@@ -899,6 +899,143 @@ ggplot(density_mat_all, aes(x = density,
 #   facet_grid(. ~ life_stage_simple)
 ```
 
+# Sex composition check
+```{r}
+# post hoc check (supplementary) of whether the sex composition of sampled adults could
+# change the sign of the subadult - adult difference. subadult sex is mostly unknown, so
+# subadults (S) are compared with adult males (M) and adult females (F) from observed data.
+# whatever the adult sex ratio, the adult value lies between M and F, so the sign of
+# S - adult can change with sex ratio only if S lies between M and F, i.e. if
+# (S - M) and (S - F) have opposite signs.
+#   raw: pooled over each species' data
+#   matched: mean of within population-year differences, using only population-years with
+#     subadults, adult males and adult females, which removes most confounding of sex
+#     with population and time
+#   flag: "robust" (S - M and S - F share a sign), "sex-sensitive" (opposite signs), or
+#     "not assessable" (too few adults of known sex / matched population-years)
+# prevalence: detection above the model cutoff; load: mean natural log load density of
+# positives (as mu). observed values ignore model structure, so raw signs can differ from
+# the modeled contrast; the modeled sign is shown for reference.
+
+stopifnot(all(brms_data$sex %in% c("female", "male", "unknown")))  # cleaned in 01
+
+min_n_sex = 10         # minimum adult males and adult females (raw)
+min_n_matched = 3      # minimum per group within a population-year (matched)
+min_popyr_matched = 3  # minimum matched population-years
+
+sex_data = brms_data |>
+  mutate(group = case_when(life_stage_simple == "subadult" ~ "S",
+                           sex == "male" ~ "M",
+                           sex == "female" ~ "F",
+                           .default = "U"),  # adults of unknown sex
+         detected = .data[[mu_resp]] > 0,
+         log_load = if_else(detected, log(.data[[mu_resp]]), NA_real_))
+
+f_sex_flag = function(d_m, d_f, assessable) {
+  case_when(!assessable ~ "not assessable",
+            sign(d_m) == sign(d_f) ~ "robust",
+            .default = "sex-sensitive")
+}
+
+# raw
+sex_raw = bind_rows(
+  sex_data |>
+    group_by(taxon_capture, group) |>
+    summarise(n = n(), value = mean(detected),
+              lower = wilson_ci_lower(mean(detected), n()),
+              upper = wilson_ci_upper(mean(detected), n()),
+              .groups = "drop") |>
+    mutate(response = "prevalence"),
+  sex_data |>
+    filter(detected) |>
+    group_by(taxon_capture, group) |>
+    summarise(n = n(), value = mean(log_load),
+              lower = value - 1.96 * sd(log_load) / sqrt(n),
+              upper = value + 1.96 * sd(log_load) / sqrt(n),
+              .groups = "drop") |>
+    mutate(response = "log_load")) |>
+  pivot_wider(id_cols = c(taxon_capture, response), names_from = group,
+              values_from = c(n, value, lower, upper))
+
+# observed adult value (all adults, including unknown sex)
+adult_obs = bind_rows(
+  sex_data |>
+    filter(group != "S") |>
+    group_by(taxon_capture) |>
+    summarise(value_A = mean(detected), n_A = n(), .groups = "drop") |>
+    mutate(response = "prevalence"),
+  sex_data |>
+    filter(group != "S", detected) |>
+    group_by(taxon_capture) |>
+    summarise(value_A = mean(log_load), n_A = n(), .groups = "drop") |>
+    mutate(response = "log_load"))
+
+# matched: within population-year differences
+sex_matched = bind_rows(
+  sex_data |>
+    filter(group != "U") |>
+    group_by(taxon_capture, population, year, group) |>
+    summarise(n = n(), value = mean(detected), .groups = "drop") |>
+    mutate(response = "prevalence"),
+  sex_data |>
+    filter(group != "U", detected) |>
+    group_by(taxon_capture, population, year, group) |>
+    summarise(n = n(), value = mean(log_load), .groups = "drop") |>
+    mutate(response = "log_load")) |>
+  filter(n >= min_n_matched) |>
+  pivot_wider(id_cols = c(taxon_capture, response, population, year), names_from = group,
+              values_from = value) |>
+  filter(!is.na(S), !is.na(M), !is.na(F)) |>
+  group_by(taxon_capture, response) |>
+  summarise(matched_n_popyr = n(),
+            matched_S_minus_M = mean(S - M),
+            matched_S_minus_F = mean(S - F),
+            .groups = "drop")
+
+# modeled contrast signs; prevalence is the inverse of hu
+sex_modeled = combined_agg_single |>
+  transmute(taxon_capture,
+            prevalence = paste0(if_else(hu_contrast_median < 0, "+", "-"), " (", hu_contrast_support, ")"),
+            log_load = if_else(is.na(mu_contrast_median), NA_character_,
+                               paste0(if_else(mu_contrast_median > 0, "+", "-"), " (", mu_contrast_support, ")"))) |>
+  pivot_longer(-taxon_capture, names_to = "response", values_to = "modeled_sign")
+
+sex_check = sex_raw |>
+  left_join(adult_obs, by = c("taxon_capture", "response")) |>
+  left_join(sex_matched, by = c("taxon_capture", "response")) |>
+  left_join(sex_modeled, by = c("taxon_capture", "response")) |>
+  mutate(across(starts_with("n_"), ~ replace_na(.x, 0L)),
+         adult_p_male_known = n_M / (n_M + n_F),
+         raw_sign = if_else(value_S > value_A, "+", "-"),
+         raw_S_minus_M = value_S - value_M,
+         raw_S_minus_F = value_S - value_F,
+         raw_flag = f_sex_flag(raw_S_minus_M, raw_S_minus_F,
+                               n_S > 0 & n_M >= min_n_sex & n_F >= min_n_sex),
+         # secondary: could S fall between M and F within their 95% intervals?
+         raw_flag_ci = case_when(raw_flag == "not assessable" ~ "not assessable",
+                                 value_S > pmin(lower_M, lower_F) & value_S < pmax(upper_M, upper_F) ~ "sex-sensitive",
+                                 .default = "robust"),
+         matched_flag = f_sex_flag(matched_S_minus_M, matched_S_minus_F,
+                                   replace_na(matched_n_popyr, 0L) >= min_popyr_matched),
+         species = get_species_name(taxon_capture)) |>
+  select(species, taxon_capture, response,
+         n_S, n_M, n_F, n_U, adult_p_male_known,
+         value_S, value_M, value_F, value_A, lower_M, upper_M, lower_F, upper_F,
+         raw_sign, modeled_sign,
+         raw_S_minus_M, raw_S_minus_F, raw_flag, raw_flag_ci,
+         matched_n_popyr, matched_S_minus_M, matched_S_minus_F, matched_flag) |>
+  arrange(response, factor(raw_flag, levels = c("sex-sensitive", "robust", "not assessable")), species)
+
+sex_check |>
+  count(response, raw_flag, matched_flag)
+
+sex_check |>
+  filter(raw_flag == "sex-sensitive" | matched_flag == "sex-sensitive") |>
+  select(species, response, n_M, n_F, adult_p_male_known, value_S, value_M, value_F,
+         raw_sign, modeled_sign, raw_flag, raw_flag_ci, matched_n_popyr, matched_flag)
+
+```
+
 # Environmental conditions
 
 ## Correlations
@@ -2195,6 +2332,7 @@ co_select = sub("^bd_load_(co[0-9]+)_density$", "\\1", mu_resp)
 write_csv(combined_agg, here("size_bd_unified", "intermediates", "th_sensitivity_analysis",
                              paste0("unified_03_c_combined_effects_agg_m11d_", co_select, ".csv")))
 write_parquet(pop_agg_combined, paste0(manuscript_data_dir, "unified_03_f_population_agg.parquet"))
+write_csv(sex_check, paste0(manuscript_data_dir, "unified_03_g_sex_composition_check.csv"))
 
 
 write.tree(jp_pruned, file = here(manuscript_data_dir, "jp_tree_pruned.nwk"))
