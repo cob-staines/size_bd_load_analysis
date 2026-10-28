@@ -25,7 +25,7 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, stan-dev/
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-23.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
 
 # checks
 count_na = function(df, cols) {
@@ -36,7 +36,9 @@ count_na = function(df, cols) {
                  values_to = "n_na")
 }
 
-check_na_cols = c("bd_load_co100_density",
+check_na_cols = c("bd_load_co0_density",
+                  "bd_load_co30_density",
+                  "bd_load_co100_density",
                   "bd_load_co300_density",
                   "bd_load_co1000_density",
                   "life_stage_simple",
@@ -100,7 +102,7 @@ model_priors <- c(
 )
 
 # Bd load cutoff (copies per swab) for the response. chosen a priori from lab detection
-# limits; the other cutoffs are fit as a sensitivity analysis (th_sensitivity_analysis.Rmd),
+# limits; the other cutoffs (co0 = no cutoff, co30, co300, co1000) are fit as a sensitivity analysis (th_sensitivity_analysis.Rmd),
 # not compared by LOO (each cutoff changes the response data, so elpd is not comparable)
 co_select = "co100"
 resp_co = paste0("bd_load_", co_select, "_density")
@@ -115,6 +117,8 @@ resp_co = paste0("bd_load_", co_select, "_density")
 
 # earlier candidate models (null through m11f) are in the git history of this file
 # group sigma random effects by taxon
+# production fits run on the cluster with r-brms-contained/size_bd_modeling.R (same formula,
+# priors and settings; hpc/run_size_bd_cutoffs.sbatch fits all cutoffs). keep the two in sync
 m11d_zln <- brm(
   formula = bf(
     reformulate(c("1",
@@ -142,10 +146,11 @@ m11d_zln <- brm(
   sample_prior = "yes",
   control = list(adapt_delta = 0.98),
   chains = 4,
-  iter = 2000,
-  warmup = 1000,
+  iter = 4000,
+  warmup = 2000,
   seed = 126,
   cores = 4,
+  threads = threading(2),
   backend = "cmdstanr"
 )
 
@@ -163,8 +168,10 @@ saveRDS(m11d_zln, file = here("size_bd_unified", "unified_models",
 #| code-summary: "Show model loading code"
 
 # cutoff models are not compared by LOO: each cutoff changes the response data
-# update with the refit model files once the data are rebuilt (co100 file predates the rebuild)
-model_files = c(co100  = "unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds",
+# update with the cluster fits on bd_model_env_unified_2026-10-28 (the co100 file predates it)
+model_files = c(co0    = NA_character_,
+                co30   = NA_character_,
+                co100  = "unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds",
                 co300  = NA_character_,
                 co1000 = NA_character_)
 

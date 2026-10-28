@@ -24,7 +24,7 @@ Inputs are written by 03_size_bd_unified_analysis.qmd (Export Essential Data), o
 per cutoff model.
 
 ```{r}
-cutoffs = c("co100", "co300", "co1000")
+cutoffs = c("co0", "co30", "co100", "co300", "co1000")
 
 th_combined = map_dfr(cutoffs, function(co) {
   read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis",

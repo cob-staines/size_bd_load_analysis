@@ -396,7 +396,7 @@ env_alignment_check = any(is.na(brms_data$precip_mm_10_day_sum)) | any(is.na(brm
 
 # KG zones
 ```{r}
-# use the unified pipeline's site-level KG assignments (size_bd_unified/01_survey_data.Rmd)
+# use the unified pipeline's site-level KG assignments (size_bd_unified/01_model_data.Rmd)
 unified_sites_kg = read_csv(here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv")) %>%
   mutate(site = as.character(site)) %>%
   select(site,

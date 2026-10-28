@@ -18,3 +18,5 @@ papers/
 */intermediates/*
 python/environmental_timeseries_pull/chirts_era5/
 .positai
+python/environmental_timeseries_pull/env_cache/
+__pycache__/

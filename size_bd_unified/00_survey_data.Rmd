@@ -1,5 +1,5 @@
 ---
-title: "01_survey_data"
+title: "00_survey_data"
 output: html_document
 ---
 
@@ -30,7 +30,7 @@ rabo_clean = kupferberg_raw %>%
          stage %in% c("JUV", "Adult"),
          !is.na(length)) %>%
   dplyr::rename(sample_id = materialSampleID) %>%
-  mutate(svl_mm = length,
+  mutate(svl_mm = as.numeric(length),
          life_stage_simple = case_when(
            svl_mm >= 38 ~ "adult",
            svl_mm < 38 ~ "subadult"),
@@ -644,14 +644,29 @@ bd_model = bind_rows(rabo_valid,
                      bofa_valid
                      ) %>%
   left_join(all_populations, by = "site") %>%
+  # sites missing from the population file (added after it was made) are their own
+  # population, as for unclustered sites in the file. listed below (sites_without_population)
+  mutate(population_from_file = !is.na(population),
+         population = coalesce(population, site)) %>%
   # Bd load cutoffs (ITS1 copies per swab). co100 is the main analysis: ~50% detection for
   # the Qiagen-RZ pipeline and ~1-3 template copies per reaction (rz-snarl-qpcr-comparison).
-  # co300 and co1000 (PrepMan-SNARL 50% detection) are sensitivity analyses.
+  # sensitivity analyses: co0 (no cutoff, any positive qPCR result), co30, co300 and co1000
+  # (PrepMan-SNARL 50% detection).
   mutate(year = year(date),
          # harmonise sex labels across sources (F/Female/f, M/Male/m; U/Unknown/not determined/NA)
          sex = case_when(tolower(sex) %in% c("f", "female") ~ "female",
                          tolower(sex) %in% c("m", "male") ~ "male",
                          .default = "unknown"),
+         bd_load_co0 = bd_its_copies,
+         bd_detected_co0 = bd_load_co0 > 0,
+         bd_load_co0_density = bd_load_co0 / svl_mm,
+
+         bd_load_co30 = if_else(bd_its_copies < 30,
+                              0,
+                              bd_its_copies),
+         bd_detected_co30 = bd_load_co30 > 0,
+         bd_load_co30_density = bd_load_co30 / svl_mm,
+
          bd_load_co100 = if_else(bd_its_copies < 100,
                               0,
                               bd_its_copies),
@@ -671,8 +686,9 @@ bd_model = bind_rows(rabo_valid,
          bd_load_co1000_density = bd_load_co1000 / svl_mm)
 
 # drop species with no Bd detections in either life stage (e.g. spea_multiplicata),
-# as they carry no information on life stage contrasts. uses the lowest cutoff (co100)
-# so the species set is identical across all cutoff models.
+# as they carry no information on life stage contrasts. uses the main cutoff (co100),
+# applied before any model, so the species set is identical across all cutoff models.
+# (species with positives only below 100 copies would be uninformative in the main analysis)
 taxa_no_detections = bd_model %>%
   group_by(taxon_capture) %>%
   summarise(n_pos = sum(bd_detected_co100), .groups = "drop") %>%
@@ -683,6 +699,13 @@ taxa_no_detections
 
 bd_model = bd_model %>%
   filter(!taxon_capture %in% taxa_no_detections)
+
+(sites_without_population = bd_model %>%
+  filter(!population_from_file) %>%
+  count(taxon_capture, project, site, name = "n_samples"))
+
+bd_model = bd_model %>%
+  select(-population_from_file)
 
 # checks
 sum(is.na(bd_model$bd_its_copies))
@@ -754,243 +777,28 @@ site_pop_dist <- site_dist_mat |>
 peace = get_dupes(bd_model, sample_id)
 (peace)
 ```
-## Environmental data
-To support comparing Bd prevalence and loads between sites and species across a range of environmental conditions, I incorporated local (~5 km) daily maximum temperature (CHIRTS) and daily precipitation (CHIRPS) time series. Following Sonn et al. 2019 [sonn2019effects], I created 15-day and 30-day means (for tempurature) and sums (for precipitation). Preliminary model fitting showed stronger relationships between Bd prevalence and 15-day lag products, while Bd load showed stronger relationships with 30-day lag products, similar to Sonn et al. 2019.
 
-
-### Join with env. data
+## Site registry
 ```{r}
-#| warning: false
-#| code-fold: true
-#| code-summary: "Show environmental data mergin code"
-
-env_agg = read_csv(here("data", "unified_env_agg.csv"))
-
-env_distinct_sites = env_agg %>%
-  distinct(site,
-           latitude,
-           longitude)
-
-env_site_dupes = get_dupes(env_distinct_sites, site)
-
-
-bd_model_env = bd_model_clean %>%
-  left_join(env_agg, by = c("site", "date"))
-
-bd_env = bd_model_env %>%
-  mutate(
-    precip_mm_10_z = as.numeric(scale(precip_mm_10_day_sum, center = TRUE, scale = TRUE)),
-    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
-    temp_c_10_z = as.numeric(scale(temp_c_10_day_mean, center = TRUE, scale = TRUE)),
-    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE))) %>%
-  select(taxon_capture,
-         everything())
-
-peace = bd_env %>%
-  distinct(site, population)
-
-sum(is.na(bd_env$precip_mm_10_day_sum))
-sum(is.na(bd_env$temp_c_30_day_sum))
-
-```
-
-## KG zones
-```{r}
-
-kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
-  select(-rgb) %>%
-  rename_with(function(x) { paste0("kg_", x) })
-
-all_sites = bd_env %>%
-  group_by(site, population, country) %>%
-  summarize(site_latitude = mean(site_latitude),
-            site_longitude = mean(site_longitude),
-            taxa = paste0(sort(unique(taxon_capture)), collapse = ", "),
-            taxa_n = n_distinct(taxon_capture),
-            adult_n = sum(life_stage_simple == "adult"),
-            subadult_n = sum(life_stage_simple == "subadult"),
+# one row per site: the single definition of site coordinates and sampling dates.
+# next: python/environmental_timeseries_pull/update_env_cache.py pulls climate data for
+# any registry cell-dates not yet cached, then 01_model_data.Rmd joins it to the samples
+site_registry = bd_model_clean %>%
+  group_by(site) %>%
+  summarise(latitude = dplyr::first(site_latitude),
+            longitude = dplyr::first(site_longitude),
+            date_min = min(date),
+            date_max = max(date),
+            n_samples = n(),
             .groups = "drop")
 
-site_coords = cbind(lon = all_sites$site_longitude,
-                    lat = all_sites$site_latitude)
-
-kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
-
-kg_extract = extract(kg_rast, site_coords) %>%
-  dplyr::rename(kg_id = koppen_geiger_0p00833333) %>%
-  mutate(kg_id = if_else(kg_id == 29, 19, kg_id))
-
-all_sites_kg = bind_cols(all_sites,
-                          kg_extract) %>%
-  left_join(kg_key, by = "kg_id")
-
-peace = get_dupes(all_sites_kg, site)
-
-bd_env_kg = bd_env %>%
-  dplyr::select(-site_latitude,
-                -site_longitude) %>%
-  left_join(all_sites_kg %>%
-  dplyr::select(site,
-                site_latitude,
-                site_longitude,
-                kg_code_1,
-                kg_code_2,
-                kg_code_3), by = "site")
-
-ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
-  geom_bar() +
-  scale_y_log10()
-
-```
-# checks
-```{r}
-
-count_na = function(df, cols) {
-  df |>
-    summarise(across(all_of(cols), ~sum(is.na(.)))) |>
-    pivot_longer(everything(),
-                 names_to  = "column",
-                 values_to = "n_na")
+if (anyNA(site_registry)) {
+  print(filter(site_registry, if_any(everything(), is.na)))
+  stop("sites with missing coordinates or dates")
 }
 
-check_na_cols = c("bd_load_co100_density",
-                  "bd_load_co300_density",
-                  "bd_load_co1000_density",
-                  "life_stage_simple",
-                  "taxon_capture",
-                  "precip_mm_10_z",
-                  "temp_c_30_z",
-                  "kg_code_3",
-                  "population",
-                  "date",
-                  "year")
-
-na_col_check = count_na(bd_env_kg, check_na_cols)
-
-if (sum(na_col_check$n_na) > 0) {
-  warning("NAs found in model variable columns. Please review.")
-}
-
-```
-
-# save data
-```{r}
-brms_data = bd_env_kg
-
-save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
-write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
+write_csv(site_registry, here("size_bd_unified", "intermediates", "site_registry.csv"))
+saveRDS(bd_model_clean, here("size_bd_unified", "intermediates", "bd_survey_clean.rds"))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
-
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-16_th10.RData"))
-
-```
-
-# population species and year distributions
-```{r}
-pop_spp = brms_data %>%
-  group_by(population) %>%
-  summarize(n_taxa = n_distinct(taxon_capture),
-            .groups = "drop")
-
-pop_year_spp = brms_data %>%
-  group_by(population, year) %>%
-  summarize(n_taxa = n_distinct(taxon_capture),
-            .groups = "drop")
-
-ggplot(pop_spp, aes(x = n_taxa)) +
-  geom_histogram(bins = 15) +
-  scale_y_log10()
-
-ggplot(pop_year_spp, aes(x = n_taxa)) +
-  geom_histogram(bins = 15) +
-  scale_y_log10()
-
-```
-
-# plot annual variability
-```{r}
-plot_data = brms_data %>%
-  distinct(country,
-           region,
-           site,
-           date,
-           precip_mm_10_day_sum,
-           temp_c_30_day_mean,
-           past_year_weekly_precipitation_mm_sd,
-           past_year_weekly_tempurature_max_c_sd)
-
-ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = region)) +
-  geom_point(alpha = 0.2)
-
-ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = temp_c_30_day_mean, color = region)) +
-  geom_point(alpha = 0.2)
-
-ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = past_year_weekly_precipitation_mm_sd, color = region)) +
-  geom_point(alpha = 0.2)
-
-ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = temp_c_30_day_mean, color = region)) +
-  geom_point(alpha = 0.2)
-
-ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = log(bd_load_co100_density))) +
-  geom_point(alpha = 0.2)
-
-ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
-  geom_point(alpha = 0.05)
-
-ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
-  geom_point(alpha = 0.05)
-```
-
-# count KG zones
-```{r}
-
-ggplot(sites_kg, aes(x = kg_code_1, fill = kg_code_3)) +
-  geom_bar() +
-  scale_y_log10()
-
-ggplot(sites_kg, aes(x = kg_code_2)) +
-  geom_bar() +
-  scale_y_log10()
-
-ggplot(sites_kg, aes(x = kg_code_3)) +
-  geom_bar() +
-  scale_y_log10()
-
-```
-
-# sampling coverage by species: projects, climate zones and environmental ranges
-```{r}
-# who is missing projects?
-peace = brms_data %>%
-  group_by(taxon_capture, project) %>%
-  count()
-
-brms_data |>
-  group_by(taxon_capture, kg_code_3) |>
-  summarise(n = n(), .groups = "drop") |>
-  count(kg_code_3, taxon_capture) |>
-  ggplot(aes(x = kg_code_3, y = n, fill = taxon_capture)) +
-  geom_col(position = "fill")
-
-# Precipitation
-brms_data |>
-  ggplot(aes(x = taxon_capture, y = precip_mm_10_day_sum)) +
-  geom_violin(fill = "steelblue", alpha = 0.5) +
-  geom_boxplot(width = 0.1, outlier.shape = NA) +
-  coord_flip() +
-  labs(title = "Precipitation distribution by taxon",
-       x = NULL, y = "10-day precipitation (mm)") +
-  theme_minimal()
-
-# Temperature
-brms_data |>
-  ggplot(aes(x = taxon_capture, y = temp_c_30_day_mean)) +
-  geom_violin(fill = "tomato", alpha = 0.5) +
-  geom_boxplot(width = 0.1, outlier.shape = NA) +
-  coord_flip() +
-  labs(title = "Temperature distribution by taxon",
-       x = NULL, y = "30-day mean temperature (°C)") +
-  theme_minimal()
-
 
 ```

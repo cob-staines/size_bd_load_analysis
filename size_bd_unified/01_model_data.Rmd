@@ -1,0 +1,336 @@
+---
+title: "01_model_data"
+output: html_document
+---
+
+Run order: `00_survey_data.Rmd` (samples and site registry) ->
+`python/environmental_timeseries_pull/update_env_cache.py` (pulls climate data for any
+registry cell-dates not yet cached) -> this script (climate and KG joins, model data).
+
+## Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, janitor, terra, arrow)
+
+bd_model_clean = readRDS(here("size_bd_unified", "intermediates", "bd_survey_clean.rds"))
+
+```
+
+## Environmental data
+To support comparing Bd prevalence and loads between sites and species across a range of environmental conditions, I incorporated local (~5 km) daily maximum temperature (CHIRTS) and daily precipitation (CHIRPS) time series. Following Sonn et al. 2019 [sonn2019effects], I created 10-day and 30-day means (for tempurature) and sums (for precipitation). Preliminary model fitting showed stronger relationships between Bd prevalence and 10-day lag products, while Bd load showed stronger relationships with 30-day lag products, similar to Sonn et al. 2019.
+
+### Daily climate by grid cell
+```{r}
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show environmental data loading code"
+
+# CHIRPS and CHIRTS share a 0.05 deg grid; sites are mapped to cells by update_env_cache.py
+site_cells = read_csv(here("size_bd_unified", "intermediates", "site_registry_cells.csv"),
+                      col_types = cols(site = "c", cell_id = "c"))
+
+missing_cells = setdiff(unique(bd_model_clean$site), site_cells$site)
+if (length(missing_cells) > 0) {
+  stop("sites without a grid cell (rerun update_env_cache.py): ", paste(missing_cells, collapse = ", "))
+}
+
+cache_dir = here("python", "environmental_timeseries_pull", "env_cache")
+read_env = function(product) {
+  read_parquet(file.path(cache_dir, paste0(product, ".parquet"))) %>%
+    filter(cell_id %in% site_cells$cell_id) %>%
+    transmute(cell_id, date = as.Date(date), value)
+}
+
+# CHIRTS tmax from GEE through 2016, from CHIRTS-ERA5 from 2017
+env_daily = full_join(
+  read_env("chirps") %>% dplyr::rename(precipitation_mm = value),
+  bind_rows(read_env("chirts_tmax"), read_env("chirts_era5_tmax")) %>%
+    dplyr::rename(temperature_max_c = value),
+  by = c("cell_id", "date")) %>%
+  # one row per calendar day, so the rolling windows below span calendar days
+  group_by(cell_id) %>%
+  complete(date = seq(min(date), max(date), by = "day")) %>%
+  ungroup() %>%
+  arrange(cell_id, date)
+
+```
+
+### Rolling windows
+```{r}
+#| code-fold: true
+#| code-summary: "Show rolling window code"
+
+env_agg = env_daily %>%
+  group_by(cell_id) %>%
+  mutate(precip_mm_10_day_sum = zoo::rollapply(precipitation_mm, 10, sum, fill = NA, align = "right"),
+         precip_mm_30_day_sum = zoo::rollapply(precipitation_mm, 30, sum, fill = NA, align = "right"),
+         temp_c_10_day_mean = zoo::rollapply(temperature_max_c, 10, mean, fill = NA, align = "right"),
+         temp_c_30_day_mean = zoo::rollapply(temperature_max_c, 30, mean, fill = NA, align = "right")
+         ) %>%
+  ungroup()
+
+# continuous 7-day blocks (52 * year + week(date) merged Dec 31 into the next year's week 1)
+env_var_index = env_daily %>%
+  mutate(week_number = as.integer(date) %/% 7)
+
+env_var_week = env_var_index %>%
+  group_by(cell_id, week_number) %>%
+  # na.rm: a block can straddle the edge of a site's date window (days outside it are not pulled)
+  summarize(weekly_precipitation_mm = if (all(is.na(precipitation_mm))) NA_real_ else mean(precipitation_mm, na.rm = TRUE) * 7,
+            weekly_temperature_max_c = if (all(is.na(temperature_max_c))) NA_real_ else max(temperature_max_c, na.rm = TRUE),
+            .groups = "drop") %>%
+  group_by(cell_id) %>%
+  mutate(past_year_weekly_precipitation_mm_sd = zoo::rollapply(weekly_precipitation_mm, 52, sd, fill = NA, align = "right"),
+         past_year_weekly_tempurature_max_c_sd = zoo::rollapply(weekly_temperature_max_c, 52, sd, fill = NA, align = "right")) %>%
+  ungroup()
+
+env_agg_all = env_agg %>%
+  left_join(env_var_index %>%
+              select(cell_id, date, week_number), by = c("cell_id", "date")) %>%
+  left_join(env_var_week %>%
+              select(cell_id,
+                     week_number,
+                     past_year_weekly_precipitation_mm_sd,
+                     past_year_weekly_tempurature_max_c_sd), by = c("cell_id", "week_number")) %>%
+  select(-week_number)
+
+```
+
+### Join with env. data
+```{r}
+#| warning: false
+#| code-fold: true
+#| code-summary: "Show environmental data merging code"
+
+bd_model_env = bd_model_clean %>%
+  left_join(site_cells %>%
+              select(site, cell_id), by = "site") %>%
+  left_join(env_agg_all, by = c("cell_id", "date"))
+
+# every sample needs climate values: missing ones mean the cache lacks those cell-dates
+env_missing = bd_model_env %>%
+  filter(is.na(precip_mm_10_day_sum) | is.na(temp_c_30_day_mean)) %>%
+  count(taxon_capture, site, cell_id, name = "n_samples")
+
+if (nrow(env_missing) > 0) {
+  print(env_missing, n = 50)
+  stop(sum(env_missing$n_samples), " samples without climate values (rerun update_env_cache.py)")
+}
+
+bd_env = bd_model_env %>%
+  mutate(
+    precip_mm_10_z = as.numeric(scale(precip_mm_10_day_sum, center = TRUE, scale = TRUE)),
+    precip_mm_30_z = as.numeric(scale(precip_mm_30_day_sum, center = TRUE, scale = TRUE)),
+    temp_c_10_z = as.numeric(scale(temp_c_10_day_mean, center = TRUE, scale = TRUE)),
+    temp_c_30_z = as.numeric(scale(temp_c_30_day_mean, center = TRUE, scale = TRUE))) %>%
+  select(taxon_capture,
+         everything())
+
+```
+
+## KG zones
+```{r}
+
+kg_key = read_csv(here("data", "koppen_geiger_tif", "legend.csv")) %>%
+  select(-rgb) %>%
+  rename_with(function(x) { paste0("kg_", x) })
+
+all_sites = bd_env %>%
+  group_by(site, population, country) %>%
+  summarize(site_latitude = mean(site_latitude),
+            site_longitude = mean(site_longitude),
+            taxa = paste0(sort(unique(taxon_capture)), collapse = ", "),
+            taxa_n = n_distinct(taxon_capture),
+            adult_n = sum(life_stage_simple == "adult"),
+            subadult_n = sum(life_stage_simple == "subadult"),
+            .groups = "drop")
+
+site_coords = cbind(lon = all_sites$site_longitude,
+                    lat = all_sites$site_latitude)
+
+kg_rast = rast(here("data", "koppen_geiger_tif", "1991_2020", "koppen_geiger_0p00833333.tif"))
+
+kg_extract = extract(kg_rast, site_coords) %>%
+  dplyr::rename(kg_id = koppen_geiger_0p00833333) %>%
+  mutate(kg_id = if_else(kg_id == 29, 19, kg_id))
+
+all_sites_kg = bind_cols(all_sites,
+                          kg_extract) %>%
+  left_join(kg_key, by = "kg_id")
+
+peace = get_dupes(all_sites_kg, site)
+
+bd_env_kg = bd_env %>%
+  dplyr::select(-site_latitude,
+                -site_longitude) %>%
+  left_join(all_sites_kg %>%
+  dplyr::select(site,
+                site_latitude,
+                site_longitude,
+                kg_code_1,
+                kg_code_2,
+                kg_code_3), by = "site")
+
+ggplot(all_sites_kg, aes(x = kg_code_2, fill = kg_code_3)) +
+  geom_bar() +
+  scale_y_log10()
+
+```
+# checks
+```{r}
+
+count_na = function(df, cols) {
+  df |>
+    summarise(across(all_of(cols), ~sum(is.na(.)))) |>
+    pivot_longer(everything(),
+                 names_to  = "column",
+                 values_to = "n_na")
+}
+
+check_na_cols = c("bd_load_co0_density",
+                  "bd_load_co30_density",
+                  "bd_load_co100_density",
+                  "bd_load_co300_density",
+                  "bd_load_co1000_density",
+                  "life_stage_simple",
+                  "taxon_capture",
+                  "precip_mm_10_z",
+                  "temp_c_30_z",
+                  "kg_code_3",
+                  "population",
+                  "date",
+                  "year")
+
+na_col_check = count_na(bd_env_kg, check_na_cols)
+
+if (sum(na_col_check$n_na) > 0) {
+  print(filter(na_col_check, n_na > 0))
+  stop("NAs found in model variable columns. Please review.")
+}
+
+```
+
+# save data
+```{r}
+brms_data = bd_env_kg
+
+save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
+write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
+
+```
+
+# population species and year distributions
+```{r}
+pop_spp = brms_data %>%
+  group_by(population) %>%
+  summarize(n_taxa = n_distinct(taxon_capture),
+            .groups = "drop")
+
+pop_year_spp = brms_data %>%
+  group_by(population, year) %>%
+  summarize(n_taxa = n_distinct(taxon_capture),
+            .groups = "drop")
+
+ggplot(pop_spp, aes(x = n_taxa)) +
+  geom_histogram(bins = 15) +
+  scale_y_log10()
+
+ggplot(pop_year_spp, aes(x = n_taxa)) +
+  geom_histogram(bins = 15) +
+  scale_y_log10()
+
+```
+
+# plot annual variability
+```{r}
+plot_data = brms_data %>%
+  distinct(country,
+           region,
+           site,
+           date,
+           precip_mm_10_day_sum,
+           temp_c_30_day_mean,
+           past_year_weekly_precipitation_mm_sd,
+           past_year_weekly_tempurature_max_c_sd)
+
+ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = temp_c_30_day_mean, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = past_year_weekly_precipitation_mm_sd, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(plot_data, aes(x = precip_mm_10_day_sum, y = temp_c_30_day_mean, color = region)) +
+  geom_point(alpha = 0.2)
+
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = past_year_weekly_precipitation_mm_sd, color = log(bd_load_co100_density))) +
+  geom_point(alpha = 0.2)
+
+ggplot(brms_data, aes(x = past_year_weekly_tempurature_max_c_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
+  geom_point(alpha = 0.05)
+
+ggplot(brms_data, aes(x = past_year_weekly_precipitation_mm_sd, y = log(bd_load_co100_density), color = taxon_capture)) +
+  geom_point(alpha = 0.05)
+```
+
+# count KG zones
+```{r}
+
+ggplot(all_sites_kg, aes(x = kg_code_1, fill = kg_code_3)) +
+  geom_bar() +
+  scale_y_log10()
+
+ggplot(all_sites_kg, aes(x = kg_code_2)) +
+  geom_bar() +
+  scale_y_log10()
+
+ggplot(all_sites_kg, aes(x = kg_code_3)) +
+  geom_bar() +
+  scale_y_log10()
+
+```
+
+# sampling coverage by species: projects, climate zones and environmental ranges
+```{r}
+# who is missing projects?
+peace = brms_data %>%
+  group_by(taxon_capture, project) %>%
+  count()
+
+brms_data |>
+  group_by(taxon_capture, kg_code_3) |>
+  summarise(n = n(), .groups = "drop") |>
+  count(kg_code_3, taxon_capture) |>
+  ggplot(aes(x = kg_code_3, y = n, fill = taxon_capture)) +
+  geom_col(position = "fill")
+
+# Precipitation
+brms_data |>
+  ggplot(aes(x = taxon_capture, y = precip_mm_10_day_sum)) +
+  geom_violin(fill = "steelblue", alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  coord_flip() +
+  labs(title = "Precipitation distribution by taxon",
+       x = NULL, y = "10-day precipitation (mm)") +
+  theme_minimal()
+
+# Temperature
+brms_data |>
+  ggplot(aes(x = taxon_capture, y = temp_c_30_day_mean)) +
+  geom_violin(fill = "tomato", alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  coord_flip() +
+  labs(title = "Temperature distribution by taxon",
+       x = NULL, y = "30-day mean temperature (°C)") +
+  theme_minimal()
+
+
+```
