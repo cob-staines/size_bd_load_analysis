@@ -17,59 +17,74 @@ librarian::shelf(tidyverse, here)
 
 ## Load data
 
-Compare combined-effects estimates aggregated at two Bd load detection thresholds
-(th1 vs th10) from `intermediates/th_sensitivity_analysis/`.
+Compare species contrast estimates across Bd load cutoffs (copies per swab). The cutoff
+used in the main analysis is chosen a priori; the others are a sensitivity analysis.
+Cutoff models are not compared by LOO, since each cutoff changes the response data.
+Inputs are written by 03_size_bd_unified_analysis.qmd (Export Essential Data), one run
+per cutoff model.
 
 ```{r}
-m11b_th1 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11b_th1.csv")) %>%
-  mutate(threshold = "th1",
-         model = "m11b",
-         mth = "m11b_th1")
+cutoffs = c("co100", "co300", "co1000")
 
-m11b_th10 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11b_th10.csv")) %>%
-  mutate(threshold = "th10",
-         model = "m11b",
-         mth = "m11b_th10")
-
-m11d_th1 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11d_th1.csv")) %>%
-  mutate(threshold = "th1",
-         model = "m11d",
-         mth = "m11d_th1")
-
-m11d_th10 = read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis", "unified_03_c_combined_effects_agg_m11d_th10.csv")) %>%
-  mutate(threshold = "th10",
-         model = "m11d",
-         mth = "m11d_th10")
-
-th_combined = bind_rows(m11b_th1,
-                        m11b_th10,
-                        m11d_th1,
-                        m11d_th10) %>%
-  mutate(threshold = factor(threshold, levels = c("th1", "th10")),
-         model = factor(model, levels = c("m11b", "m11d")),
-         mth = factor(mth, levels = c("m11b_th1", "m11d_th1", "m11b_th10", "m11d_th10")))
+th_combined = map_dfr(cutoffs, function(co) {
+  read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis",
+                paste0("unified_03_c_combined_effects_agg_m11d_", co, ".csv"))) %>%
+    mutate(threshold = co)
+}) %>%
+  mutate(threshold = factor(threshold, levels = cutoffs))
 
 ```
 
 ## Reshape
 
-Pivot each parameter's median/50%/95% interval columns into a common long format
+Pivot each contrast's median/50%/95% interval columns into a common long format
 so each can be plotted as a boxplot summary (box = 50% CI, whiskers = 95% CI,
 midline = median).
 
 ```{r}
-param_prefixes = c("hu", "prevalence", "sigma", "hu_contrast", "mu_contrast")
+param_prefixes = c("hu_contrast", "mu_contrast")
 
 th_long = map_dfr(param_prefixes, function(p) {
   th_combined %>%
-    select(taxon_capture, mth, contrast,
+    select(taxon_capture, threshold, contrast,
            lower_95 = paste0(p, "_lower_95"),
            lower_50 = paste0(p, "_lower_50"),
            median = paste0(p, "_median"),
            upper_50 = paste0(p, "_upper_50"),
-           upper_95 = paste0(p, "_upper_95")) %>%
+           upper_95 = paste0(p, "_upper_95"),
+           net_effect = paste0(p, "_net_effect"),
+           support = paste0(p, "_support")) %>%
     mutate(parameter = p)
-})
+}) %>%
+  filter(!is.na(median))  # species without an estimable mu contrast
+
+```
+
+## Agreement across cutoffs
+
+Per species and contrast: does the direction (sign of the median) or support class
+change across cutoffs?
+
+```{r}
+th_agreement = th_long %>%
+  group_by(parameter, taxon_capture) %>%
+  summarise(n_cutoffs = n(),
+            sign_agrees = n_distinct(sign(median)) == 1,
+            support_agrees = n_distinct(support) == 1,
+            direction_by_cutoff = paste(if_else(median > 0, "+", "-"), collapse = " "),
+            support_by_cutoff = paste(support, collapse = " / "),
+            net_effect_by_cutoff = paste(round(net_effect, 2), collapse = " / "),
+            .groups = "drop") %>%
+  arrange(parameter, sign_agrees, support_agrees, taxon_capture)
+
+th_agreement
+
+th_agreement %>%
+  group_by(parameter) %>%
+  summarise(n_species = n(),
+            n_sign_agrees = sum(sign_agrees),
+            n_support_agrees = sum(support_agrees),
+            .groups = "drop")
 
 ```
 
@@ -82,35 +97,15 @@ th_long = map_dfr(param_prefixes, function(p) {
 plot_th_comparison = function(param) {
   th_long %>%
     filter(parameter == param) %>%
-    ggplot(aes(x = mth, fill = mth)) +
+    ggplot(aes(x = threshold, fill = threshold)) +
+    geom_hline(yintercept = 0, color = "#555") +
     geom_boxplot(aes(ymin = lower_95, lower = lower_50, middle = median,
                       upper = upper_50, ymax = upper_95),
                  stat = "identity") +
     facet_wrap("taxon_capture", scales = "free_y") +
-    labs(title = param, y = param, x = "threshold/model") +
+    labs(title = param, y = param, x = "cutoff") +
     theme_minimal()
 }
-
-```
-
-```{r}
-#| fig.height: 16
-#| fig.width: 12
-plot_th_comparison("hu")
-
-```
-
-```{r}
-#| fig.height: 16
-#| fig.width: 12
-plot_th_comparison("prevalence")
-
-```
-
-```{r}
-#| fig.height: 16
-#| fig.width: 12
-plot_th_comparison("sigma")
 
 ```
 

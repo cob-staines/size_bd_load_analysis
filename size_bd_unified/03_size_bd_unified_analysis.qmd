@@ -113,6 +113,29 @@ mmode = function(x) {
   ux[which.max(tabulate(match(x, ux)))]
 }
 
+# posterior summary with median and equal-tailed (quantile) intervals.
+# pd: probability of direction. support: "strong" if 0 is outside the 95% interval
+# (pd > 0.975), "weak" if 0 is outside the 50% but inside the 95% interval
+# (0.75 < pd <= 0.975), otherwise "none". net_effect = 2 * P(> 0) - 1.
+f_draw_agg <- function(draws, group_vars, agg_var) {
+
+  draws |>
+    group_by(across(all_of(group_vars))) |>
+    reframe(
+      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
+      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
+      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
+      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
+      "{agg_var}_median"   := median(.data[[agg_var]]),
+      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1,
+      "{agg_var}_pd" := max(mean(.data[[agg_var]] > 0), mean(.data[[agg_var]] < 0))
+    ) |>
+    mutate("{agg_var}_support" := case_when(
+      .data[[paste0(agg_var, "_lower_95")]] > 0 | .data[[paste0(agg_var, "_upper_95")]] < 0 ~ "strong",
+      .data[[paste0(agg_var, "_lower_50")]] > 0 | .data[[paste0(agg_var, "_upper_50")]] < 0 ~ "weak",
+      .default = "none"))
+}
+
 ```
 
 # Results
@@ -138,7 +161,7 @@ nd_spp_lss = model_select$data |>
 
 # include taxon-specific env slopes (fixed + r_taxon_capture) so each species' linpred
 # at its median env uses its own slopes, not the population-average slopes (as in 05).
-# contrasts are unaffected (slopes do not vary by life stage); sigma has no env terms.
+# contrasts are unaffected (slopes do not vary by life stage).
 re_spp_env = ~ (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture)
 
 # hu contrast
@@ -149,10 +172,6 @@ hu_spp_lss_draws = model_select |>
     re_formula = re_spp_env
   ) %>%
   ungroup()
-
-hu_spp_draws = hu_spp_lss_draws |>
-  group_by(taxon_capture, .draw) |>
-  summarise(hu = mean(hu), .groups = "drop")
 
 hu_spp_lss_contrast_draws = hu_spp_lss_draws |>
   pivot_wider(
@@ -171,6 +190,11 @@ mu_spp_lss_draws = model_select |>
     re_formula = re_spp_env
   ) %>% ungroup()
 
+# species-level mu, diagnostic only: average life stages on the link scale within each draw
+mu_spp_draws = mu_spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(mu = mean(mu), .groups = "drop")
+
 mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
   pivot_wider(
     id_cols     = c(taxon_capture, .draw),
@@ -180,58 +204,28 @@ mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
   mutate(mu_contrast = subadult - adult,
          contrast = "subadult - adult")
 
-# sigma 
-sigma_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "sigma",
-    re_formula = re_spp_env
-  ) %>% ungroup()
+# mu contrast is only estimable where both life stages have Bd-positive loads;
+# otherwise one life stage's mu comes from the prior and model structure alone
+mu_resp = as.character(model_select$formula$formula[[2]])
 
-sigma_spp_draws = sigma_spp_lss_draws |>
-  group_by(taxon_capture, .draw) |>
-  summarise(sigma = mean(sigma), .groups = "drop")
+taxa_mu_contrast = model_select$data |>
+  group_by(taxon_capture, life_stage_simple) |>
+  summarise(n_pos = sum(.data[[mu_resp]] > 0), .groups = "drop") |>
+  group_by(taxon_capture) |>
+  filter(n_distinct(life_stage_simple) == 2, all(n_pos > 0)) |>
+  distinct(taxon_capture) |>
+  pull(taxon_capture)
 
-# f_draw_agg <- function(draws, group_vars, agg_var) {
-#   
-#   draws |>
-#     group_by(across(all_of(group_vars))) |>
-#     reframe(
-#       "{agg_var}_lower_50" := tidybayes::hdi(.data[[agg_var]], .width = 0.50)[, 1],
-#       "{agg_var}_upper_50" := tidybayes::hdi(.data[[agg_var]], .width = 0.50)[, 2],
-#       "{agg_var}_lower_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 1],
-#       "{agg_var}_upper_95" := tidybayes::hdi(.data[[agg_var]], .width = 0.95)[, 2],
-#       "{agg_var}_median"   := median(.data[[agg_var]]),
-#       "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-#     )
-# }
-f_draw_agg <- function(draws, group_vars, agg_var) {
-  
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-    )
-}
+setdiff(unique(model_select$data$taxon_capture), taxa_mu_contrast)  # mu contrast not estimable
 
-hu_spp_agg = f_draw_agg(hu_spp_draws, c("taxon_capture"), "hu")
-prevalence_spp_agg = f_draw_agg(hu_spp_draws %>%
-                                    mutate(prevalence = 1 - plogis(hu)), c("taxon_capture"), "prevalence")
-sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
+mu_spp_lss_contrast_draws = mu_spp_lss_contrast_draws |>
+  filter(taxon_capture %in% taxa_mu_contrast)
+
+mu_spp_agg = f_draw_agg(mu_spp_draws, c("taxon_capture"), "mu")
 mu_spp_lss_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
 hu_spp_lss_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
 
 # combine
-spp_draws = hu_spp_draws %>%
-  mutate(prevalence = 1 - plogis(hu)) %>%
-  left_join(sigma_spp_draws, by = c(".draw", "taxon_capture"))
-
-
 spp_lss_draws = hu_spp_lss_draws %>%
   select(taxon_capture,
          life_stage_simple,
@@ -242,31 +236,22 @@ spp_lss_draws = hu_spp_lss_draws %>%
               select(taxon_capture,
                      life_stage_simple,
                      .draw,
-                     mu), by = c("taxon_capture", "life_stage_simple", ".draw")) %>%
-  left_join(sigma_spp_lss_draws %>%
-              select(taxon_capture,
-                     life_stage_simple,
-                     .draw,
-                     sigma), by = c("taxon_capture", "life_stage_simple", ".draw"))
+                     mu), by = c("taxon_capture", "life_stage_simple", ".draw"))
 
 write_parquet(spp_lss_draws, here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
-combined_agg = hu_spp_agg %>%
-  left_join(prevalence_spp_agg, by = "taxon_capture") %>%
-  left_join(sigma_spp_agg, by = "taxon_capture") %>%
-  left_join(hu_spp_lss_contrast_agg, by = "taxon_capture") %>%
+# species without an estimable mu contrast keep their hu contrast, with NA mu contrast
+combined_agg = hu_spp_lss_contrast_agg %>%
   left_join(mu_spp_lss_contrast_agg, by = c("contrast", "taxon_capture"))
 
 combined_agg_single = combined_agg %>%
   select(taxon_capture,
-         hu_median,
-         hu_net_effect,
-         prevalence_median,
          hu_contrast_median,
          hu_contrast_net_effect,
+         hu_contrast_support,
          mu_contrast_median,
          mu_contrast_net_effect,
-         sigma_median) %>%
+         mu_contrast_support) %>%
   distinct()
 
 ```
@@ -295,20 +280,24 @@ epred_fixed = epred_draws(model_select,
                           re_formula = NA) %>%
   dplyr::rename(bd_load_density_epred = .epred)
 
-# observation data
-obs_data = brms_data %>%
+# observation data, using the model response (and its cutoff)
+obs_resp = brms_data %>%
+  mutate(bd_load_resp = .data[[mu_resp]],
+         bd_detected_resp = bd_load_resp > 0)
+
+obs_data = obs_resp %>%
   group_by(taxon_capture,
            life_stage_simple) %>%
    summarise(n = n(),
-             n_pos = sum(bd_detected_co),
-             bd_prevalence = sum(bd_detected_co) / n(),
+             n_pos = sum(bd_detected_resp),
+             bd_prevalence = sum(bd_detected_resp) / n(),
              bd_prevalence_ci_lower = wilson_ci_lower(bd_prevalence, n(), 0.95),
              bd_prevalence_ci_upper = wilson_ci_upper(bd_prevalence, n(), 0.95),
-             min_load_inf = min(bd_load_co_density[bd_detected_co > 0]),
-             q_25_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.25),
-             q_50_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.50),
-             q_75_load_inf = quantile(bd_load_co_density[bd_detected_co > 0], probs = 0.75),
-             max_load_inf = max(bd_load_co_density[bd_detected_co > 0]),
+             min_load_inf = min(bd_load_resp[bd_detected_resp]),
+             q_25_load_inf = quantile(bd_load_resp[bd_detected_resp], probs = 0.25),
+             q_50_load_inf = quantile(bd_load_resp[bd_detected_resp], probs = 0.50),
+             q_75_load_inf = quantile(bd_load_resp[bd_detected_resp], probs = 0.75),
+             max_load_inf = max(bd_load_resp[bd_detected_resp]),
              se = sqrt(bd_prevalence*(1-bd_prevalence)/n),
              .groups = "drop") %>%
   mutate(label_offset = recode_values(life_stage_simple,
@@ -354,8 +343,8 @@ ggplot(spp_lss_draws, aes(y = prevalence, x = life_stage_simple, fill = life_sta
 #| fig-width: 12
 
 # observed
-ggplot(brms_data %>%
-         filter(bd_detected_co > 0), aes(y = bd_load_co_density, x = life_stage_simple, fill = life_stage_simple)) +
+ggplot(obs_resp %>%
+         filter(bd_detected_resp), aes(y = bd_load_resp, x = life_stage_simple, fill = life_stage_simple)) +
   geom_violin() +
   geom_text(data = obs_data, aes(label = paste0("n=", n_pos), y = 10e8 - (1 - label_offset) * 7 * 10e7),
             position = position_dodge(width = 0.5),
@@ -418,26 +407,26 @@ ggplot(spp_lss_draws, aes(y = mu, x = life_stage_simple, color = life_stage_simp
 ggplot(hu_spp_lss_contrast_draws, aes(x = hu_contrast)) +
   stat_halfeye(fill = "#66c2a5",
                .width = c(0.5, 0.95),
-               point_interval = mode_hdi) +
+               point_interval = median_qi) +
   facet_wrap("taxon_capture") +
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
        # title = "Subadult Effect on Bd Prevalence",
-       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+       x = "Bd Prevalence Subadult Effect Size (logit scale) [-]\nwith 50% & 95% quantile intervals",
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
 ggplot(mu_spp_lss_contrast_draws, aes(x = mu_contrast)) +
     stat_halfeye(fill = "#8da0cb",
                .width = c(0.5, 0.95),
-               point_interval = mode_hdi) +
+               point_interval = median_qi) +
   facet_wrap("taxon_capture") +
   geom_vline(xintercept = 0, alpha = 1) +
   theme_minimal() +
   labs(
        # title = "Subadult Effect on Bd Prevalence",
-       x = "Bd Load Density Subadult Effect Size (logit scale) [-]\nwith 50% & 95% High Density Interval",
+       x = "Bd Load Density Subadult Effect Size (log scale) [-]\nwith 50% & 95% quantile intervals",
        y = "Posterior Density [-]") +
   theme(text=element_text(size=14))
 
@@ -484,40 +473,10 @@ ggsave(here("size_bd_unified", "unified_figures", "03_median_effect_scatter.png"
 p_net_effect_scatter
 p_median_effect_scatter
 
-# median effect scatter
-ggplot(combined_agg_single, aes(x = prevalence_median, y = sigma_median)) +
-  geom_point() +
-  geom_text_repel(aes(label = taxon_capture),
-                  color = "#888") +
-  theme_minimal() +
-  labs(
-       title = "Prevalence & Aggregation",
-       x = "Median Bd Prevalence [-]",
-       y = "Median Bd Load Aggregation -- log(sigma) [-]"
-       ) +
-  scale_color_brewer(palette = "Set2")
-
-ggplot(combined_agg_single, aes(x = -hu_contrast_median, y = -hu_median)) +
-  geom_point() +
-  geom_text_repel(aes(label = taxon_capture),
-                  color = "#888") +
-  theme_minimal() +
-  labs(
-       title = "Prevalence",
-       x = "Median hu (subadult - adult) [-]",
-       y = "Median hu [-]"
-       ) +
-  scale_color_brewer(palette = "Set2")
-
 ```
 
 ### Cascade plots
 ```{r}
-# hu_spp_agg = f_draw_agg(hu_spp_lss_draws, c("taxon_capture"), "hu")
-# sigma_spp_agg = f_draw_agg(sigma_spp_draws, c("taxon_capture"), "sigma")
-# mu_spp_ls_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
-# hu_spp_ls_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
-
 p_cascade_hu_contrast_linpred = ggplot(hu_spp_lss_contrast_agg, aes(x = -hu_contrast_median, xmin = -hu_contrast_lower_95, xmax = -hu_contrast_upper_95, reorder(get_species_name(taxon_capture), hu_contrast_median))) +
   geom_vline(xintercept = 0, color = "#555") +
   geom_rect(aes(xmin = -hu_contrast_lower_50, xmax = -hu_contrast_upper_50), height = 0.2, color = "#000") +
@@ -526,15 +485,6 @@ p_cascade_hu_contrast_linpred = ggplot(hu_spp_lss_contrast_agg, aes(x = -hu_cont
   labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
        x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
        y = "Species")
-
-# p_cascade_hu_contrast = ggplot(hu_contrast_agg, aes(x = -hu_subadult_median, xmin = -hdi_95[,1], xmax = -hdi_95[,2], reorder(get_species_name(taxon_capture), hu_subadult_median))) +
-#   geom_vline(xintercept = 0, color = "#555") +
-#   geom_rect(aes(xmin = -hdi_50[,1], xmax = -hdi_50[,2]), height = 0.2, color = "#000") +
-#   geom_pointrange() +
-#   theme_minimal() +
-#   labs(title = "Bd Prevalence Contrast (Subadult - Adult)",
-#        x = "Contrast of log odds of Bd detection (Subadult - Adult) [-]",
-#        y = "Species")
 
 p_cascade_mu_contrast_linpred = ggplot(mu_spp_lss_contrast_agg, aes(x = mu_contrast_median, xmin = mu_contrast_lower_95, xmax = mu_contrast_upper_95, reorder(get_species_name(taxon_capture), -mu_contrast_median))) +
   geom_vline(xintercept = 0, color = "#555") +
@@ -545,49 +495,37 @@ p_cascade_mu_contrast_linpred = ggplot(mu_spp_lss_contrast_agg, aes(x = mu_contr
        x = "Contrast of log Bd load (Subadult - Adult) [-]",
        y = "Species")
 
-# p_cascade_mu_contrast = ggplot(b_contrast_agg, aes(x = b_subadult_median, xmin = hdi_95[,1], xmax = hdi_95[,2], reorder(get_species_name(taxon_capture), -b_subadult_median))) +
-#   geom_vline(xintercept = 0, color = "#555") +
-#   geom_rect(aes(xmin = hdi_50[,1], xmax = hdi_50[,2]), height = 0.2, color = "#000") +
-#   geom_pointrange() +
-#   theme_minimal() +
-#   labs(title = "Bd Load Contrast (Subadult - Adult)",
-#        x = "Contrast of log Bd load (Subadult - Adult) [-]",
-#        y = "Species")
+# diagnostic only, not for interpretation (loads are not comparable across labs):
+# modeled species mu with observed mean log load of positives per source (project),
+# to check how distinct species and sources are. observed means include random effects
+# and are inflated by the cutoff, so they need not match the modeled mu.
+mu_obs_project = brms_data |>
+  filter(.data[[mu_resp]] > 0) |>
+  group_by(taxon_capture, project) |>
+  summarise(mu_obs = mean(log(.data[[mu_resp]])),
+            n_pos = n(),
+            .groups = "drop")
 
-p_cascade_prevalence_linpred = ggplot(prevalence_spp_agg, aes(x = prevalence_median, xmin = prevalence_lower_95, xmax = prevalence_upper_95, reorder(get_species_name(taxon_capture), -prevalence_median))) +
-  geom_rect(aes(xmin = prevalence_lower_50, xmax = prevalence_upper_50), height = 0.2, color = "#000") +
+mu_spp_levels = mu_spp_agg |>
+  arrange(mu_median) |>
+  pull(taxon_capture) |>
+  get_species_name()
+
+p_cascade_mu_linpred = ggplot(mu_spp_agg, aes(x = mu_median, xmin = mu_lower_95, xmax = mu_upper_95, y = factor(get_species_name(taxon_capture), levels = mu_spp_levels))) +
+  geom_rect(aes(xmin = mu_lower_50, xmax = mu_upper_50), height = 0.2, color = "#000") +
   geom_pointrange() +
-  xlim(0, 1) +
+  geom_point(data = mu_obs_project,
+             aes(x = mu_obs, y = factor(get_species_name(taxon_capture), levels = mu_spp_levels), color = project, size = n_pos),
+             inherit.aes = FALSE,
+             alpha = 0.7) +
+  scale_size_area(max_size = 4) +
+  scale_color_brewer(palette = "Paired") +
   theme_minimal() +
-  labs(title = "Bd Prevalence",
-       x = "Prevalence draws [-]",
-       y = "Species")
-
-
-# p_cascade_prevalence = ggplot(hu_group_agg, aes(x = 1 - plogis(hu_median), xmin = 1 - plogis(hdi_95[,1]), xmax = 1 - plogis(hdi_95[,2]), reorder(get_species_name(taxon_capture), hu_median))) +
-#   geom_rect(aes(xmin = 1 - plogis(hdi_50[,1]), xmax = 1 - plogis(hdi_50[,2])), height = 0.2, color = "#000") +
-#   geom_pointrange() +
-#   xlim(0, 1) +
-#   theme_minimal() +
-#   labs(title = "Bd Prevalence",
-#        x = "Prevalence draws [-]",
-#        y = "Species")
-
-p_cascade_sigma_linpred = ggplot(sigma_spp_agg, aes(x = sigma_median, xmin = sigma_lower_95, xmax = sigma_upper_95, reorder(get_species_name(taxon_capture), -sigma_median))) +
-  geom_rect(aes(xmin = sigma_lower_50, xmax = sigma_upper_50), height = 0.2, color = "#000") +
-  geom_pointrange() +
-  theme_minimal() +
-  labs(title = "Bd Load Dispersion",
-       x = "Log load standard deviation (sigma) draws [-]",
-       y = "Species")
-
-# p_cascade_sigma = ggplot(sigma_group_agg, aes(x = sigma_median, xmin = hdi_95[,1], xmax = hdi_95[,2], reorder(get_species_name(taxon_capture), -sigma_median))) +
-#   geom_rect(aes(xmin = hdi_50[,1], xmax = hdi_50[,2]), height = 0.2, color = "#000") +
-#   geom_pointrange() +
-#   theme_minimal() +
-#   labs(title = "Bd Load Dispersion",
-#        x = "Log load standard deviation (sigma) draws [-]",
-#        y = "Species")
+  labs(title = "Bd Load by Species (diagnostic)",
+       x = "Log Bd load density (mu) draws [-]\npoints: observed mean log load of positives by source",
+       y = "Species",
+       color = "Source",
+       size = "n positive")
 
 # save plots
 ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_hu_contrast.png"),
@@ -598,40 +536,19 @@ ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_mu_contras
        p_cascade_mu_contrast_linpred,
        width = 8, height = 6)
 
-ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_prevalence.png"),
-       p_cascade_prevalence_linpred,
-       width = 8, height = 6)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_species_cascade_sigma.png"),
-       p_cascade_sigma_linpred,
-       width = 8, height = 6)
-
 
 p_cascade_hu_contrast_linpred
 p_cascade_mu_contrast_linpred
-p_cascade_prevalence_linpred
-p_cascade_sigma_linpred
+p_cascade_mu_linpred
 
 ```
 # r2
 ```{r}
-# get_subset_r2 = function(model_select, taxon) {
-#   print(taxon)
-#   s_data = model_select$data %>%
-#     filter(taxon_capture == taxon)
-#   
-#   s_r2 = bayes_R2(model_select, new_data = s_data)
-#   
-#   gc()
-#   
-#   return(s_r2)
-# }
-
 get_subset_diagnostics = function(model_select, taxon) {
   print(taxon)
   
   taxon_idx = which(model_select$data$taxon_capture == taxon)
-  observed = model_select$data$bd_load_co_density[taxon_idx]
+  observed = model_select$data[[mu_resp]][taxon_idx]
   
   # Hurdle component - how well does it predict zero vs nonzero?
   fitted_hu = fitted(model_select, dpar = "hu")[taxon_idx, "Estimate"]
@@ -661,18 +578,10 @@ get_subset_diagnostics = function(model_select, taxon) {
   ))
 }
 
-preds_1 = posterior_predict(model_select, newdata = model_select$data %>%
-                                                    filter(taxon_capture == taxon_list[1]))
-
-preds_2 = posterior_predict(model_select, newdata = model_select$data %>%
-                                                    filter(taxon_capture == taxon_list[2]))
-
 taxon_list = model_select$data %>%
   distinct(taxon_capture) %>%
   pull(taxon_capture) %>%
   sort()
-
-r2_list = purrr::map(taxon_list, ~get_subset_r2(model_select, .x))
 
 r2_diagnostics_list = purrr::map(taxon_list, ~get_subset_diagnostics(model_select, .x))
 
@@ -681,19 +590,6 @@ r2_estimate = map_dbl(r2_diagnostics_list, "r2_lognormal")
 r2_df = tibble(taxon_capture = taxon_list,
                hu_correlation = map_dbl(r2_diagnostics_list, "hu_correlation"),
                r2_lognormal = map_dbl(r2_diagnostics_list, "r2_lognormal"))
-```
-
-# correlation analysis
-```{r}
-simple_cor = cor_mat(combined_agg_single %>%
-                       select(hu_contrast_median,
-                              mu_contrast_median,
-                              hu_median,
-                              sigma_median), method = "spearman")
-simple_cor
-cor_get_pval(simple_cor)
-
-
 ```
 
 ## Phylogenetic tree
@@ -823,46 +719,24 @@ jp_pruned = read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk")
 
 jp_pruned$tip.label
 
-# calculate blomberg K
-blomberg_k = function(tree, var_values, species) {
+# phylogenetic signal is estimated in 05 (H2 from the meta-model), not here.
+# drop species with NA values (e.g. no estimable mu contrast) and prune the tree to match
+named_non_na = function(var_values, species) {
   set_named = setNames(var_values, species)
-  return(blomberg_k_sigma_med = phylosig(tree, set_named, method = "K", test = TRUE, nsim = 1000))
+  return(set_named[!is.na(set_named)])
 }
 
-pagel_lambda = function(tree, var_values, species) {
-  set_named = setNames(var_values, species)
-  return(blomberg_k_sigma_med = phylosig(tree, set_named, method = "lambda", test = TRUE, nsim = 1000))
+prune_tree = function(tree, set_named) {
+  return(drop.tip(tree, setdiff(tree$tip.label, names(set_named))))
 }
-
-# blomberg k
-hu_contrast_med_k = blomberg_k(jp_pruned, combined_agg$hu_contrast_median, combined_agg$taxon_capture)
-mu_contrast_med_k = blomberg_k(jp_pruned, combined_agg$mu_contrast_median, combined_agg$taxon_capture)
-prev_med_k = blomberg_k(jp_pruned, combined_agg$prevalence_median, combined_agg$taxon_capture)
-sigma_med_k = blomberg_k(jp_pruned, combined_agg$sigma_median, combined_agg$taxon_capture)
-
-hu_contrast_med_k
-mu_contrast_med_k
-prev_med_k
-sigma_med_k
-
-# pagel lambda
-hu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg$hu_contrast_median, combined_agg$taxon_capture)
-mu_contrast_med_lambda = pagel_lambda(jp_pruned, combined_agg$mu_contrast_median, combined_agg$taxon_capture)
-prev_med_lambda = pagel_lambda(jp_pruned, combined_agg$prevalence_median, combined_agg$taxon_capture)
-sigma_med_lambda = pagel_lambda(jp_pruned, combined_agg$sigma_median, combined_agg$taxon_capture)
-
-hu_contrast_med_lambda
-mu_contrast_med_lambda
-prev_med_lambda
-sigma_med_lambda
 
 # define color maps
 sym_div_cont_map = function(tree, var_values, species, center, p_title, style = "div") {
-  set_named = setNames(var_values, species)
-  
-  sym_lim = max(abs(center - min(var_values)), abs(center - max(var_values)))
-  
-  map_1 = contMap(tree, set_named,
+  set_named = named_non_na(var_values, species)
+
+  sym_lim = max(abs(center - min(set_named)), abs(center - max(set_named)))
+
+  map_1 = contMap(prune_tree(tree, set_named), set_named,
                    lims = c(center - sym_lim, center + sym_lim),
                    title = p_title, fsize = 0.4)
   
@@ -888,18 +762,6 @@ p_mu_contrast_med_map = sym_div_cont_map(jp_pruned,
                                  0,
                                  "Bd log load (mu): median subadult effect")
 
-p_prev_med_map = sym_div_cont_map(jp_pruned,
-                                combined_agg$prevalence_median,
-                                combined_agg$taxon_capture,
-                                0.5,
-                                "Median Bd prevalence")
-
-p_sigma_med_map = sym_div_cont_map(jp_pruned,
-                                 combined_agg$sigma_median,
-                                 combined_agg$taxon_capture,
-                                 0.8822,
-                                 "Median Bd load dispersion (sigma)")
-
 png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_hu_contrast.png"),
     width = 6, height = 8, units = "in", res = 300)
 plot(p_hu_contrast_med_map)
@@ -911,22 +773,8 @@ plot(p_mu_contrast_med_map)
 dev.off()
 
 
-png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_prevalence.png"),
-    width = 6, height = 8, units = "in", res = 300)
-plot(p_prev_med_map)
-dev.off()
-
-
-png(file = here("size_bd_unified", "unified_figures", "03_tree_contmap_sigma.png"),
-    width = 6, height = 8, units = "in", res = 300)
-plot(p_sigma_med_map)
-dev.off()
-
-
 plot(p_hu_contrast_med_map)
 plot(p_mu_contrast_med_map)
-plot(p_prev_med_map)
-plot(p_sigma_med_map)
 
 ```
 
@@ -1076,30 +924,6 @@ cor_get_pval(simple_cor)
 #| fig-height: 6
 #| fig-width: 8
 
-f_draw_agg <- function(draws, group_vars, agg_var) {
-  
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-    )
-}
-
-precip_spp_sample_summary = f_draw_agg(brms_data, c("taxon_capture", "life_stage_simple"), "precip_mm_10_day_sum") %>%
-  mutate(offset = recode_values(life_stage_simple,
-                                "adult" ~ 1,
-                                "subadult" ~ 0))
-
-temp_spp_sample_summary = f_draw_agg(brms_data, c("taxon_capture", "life_stage_simple"), "temp_c_30_day_mean") %>%
-  mutate(offset = recode_values(life_stage_simple,
-                                "adult" ~ 1,
-                                "subadult" ~ 0))
-
 # 10 day precip, 30-day temp by species
 ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_10_day_sum, color = life_stage_simple)) +
   geom_point(alpha = 0.1) +
@@ -1135,355 +959,170 @@ ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = 
 
 ```
 
-## Climate
-
-### Precip
+## Climate response
 ```{r}
+#| fig-width: 12
+#| fig-height: 12
 
-apply_scale <- function(x_new, sc_obj) {
+# each species' modeled response to precipitation and temperature, relative to that species'
+# median conditions. the species intercept (which carries lab scale and sensitivity) cancels,
+# so curves can be compared across species:
+#   mu: change in log load, unaffected by a lab's multiplicative scale
+#   hu: change in log odds of detection (sign of hu flipped); the sign is comparable, the
+#       magnitude depends on detection sensitivity, and part of it can follow from the load
+#       response (higher loads clear the cutoff more often)
+# env slopes do not vary by life stage, so life stage cancels (adult used throughout).
+# taxon slopes are partially pooled: species sampled over a narrow range shrink toward the
+# across-species slope.
+
+apply_scale = function(x_new, sc_obj) {
   (x_new - attr(sc_obj, "scaled:center")) / attr(sc_obj, "scaled:scale")
 }
 
-remove_scale = function(x_sc, sc_obj) {
-  x_sc * attr(sc_obj, "scaled:scale") + attr(sc_obj, "scaled:center")
+env_sc = list(precip_mm_10_day_sum = scale(brms_data$precip_mm_10_day_sum),
+              temp_c_30_day_mean = scale(brms_data$temp_c_30_day_mean))
+
+# check the rescaling reproduces the model covariates
+stopifnot(isTRUE(all.equal(apply_scale(brms_data$precip_mm_10_day_sum, env_sc$precip_mm_10_day_sum),
+                           brms_data$precip_mm_10_z)),
+          isTRUE(all.equal(apply_scale(brms_data$temp_c_30_day_mean, env_sc$temp_c_30_day_mean),
+                           brms_data$temp_c_30_z)))
+
+env_labels = c(precip_mm_10_day_sum = "10-day precipitation total [mm]",
+               temp_c_30_day_mean = "30-day mean temperature [C]")
+dpar_labels = c(hu = "Change in log odds of detection",
+                mu = "Change in log(Bd load)")
+
+# curve draws over each species' 2.5-97.5% sampled range, other variable at the species
+# median, as change from the species median of env_var (first row, ref = TRUE)
+f_env_response = function(env_var, n_pts = 50) {
+  other_var = setdiff(names(env_sc), env_var)
+
+  nd = brms_data |>
+    group_by(taxon_capture) |>
+    reframe("{env_var}" := c(median(.data[[env_var]]),
+                             seq(quantile(.data[[env_var]], 0.025),
+                                 quantile(.data[[env_var]], 0.975),
+                                 length.out = n_pts)),
+            ref = c(TRUE, rep(FALSE, n_pts)),
+            "{other_var}" := median(.data[[other_var]])) |>
+    mutate(life_stage_simple = "adult",
+           precip_mm_10_z = apply_scale(precip_mm_10_day_sum, env_sc$precip_mm_10_day_sum),
+           temp_c_30_z = apply_scale(temp_c_30_day_mean, env_sc$temp_c_30_day_mean))
+
+  purrr::map(c("hu", "mu"), function(dp) {
+    model_select |>
+      linpred_draws(newdata = nd, dpar = dp, re_formula = re_spp_env) |>
+      ungroup() |>
+      select(taxon_capture, all_of(env_var), ref, .draw, value = all_of(dp)) |>
+      group_by(taxon_capture, .draw) |>
+      mutate(delta = value - value[ref]) |>
+      ungroup() |>
+      filter(!ref) |>
+      mutate(dpar = dp,
+             delta = if (dp == "hu") -delta else delta)
+  }) |>
+    list_rbind()
 }
 
-precip_10_sc = scale(brms_data$precip_mm_10_day_sum)
-precip_30_sc = scale(brms_data$precip_mm_30_day_sum)
-temp_30_sc = scale(brms_data$temp_c_30_day_mean)
+f_env_response_agg = function(env_var) {
+  f_env_response(env_var) |>
+    group_by(taxon_capture, dpar, .data[[env_var]]) |>
+    median_qi(delta, .width = c(0.5, 0.95)) |>
+    ungroup() |>
+    mutate(species = get_species_name(taxon_capture))
+}
 
-# use taxon-specific env slopes (re_spp_env, defined in Linpred Draws) so each species'
-# curve uses its own slopes, not the population-average slopes.
-# note: the previous re_formula ~ (1 | taxon_capture:life_stage_simple) is not a model
-# term, so brms dropped it and those curves were equivalent to re_formula = NA
+# sampled conditions per species (distinct site-dates) for rugs
+env_samples = brms_data |>
+  distinct(taxon_capture, site, date, precip_mm_10_day_sum, temp_c_30_day_mean) |>
+  mutate(species = get_species_name(taxon_capture))
 
-# species-specific sequences over each species' observed range (avoid extrapolating
-# species slopes), holding temperature at the species median
-nd_precip <- brms_data |>
+plot_env_response = function(agg, env_var, dp) {
+  ggplot(agg |> filter(dpar == dp), aes(x = .data[[env_var]], y = delta, ymin = .lower, ymax = .upper)) +
+    geom_hline(yintercept = 0, color = "#555") +
+    geom_lineribbon(aes(fill = factor(.width)), linewidth = 0.5) +
+    geom_rug(data = env_samples, aes(x = .data[[env_var]]), inherit.aes = FALSE,
+             sides = "b", alpha = 0.2, length = unit(0.02, "npc")) +
+    scale_fill_brewer(palette = "Blues", direction = -1, name = "Interval") +
+    facet_wrap("species") +
+    labs(title = paste(dpar_labels[[dp]], "relative to species median conditions"),
+         x = env_labels[[env_var]],
+         y = dpar_labels[[dp]]) +
+    theme_minimal()
+}
+
+agg_precip = f_env_response_agg("precip_mm_10_day_sum")
+agg_temp = f_env_response_agg("temp_c_30_day_mean")
+
+p_precip_rel_hu = plot_env_response(agg_precip, "precip_mm_10_day_sum", "hu")
+p_precip_rel_mu = plot_env_response(agg_precip, "precip_mm_10_day_sum", "mu")
+p_temp_rel_hu = plot_env_response(agg_temp, "temp_c_30_day_mean", "hu")
+p_temp_rel_mu = plot_env_response(agg_temp, "temp_c_30_day_mean", "mu")
+
+# local slope at each species' median conditions, per 1 SD of the dataset-wide variable.
+# central difference over +/- 0.5 SD, exact for the quadratic temperature term
+nd_slope = model_select$data |>
   group_by(taxon_capture) |>
-  reframe(precip_mm_10_day_sum = seq(min(precip_mm_10_day_sum),
-                                     max(precip_mm_10_day_sum),
-                                     length.out = 100),
-          temp_c_30_day_mean = median(temp_c_30_day_mean)) |>
-  cross_join(tibble(life_stage_simple = c("adult", "subadult"))) |>
-  mutate(
-    precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
-    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc)
-  )
-
-# hu
-hu_draws_precip <- model_select |>
-  linpred_draws(
-    newdata    = nd_precip,
-    dpar       = "hu",
-    re_formula = re_spp_env
-  )
-
-# average life stages on the link scale within each draw (as for species prevalence)
-hu_agg_precip = hu_draws_precip |>
-  group_by(taxon_capture, precip_mm_10_day_sum, .draw) |>
-  summarise(hu = mean(hu), .groups = "drop") |>
-  mutate(prevalence = 1 - plogis(hu)) |>
-  group_by(taxon_capture, precip_mm_10_day_sum) |>
-  median_qi(prevalence) %>%
-  mutate(species = get_species_name(taxon_capture, newline = TRUE))
-
-# mu
-mu_draws_precip <- model_select |>
-  linpred_draws(
-    newdata    = nd_precip,
-    dpar       = "mu",
-    re_formula = re_spp_env
-  )
-
-mu_agg_precip = mu_draws_precip |>
-  group_by(taxon_capture, precip_mm_10_day_sum, .draw) |>
-  summarise(mu = mean(mu), .groups = "drop") |>
-  group_by(taxon_capture, precip_mm_10_day_sum) |>
-  median_qi(mu) %>%
-  mutate(species = get_species_name(taxon_capture, newline = TRUE))
-
-agg_precip = hu_agg_precip %>%
-  dplyr::rename(prevalence_lower = .lower,
-                prevalence_upper = .upper,
-                prevalence_width = .width) %>%
-  select(taxon_capture,
-         precip_mm_10_day_sum,
-         prevalence,
-         prevalence_lower,
-         prevalence_upper,
-         prevalence_width) %>%
-  left_join(mu_agg_precip%>%
-              dplyr::rename(mu_lower = .lower,
-                            mu_upper = .upper,
-                            mu_width = .width) %>%
-              select(taxon_capture,
-                     precip_mm_10_day_sum,
-                     mu,
-                     mu_lower,
-                     mu_upper,
-                     mu_width), by = c("taxon_capture", "precip_mm_10_day_sum"))
-
-# visualize
-p_precip_prev = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal() +
-  labs(title = "Bd Prevalence vs. Precipitation",
-       x = "10-day lag precipitation [mm]",
-       y = "Bd prevalence [-]")
-
-# p_precip_prev_samp = ggplot(agg_precip) +
-#   geom_line(aes(x = precip_mm_10_day_sum, y = prevalence)) +
-#   geom_ribbon(aes(x = precip_mm_10_day_sum, ymin = prevalence_lower, ymax = prevalence_upper), alpha = 0.3) +
-#   geom_rect(data = precip_spp_sample_summary, aes(xmin = precip_mm_10_day_sum_lower_50, xmax = precip_mm_10_day_sum_upper_50, y = -0.1 - 0.2 * offset, height = 0.05, color = life_stage_simple, )) +
-#   geom_point(data = precip_spp_sample_summary, aes(x = precip_mm_10_day_sum_median, y = -0.1 - 0.2 * offset, color = life_stage_simple)) +
-#   facet_wrap("taxon_capture") +
-#   theme_minimal() +
-#   labs(title = "Bd Prevalence vs. Precipitation",
-#        x = "10-day lag precipitation [mm]",
-#        y = "Bd prevalence [-]")
-
-p_precip_mu = ggplot(agg_precip, aes(x = precip_mm_10_day_sum, y = mu, ymin = mu_lower, ymax = mu_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal() +
-  labs(title = "Bd Load vs. Precipitation",
-       x = "10-day lag precipitation [mm]",
-       y = "log(Bd load) [-]")
-
-ggsave(here("size_bd_unified", "unified_figures", "03_precip_prevalence.png"),
-       p_precip_prev,
-       width = 8, height = 8)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_precip_mu.png"),
-       p_precip_mu,
-       width = 8, height = 8)
-
-p_precip_prev
-p_precip_mu
-
-```
-
-### Temp
-```{r}
-# species-specific sequences over each species' observed range, holding precipitation
-# at the species median (re_spp_env defined in precip chunk)
-nd_temp <- brms_data |>
-  group_by(taxon_capture) |>
-  reframe(temp_c_30_day_mean = seq(min(temp_c_30_day_mean),
-                                   max(temp_c_30_day_mean),
-                                   length.out = 100),
-          precip_mm_10_day_sum = median(precip_mm_10_day_sum)) |>
-  cross_join(tibble(life_stage_simple = c("adult", "subadult"))) |>
-  mutate(
-    precip_mm_10_z  = apply_scale(precip_mm_10_day_sum, precip_10_sc),
-    temp_c_30_z     = apply_scale(temp_c_30_day_mean, temp_30_sc)
-  )
-
-
-# hu
-hu_draws_temp <- model_select |>
-  linpred_draws(
-    newdata    = nd_temp,
-    dpar       = "hu",
-    re_formula = re_spp_env
-  )
-
-# average life stages on the link scale within each draw (as for species prevalence)
-hu_agg_temp = hu_draws_temp |>
-  group_by(taxon_capture, temp_c_30_day_mean, .draw) |>
-  summarise(hu = mean(hu), .groups = "drop") |>
-  mutate(prevalence = 1 - plogis(hu)) |>
-  group_by(taxon_capture, temp_c_30_day_mean) |>
-  median_qi(prevalence) %>%
-  mutate(species = get_species_name(taxon_capture, newline = TRUE))
-
-# mu
-mu_draws_temp <- model_select |>
-  linpred_draws(
-    newdata    = nd_temp,
-    dpar       = "mu",
-    re_formula = re_spp_env
-  )
-
-mu_agg_temp = mu_draws_temp |>
-  group_by(taxon_capture, temp_c_30_day_mean, .draw) |>
-  summarise(mu = mean(mu), .groups = "drop") |>
-  group_by(taxon_capture, temp_c_30_day_mean) |>
-  median_qi(mu) %>%
-  mutate(species = get_species_name(taxon_capture, newline = TRUE))
-
-agg_temp = hu_agg_temp %>%
-  dplyr::rename(prevalence_lower = .lower,
-                prevalence_upper = .upper,
-                prevalence_width = .width) %>%
-  select(taxon_capture,
-         temp_c_30_day_mean,
-         prevalence,
-         prevalence_lower,
-         prevalence_upper,
-         prevalence_width) %>%
-  left_join(mu_agg_temp %>%
-              dplyr::rename(mu_lower = .lower,
-                            mu_upper = .upper,
-                            mu_width = .width) %>%
-              select(taxon_capture,
-                     temp_c_30_day_mean,
-                     mu,
-                     mu_lower,
-                     mu_upper,
-                     mu_width), by = c("taxon_capture", "temp_c_30_day_mean"))
-
-# visualize
-p_temp_prev = ggplot(agg_temp, aes(x = temp_c_30_day_mean, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal() +
-  ylim(0, 1) +
-  labs(title = "Bd Prevalence vs. Temperature",
-       x = "30-day lag max daily temperature [C]",
-       y = "Bd prevalence [-]")
-
-p_temp_mu = ggplot(agg_temp, aes(x = temp_c_30_day_mean, y = mu, ymin = mu_lower, ymax = mu_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  facet_wrap("taxon_capture") +
-  theme_minimal() +
-  labs(title = "Bd Load vs. Temperature",
-       x = "30-day lag max daily temperature [C]",
-       y = "log(Bd load) [-]")
-
-ggsave(here("size_bd_unified", "unified_figures", "03_temp_prevalence.png"),
-       p_temp_prev,
-       width = 8, height = 8)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_temp_mu.png"),
-       p_temp_mu,
-       width = 8, height = 8)
-
-p_temp_prev
-p_temp_mu
-
-```
-
-### KG zones
-```{r}
-nd_kg_env = model_select$data |>
-  group_by(taxon_capture, life_stage_simple) |>
   summarise(precip_mm_10_z = median(precip_mm_10_z),
             temp_c_30_z = median(temp_c_30_z),
             .groups = "drop") |>
-  filter(life_stage_simple == "subadult") %>%
-  select(-life_stage_simple)
+  cross_join(tibble(env_var = c("precip_mm_10_z", "temp_c_30_z"))) |>
+  cross_join(tibble(step = c(-0.5, 0.5))) |>
+  mutate(precip_mm_10_z = precip_mm_10_z + if_else(env_var == "precip_mm_10_z", step, 0),
+         temp_c_30_z = temp_c_30_z + if_else(env_var == "temp_c_30_z", step, 0),
+         life_stage_simple = "adult")
 
-nd_kg = model_select$data |>
-  distinct(taxon_capture, life_stage_simple, kg_code_3) |>
-  left_join(nd_kg_env, by = "taxon_capture")
+env_slope_draws = purrr::map(c("hu", "mu"), function(dp) {
+  model_select |>
+    linpred_draws(newdata = nd_slope, dpar = dp, re_formula = re_spp_env) |>
+    ungroup() |>
+    select(taxon_capture, env_var, step, .draw, value = all_of(dp)) |>
+    pivot_wider(names_from = step, values_from = value, names_prefix = "step_") |>
+    mutate(dpar = dp,
+           slope = `step_0.5` - `step_-0.5`)
+}) |>
+  list_rbind() |>
+  mutate(slope = if_else(dpar == "hu", -slope, slope))  # hu reported as log odds of detection
 
-hu_draws_kg_spp_lss = model_select |>
-  linpred_draws(
-    newdata    = nd_kg,
-    dpar       = "hu",
-    re_formula = ~ (1 | kg_code_3)
-  )
+# hu slopes: interpret sign / support (net effect), not magnitude
+env_slope_agg = f_draw_agg(env_slope_draws, c("dpar", "env_var", "taxon_capture"), "slope") |>
+  mutate(species = get_species_name(taxon_capture),
+         env_label = recode(env_var,
+                            precip_mm_10_z = paste0("Precipitation (1 SD = ",
+                                                    round(attr(env_sc$precip_mm_10_day_sum, "scaled:scale")), " mm)"),
+                            temp_c_30_z = paste0("Temperature (1 SD = ",
+                                                 round(attr(env_sc$temp_c_30_day_mean, "scaled:scale"), 1), " C)")))
 
-hu_agg_kg = hu_draws_kg_spp_lss |>
-  mutate(prevalence = 1 - plogis(hu)) |>
-  group_by(kg_code_3) |>
-  median_qi(prevalence)
+p_env_slopes = ggplot(env_slope_agg, aes(x = slope_median, y = reorder(species, slope_median), color = slope_support)) +
+  geom_vline(xintercept = 0, color = "#555") +
+  geom_linerange(aes(xmin = slope_lower_95, xmax = slope_upper_95)) +
+  geom_linerange(aes(xmin = slope_lower_50, xmax = slope_upper_50), linewidth = 1.5) +
+  geom_point() +
+  scale_color_manual(values = c(strong = "#1b7837", weak = "#7fbf7b", none = "#999")) +
+  facet_wrap(vars(dpar_labels[dpar], env_label), scales = "free_x") +
+  labs(title = "Species response at median conditions (per 1 SD)",
+       x = "Change per 1 SD", y = "Species", color = "Support") +
+  theme_minimal()
 
+ggsave(here("size_bd_unified", "unified_figures", "03_precip_rel_detection.png"), p_precip_rel_hu, width = 12, height = 12)
+ggsave(here("size_bd_unified", "unified_figures", "03_precip_rel_mu.png"), p_precip_rel_mu, width = 12, height = 12)
+ggsave(here("size_bd_unified", "unified_figures", "03_temp_rel_detection.png"), p_temp_rel_hu, width = 12, height = 12)
+ggsave(here("size_bd_unified", "unified_figures", "03_temp_rel_mu.png"), p_temp_rel_mu, width = 12, height = 12)
+ggsave(here("size_bd_unified", "unified_figures", "03_env_slopes.png"), p_env_slopes, width = 12, height = 10)
 
-# mu
-mu_draws_kg_spp_lss = model_select |>
-  linpred_draws(
-    newdata    = nd_kg,
-    dpar       = "mu",
-    re_formula = ~ (1 | kg_code_3)
-  )
+p_precip_rel_hu
+p_precip_rel_mu
+p_temp_rel_hu
+p_temp_rel_mu
+p_env_slopes
 
-mu_agg_kg = mu_draws_kg_spp_lss |>
-  group_by(kg_code_3) |>
-  median_qi(mu)
-
-agg_kg = hu_agg_kg %>%
-  dplyr::rename(prevalence_lower = .lower,
-                prevalence_upper = .upper,
-                prevalence_width = .width) %>%
-  select(kg_code_3,
-         prevalence,
-         prevalence_lower,
-         prevalence_upper,
-         prevalence_width) %>%
-  left_join(mu_agg_kg %>%
-              dplyr::rename(mu_lower = .lower,
-                            mu_upper = .upper,
-                            mu_width = .width) %>%
-              select(kg_code_3,
-                     mu,
-                     mu_lower,
-                     mu_upper,
-                     mu_width), by = "kg_code_3") %>%
-  mutate(kg_code_2 = substr(kg_code_3, start = 1, stop = 2),
-         kg_code_1 = substr(kg_code_3, start = 1, stop = 1))
-
-# visualize
-ggplot(agg_kg, aes(x = kg_code_3, fill = kg_code_1)) +
-  geom_boxplot(stat = "identity", aes(middle = prevalence, lower = prevalence_lower, upper = prevalence_upper, ymin = prevalence_lower, ymax = prevalence_upper))
-
-ggplot(agg_kg, aes(x = kg_code_3, fill = kg_code_1)) +
-  geom_boxplot(stat = "identity", aes(middle = mu, lower = mu_lower, upper = mu_upper, ymin = mu_lower, ymax = mu_upper))
-
-p_y_temp_prev = ggplot(agg_y_temp, aes(x = past_year_weekly_tempurature_max_c_sd, y = prevalence, ymin = prevalence_lower, ymax = prevalence_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  theme_minimal() +
-  ylim(0, 1) +
-  labs(title = "Bd Prevalence vs. Past year weekly temperature max SD",
-       x = "Past year weekly tempurature max SD [C]",
-       y = "Bd prevalence [-]")
-
-p_y_temp_mu = ggplot(agg_y_temp, aes(x = past_year_weekly_tempurature_max_c_sd, y = mu, ymin = mu_lower, ymax = mu_upper)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.3) +
-  theme_minimal() +
-  labs(title = "Bd Load vs. Past year weekly temperature max SD",
-       x = "Past year weekly tempurature max SD [C]",
-       y = "log(Bd load) [-]")
-
-ggsave(here("size_bd_unified", "unified_figures", "03_temp_prevalence.png"),
-       p_temp_prev,
-       width = 8, height = 8)
-
-ggsave(here("size_bd_unified", "unified_figures", "03_temp_mu.png"),
-       p_temp_mu,
-       width = 8, height = 8)
-
-p_temp_prev
-p_temp_mu
 ```
 
 # Populations
 ```{r}
 #| fig-width: 10
 #| fig-height: 10
-
-f_draw_agg <- function(draws, group_vars, agg_var) {
-  
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-    )
-}
 
 # pop coords
 pop_coords = brms_data %>%
@@ -1668,24 +1307,211 @@ p_scatter_mu_life_stage_linpred_pop_sn
 #        width = 10, height = 10)
 ```
 
-## population year
+## Between-population spread
 ```{r}
 #| fig-width: 10
 #| fig-height: 10
 
-f_draw_agg <- function(draws, group_vars, agg_var) {
-  
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-    )
+# species-specific SDs of the population:life_stage intercepts (gr(..., by = taxon_capture)).
+# an SD of log load is unaffected by a lab's multiplicative scale, so mu spreads can be
+# compared across species. hu spreads are on the logit scale, whose magnitude depends on
+# detection sensitivity: compare with caution.
+# with few populations the SD is mostly prior; mu spreads also need Bd-positive loads in
+# those populations.  
+min_pop = 3
+
+pop_n = model_select$data |>
+  group_by(taxon_capture) |>
+  summarise(n_pop = n_distinct(population),
+            n_pop_pos = n_distinct(population[.data[[mu_resp]] > 0]),
+            .groups = "drop")
+
+pop_sd_draws = as_draws_df(model_select,
+                           variable = "^sd_taxon_capture:population:life_stage_simple__",
+                           regex = TRUE) |>
+  as_tibble() |>
+  select(-.chain, -.iteration) |>
+  pivot_longer(starts_with("sd_"), names_to = "variable", values_to = "pop_sd") |>
+  mutate(dpar = if_else(str_detect(variable, "__hu_"), "hu", "mu"),
+         taxon_capture = str_remove(variable, "^.*:taxon_capture")) |>
+  select(taxon_capture, dpar, .draw, pop_sd) |>
+  left_join(pop_n, by = "taxon_capture") |>
+  filter(if_else(dpar == "hu", n_pop, n_pop_pos) >= min_pop)
+
+pop_sd_agg = f_draw_agg(pop_sd_draws, c("dpar", "taxon_capture"), "pop_sd") |>
+  select(-pop_sd_net_effect, -pop_sd_pd, -pop_sd_support) |>  # SDs are positive
+  left_join(pop_n, by = "taxon_capture") |>
+  mutate(species = get_species_name(taxon_capture),
+         n_label = if_else(dpar == "hu", n_pop, n_pop_pos))
+
+p_pop_sd = ggplot(pop_sd_agg, aes(x = pop_sd_median, y = reorder(species, pop_sd_median))) +
+  geom_linerange(aes(xmin = pop_sd_lower_95, xmax = pop_sd_upper_95)) +
+  geom_linerange(aes(xmin = pop_sd_lower_50, xmax = pop_sd_upper_50), linewidth = 1.5) +
+  geom_point() +
+  geom_text(aes(x = pop_sd_upper_95, label = paste0("n = ", n_label)),
+            hjust = -0.2, size = 3, color = "#555") +
+  facet_wrap(vars(c(hu = "Detection (logit SD)", mu = "log(Bd load) SD")[dpar]), scales = "free") +
+  scale_x_continuous(expand = expansion(mult = c(0.02, 0.25))) +
+  labs(title = "Between-population spread within species",
+       x = "SD of population intercepts", y = "Species") +
+  theme_minimal()
+
+ggsave(here("size_bd_unified", "unified_figures", "03_population_sd.png"), p_pop_sd, width = 10, height = 8)
+
+p_pop_sd
+
+```
+
+## Variance components
+```{r}
+#| fig-width: 12
+#| fig-height: 10
+
+# where the model attributes each species' variation in log load (mu), as SDs on the log scale:
+#   population: population:life_stage intercepts
+#   population-year: population:year deviations, by life stage
+#   environment: SD of the species' env term (fixed + taxon slopes) over its Bd-positive
+#     observations
+#   residual: species-level sigma (at a typical population; population sigma effects excluded)
+# compare with the raw decomposition below: where a species' raw between-population spread
+# is much larger than its modeled population SD, the model is crediting that variation to
+# other terms (e.g. population-year, where populations are sampled over many years).
+
+taxa = sort(unique(model_select$data$taxon_capture))
+
+vc_draws = as_draws_df(model_select,
+                       variable = c("^sd_taxon_capture:population:life_stage_simple__Intercept:",
+                                    "^sd_taxon_capture:population:year__life_stage_simple",
+                                    "^b_(precip_mm_10_z|temp_c_30_z|Itemp_c_30_zE2)$",
+                                    "^r_taxon_capture\\[",
+                                    "^b_sigma_"),
+                       regex = TRUE) |>
+  as_tibble()
+
+vc_sd = vc_draws |>
+  select(.draw, starts_with("sd_")) |>
+  pivot_longer(-.draw, names_to = "variable", values_to = "sd") |>
+  mutate(taxon_capture = str_remove(variable, "^.*:taxon_capture"),
+         component = case_when(
+           str_detect(variable, "population:life_stage_simple__") ~ "population",
+           str_detect(variable, "simpleadult") ~ "population-year (adult)",
+           str_detect(variable, "simplesubadult") ~ "population-year (subadult)")) |>
+  select(.draw, taxon_capture, component, sd)
+
+# combined spread across sampling units: sqrt(population^2 + population-year^2) per draw and
+# life stage. the population / population-year split is weakly identified where populations
+# are sampled in few years, so compare this (not the population SD alone) across species
+vc_combined = vc_sd |>
+  pivot_wider(names_from = component, values_from = sd) |>
+  transmute(.draw,
+            taxon_capture,
+            `population + population-year (adult)` = sqrt(population^2 + `population-year (adult)`^2),
+            `population + population-year (subadult)` = sqrt(population^2 + `population-year (subadult)`^2)) |>
+  pivot_longer(starts_with("population"), names_to = "component", values_to = "sd")
+
+# sigma ~ 1 + taxon_capture (log link); the reference taxon has no taxon term
+vc_sigma = purrr::map(taxa, function(tx) {
+  col = paste0("b_sigma_taxon_capture", tx)
+  tibble(.draw = vc_draws$.draw,
+         taxon_capture = tx,
+         component = "residual (sigma)",
+         sd = exp(vc_draws$b_sigma_Intercept + if (col %in% names(vc_draws)) vc_draws[[col]] else 0))
+}) |>
+  list_rbind()
+
+# env term SD per draw: sqrt(b' S b), with S the covariance of (precip, temp, temp^2)
+# over the species' Bd-positive observations
+env_obs = model_select$data |>
+  filter(.data[[mu_resp]] > 0) |>
+  select(taxon_capture, precip_mm_10_z, temp_c_30_z)
+
+vc_env = purrr::map(taxa, function(tx) {
+  x = env_obs |> filter(taxon_capture == tx)
+  if (nrow(x) < 2) return(NULL)
+  r = function(term) vc_draws[[paste0("r_taxon_capture[", tx, ",", term, "]")]]
+  B = cbind(vc_draws$b_precip_mm_10_z + r("precip_mm_10_z"),
+            vc_draws$b_temp_c_30_z + r("temp_c_30_z"),
+            vc_draws$b_Itemp_c_30_zE2 + r("Itemp_c_30_zE2"))
+  S = cov(cbind(x$precip_mm_10_z, x$temp_c_30_z, x$temp_c_30_z^2))
+  tibble(.draw = vc_draws$.draw,
+         taxon_capture = tx,
+         component = "environment",
+         sd = sqrt(rowSums((B %*% S) * B)))
+}) |>
+  list_rbind()
+
+vc_levels = c("population", "population-year (adult)", "population-year (subadult)",
+              "population + population-year (adult)", "population + population-year (subadult)",
+              "environment", "residual (sigma)")
+
+vc_agg = bind_rows(vc_sd, vc_combined, vc_sigma, vc_env) |>
+  f_draw_agg(c("taxon_capture", "component"), "sd") |>
+  select(-sd_net_effect, -sd_pd, -sd_support) |>  # SDs are positive
+  mutate(component = factor(component, levels = vc_levels),
+         species = get_species_name(taxon_capture))
+
+vc_spp_levels = vc_agg |>
+  filter(component == "population + population-year (adult)") |>
+  arrange(sd_median) |>
+  pull(species)
+
+p_vc = ggplot(vc_agg, aes(x = sd_median, y = factor(species, levels = vc_spp_levels))) +
+  geom_linerange(aes(xmin = sd_lower_95, xmax = sd_upper_95)) +
+  geom_linerange(aes(xmin = sd_lower_50, xmax = sd_upper_50), linewidth = 1.5) +
+  geom_point() +
+  facet_wrap("component", nrow = 1, labeller = label_wrap_gen(20)) +
+  labs(title = "Variance components of log Bd load (mu) by species",
+       x = "SD [log scale]", y = "Species") +
+  theme_minimal()
+
+# raw decomposition of observed log load (positives), for comparison. population x life stage
+# groups with >= 10 positives; between-population SD corrected for sampling noise;
+# between-year SD from population x life stage x year means (>= 5 positives, >= 2 years)
+f_raw_vc = function(x) {
+  pm = x |>
+    group_by(population, life_stage_simple) |>
+    filter(n() >= 10) |>
+    summarise(m = mean(ll), n = n(), v = var(ll), .groups = "drop")
+  pym = x |>
+    group_by(population, life_stage_simple, year) |>
+    filter(n() >= 5) |>
+    summarise(m = mean(ll), .groups = "drop") |>
+    group_by(population, life_stage_simple) |>
+    filter(n() >= 2) |>
+    summarise(sd_yr = sd(m), .groups = "drop")
+  tibble(raw_n_pop_ls = nrow(pm),
+         raw_population = sqrt(max(var(pm$m) - mean(pm$v / pm$n), 0)),
+         raw_population_year = median(pym$sd_yr),
+         raw_within = if (nrow(pm) > 0) sqrt(mean(pm$v)) else NA_real_)
 }
+
+raw_vc = brms_data |>
+  filter(.data[[mu_resp]] > 0) |>
+  mutate(ll = log(.data[[mu_resp]])) |>
+  group_by(taxon_capture) |>
+  group_modify(~ f_raw_vc(.x)) |>
+  ungroup()
+
+vc_compare = vc_agg |>
+  select(taxon_capture, component, sd_median) |>
+  pivot_wider(names_from = component, values_from = sd_median) |>
+  left_join(raw_vc, by = "taxon_capture") |>
+  mutate(across(where(is.double), ~ round(.x, 2))) |>
+  arrange(desc(raw_n_pop_ls))
+
+vc_compare
+vc_compare |> filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae"))
+
+ggsave(here("size_bd_unified", "unified_figures", "03_variance_components.png"), p_vc, width = 18, height = 10)
+
+p_vc
+
+```
+
+## population year
+```{r}
+#| fig-width: 10
+#| fig-height: 10
 
 popyr_summary = model_select$data %>%
   # filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
@@ -1942,20 +1768,6 @@ ggplot(popyr_tax_agg_combined %>%
 ```{r}
 #| fig-width: 10
 #| fig-height: 10
-
-f_draw_agg <- function(draws, group_vars, agg_var) {
-  
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1
-    )
-}
 
 popyr_summary = model_select$data %>%
   # filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")) %>%
@@ -2326,39 +2138,6 @@ mu_map
 
 ```
 
-## population density
-```{r}
-
-librarian::shelf(RIBBiTR-BII/ribbitrrr, dbplyr, RPostgres, DBI)
-dbcon = hopToDB("ribbitr")
-
-db_site = tbl(dbcon, Id("survey_data", "site"))
-
-sn_sites = db_site %>%
-  filter(site %in% brms_data$site) %>%
-  select(site,
-         area_sqr_m) %>%
-  collect()
-
-pop_dens = brms_data %>%
-  left_join(sn_sites, by = "site") %>%
-  group_by(taxon_capture, population) %>%
-  mutate(pop_area_sqr_km = sum(area_sqr_m)/100000,
-         n_visits = n_distinct(date),
-         obs_pop_dens = n() / (n_visits * pop_area_sqr_km))
-
-ggplot(pop_dens %>%
-         filter(taxon_capture %in% c("rana_muscosa", "rana_sierrae")), aes(x = obs_pop_dens, y = bd_load_co_density, color = taxon_capture)) +
-  geom_point(alpha = 0.2) +
-  scale_y_log10() +
-  scale_x_log10()
-
-n_pops = brms_data %>%
-  group_by(taxon_capture) %>%
-  count
-
-```
-
 # Combined rank plot
 ```{r}
 #| fig-width: 20
@@ -2410,8 +2189,11 @@ manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01
 write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
 write_parquet(spp_lss_draws, paste0(manuscript_data_dir, "unified_03_b_spp_lss_draws.parquet"))
 write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_combined_effects_agg.csv"))
-write_parquet(agg_precip, paste0(manuscript_data_dir, "unified_03_d_precipitation_agg.parquet"))
-write_parquet(agg_temp, paste0(manuscript_data_dir, "unified_03_e_temperature_agg.parquet"))
+
+# per-cutoff copy for th_sensitivity_analysis.Rmd (re-run 03 with each cutoff model)
+co_select = sub("^bd_load_(co[0-9]+)_density$", "\\1", mu_resp)
+write_csv(combined_agg, here("size_bd_unified", "intermediates", "th_sensitivity_analysis",
+                             paste0("unified_03_c_combined_effects_agg_m11d_", co_select, ".csv")))
 write_parquet(pop_agg_combined, paste0(manuscript_data_dir, "unified_03_f_population_agg.parquet"))
 
 
