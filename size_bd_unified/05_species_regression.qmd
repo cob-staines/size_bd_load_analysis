@@ -18,7 +18,7 @@ librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio
 # Load models and data
 ```{r}
 # load model
-m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
+m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
 model_select = m11d_co100_zln
 
 # load life history
@@ -38,65 +38,17 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 
 # linpred draws
 ```{r}
-mmode = function(x) {
-  ux = unique(x)
-  ux[which.max(tabulate(match(x, ux)))]
-}
+# species x life stage linpreds at each species' median subadult weather, with taxon-specific
+# weather slopes (contrast_functions.R; shared with 03 and th_sensitivity_analysis)
+source(here("size_bd_unified", "contrast_functions.R"))
 
-
-# define linpred data
-nd_env_subadult = model_select$data %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarize(precip_mm_10_z = median(precip_mm_10_z),
-            temp_c_30_z = median(temp_c_30_z),
-            kg_code_3 = mmode(kg_code_3),
-            .groups = "drop") %>%
-  filter(life_stage_simple == "subadult")
-
-nd_spp_lss = model_select$data |>
-  distinct(taxon_capture, life_stage_simple) %>%
-  left_join(nd_env_subadult %>%
-              select(-life_stage_simple), by = "taxon_capture")
-
-# include taxon-specific env slopes (fixed + r_taxon_capture) so each species' linpred
-# at its median env uses its own slopes, not the population-average slopes.
-# contrasts are unaffected (slopes do not vary by life stage).
-re_spp_env = ~ (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture)
-
-# hu contrast
-hu_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "hu",
-    re_formula = re_spp_env
-  ) %>%
-  ungroup()
-
-# mu 
-mu_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "mu",
-    re_formula = re_spp_env
-  ) %>% ungroup()
-
-# combine
-spp_lss_draws = hu_spp_lss_draws %>%
-  select(taxon_capture,
-         life_stage_simple,
-         .draw,
-         hu) %>%
-  left_join(mu_spp_lss_draws %>%
-              select(taxon_capture,
-                     life_stage_simple,
-                     .draw,
-                     mu), by = c("taxon_capture", "life_stage_simple", ".draw"))
+spp_lss_draws = spp_lss_linpred_draws(model_select)
 
 ```
 
 # calculate metrics
 ```{r}
-spp_contrast_agg = spp_lss_draws %>%
+spp_contrast_summary = spp_lss_draws %>%
   pivot_wider(id_cols = c("taxon_capture", ".draw"),
               names_from = "life_stage_simple",
               values_from = c("hu", "mu")) %>%
@@ -111,19 +63,11 @@ spp_contrast_agg = spp_lss_draws %>%
             mu_contrast_sd = sd(mu_contrast),
             .groups = "drop")
 
-metrics_agg = spp_contrast_agg
+metrics_agg = spp_contrast_summary
 
 # mu contrast is only estimable where both life stages have Bd-positive loads;
 # mu_contrast_mean is fit with subset(has_mu_contrast) below
-mu_resp = as.character(model_select$formula$formula[[2]])
-
-taxa_mu_contrast = model_select$data |>
-  group_by(taxon_capture, life_stage_simple) |>
-  summarise(n_pos = sum(.data[[mu_resp]] > 0), .groups = "drop") |>
-  group_by(taxon_capture) |>
-  filter(n_distinct(life_stage_simple) == 2, all(n_pos > 0)) |>
-  distinct(taxon_capture) |>
-  pull(taxon_capture)
+taxa_mu_contrast = mu_contrast_taxa(model_select)
 
 metrics_ls = metrics_agg %>%
   left_join(ls_clean, by = "taxon_capture") %>%
@@ -181,7 +125,7 @@ ggplot(spp_error_cor, aes(x = r_hucontrast_mucontrast, y = reorder(taxon_capture
 # for models with subset() (brms 2.23), so check pareto k and use reloo/kfold if needed
 loo_by_resp = function(fit) {
   resps = fit$formula$responses
-  setNames(map(resps, ~ loo(fit, resp = .x)), resps)
+  setNames(purrr::map(resps, ~ loo(fit, resp = .x)), resps)
 }
 
 m1_lspr = brm(
@@ -259,13 +203,13 @@ m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_ls
 # model comparison
 ```{r}
 # compare models within each response
-(loo_comp_out = map(set_names(m1d_lspr$formula$responses), function(resp) {
+(loo_comp_out = purrr::map(set_names(m1d_lspr$formula$responses), function(resp) {
   loo_compare(list(m1_lspr  = m1_lspr$criteria$loo_resp[[resp]],
                    m1b_lspr = m1b_lspr$criteria$loo_resp[[resp]],
                    m1d_lspr = m1d_lspr$criteria$loo_resp[[resp]]))
 }))
 
-map(set_names(m1d_lspr$formula$responses), ~ bayes_R2(m1d_lspr, resp = .x))
+purrr::map(set_names(m1d_lspr$formula$responses), ~ bayes_R2(m1d_lspr, resp = .x))
 ```
 
 # model evaluation
@@ -323,7 +267,7 @@ m_fixed_draws = model_select %>%
   separate(.variable, into = c("prefix", "response", "term"),
            sep = "_", extra = "merge")
 
-ggplot(m_fixed_draws, aes(x = .value, y = term, color = response, fill = response)) +
+ggplot(m_fixed_draws, aes(x = .value, y = term)) +
   stat_halfeye(alpha = 0.6, .width = c(0.5, 0.89), density = "bounded", normalize = "panels") +
   geom_vline(xintercept = 0, linetype = "dashed") +
   facet_wrap(~ response, scales = "free_x") +
@@ -341,5 +285,32 @@ repo_dir = gsub("size_bd_load_analysis", "", here())
 manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
 
 write_parquet(m_fixed_draws, paste0(manuscript_data_dir, "unified_05_a_fixed_draws.parquet"))
+
+# phylogenetic signal (H2 = sd_phylo^2 / (sd_phylo^2 + sigma^2)) per response, and the
+# phylogenetic correlation between the hu and mu contrasts (the hurdle cutoff can couple them)
+meta_draws = as_draws_df(model_select) |>
+  as_tibble()
+
+meta_summary = tibble(
+  .draw = meta_draws$.draw,
+  h2_hu_contrast = meta_draws$sd_taxon_capture__hucontrastmean_Intercept^2 /
+    (meta_draws$sd_taxon_capture__hucontrastmean_Intercept^2 + meta_draws$sigma_hucontrastmean^2),
+  h2_mu_contrast = meta_draws$sd_taxon_capture__mucontrastmean_Intercept^2 /
+    (meta_draws$sd_taxon_capture__mucontrastmean_Intercept^2 + meta_draws$sigma_mucontrastmean^2),
+  cor_hu_mu_contrast = meta_draws$cor_taxon_capture__hucontrastmean_Intercept__mucontrastmean_Intercept
+) |>
+  pivot_longer(-.draw, names_to = "metric", values_to = "value") |>
+  group_by(metric) |>
+  summarise(median = median(value),
+            lower_50 = quantile(value, 0.25),
+            upper_50 = quantile(value, 0.75),
+            lower_95 = quantile(value, 0.025),
+            upper_95 = quantile(value, 0.975),
+            pd = max(mean(value > 0), mean(value < 0)),
+            .groups = "drop")
+
+meta_summary
+
+write_csv(meta_summary, paste0(manuscript_data_dir, "unified_05_b_meta_summary.csv"))
 
 ```

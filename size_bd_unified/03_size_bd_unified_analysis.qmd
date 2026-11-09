@@ -8,7 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, helixcn/phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-09-23.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
@@ -64,7 +64,7 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # 
 # m11d_co50_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co50_20260926_130018_with_loo.rds"))
 
-m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
+m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
 
 model_select = m11d_co100_zln
 
@@ -108,33 +108,9 @@ wilson_ci_upper = function(p_hat, n, conf.level = 0.95) {
   return(ws[2])
 }
 
-mmode = function(x) {
-  ux = unique(x)
-  ux[which.max(tabulate(match(x, ux)))]
-}
-
-# posterior summary with median and equal-tailed (quantile) intervals.
-# pd: probability of direction. support: "strong" if 0 is outside the 95% interval
-# (pd > 0.975), "weak" if 0 is outside the 50% but inside the 95% interval
-# (0.75 < pd <= 0.975), otherwise "none". net_effect = 2 * P(> 0) - 1.
-f_draw_agg <- function(draws, group_vars, agg_var) {
-
-  draws |>
-    group_by(across(all_of(group_vars))) |>
-    reframe(
-      "{agg_var}_lower_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 2],
-      "{agg_var}_upper_50" := tidybayes::median_qi(.data[[agg_var]], .width = 0.50)[, 3],
-      "{agg_var}_lower_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 2],
-      "{agg_var}_upper_95" := tidybayes::median_qi(.data[[agg_var]], .width = 0.95)[, 3],
-      "{agg_var}_median"   := median(.data[[agg_var]]),
-      "{agg_var}_net_effect" := (sum(.data[[agg_var]] > 0) / n()) * 2 - 1,
-      "{agg_var}_pd" := max(mean(.data[[agg_var]] > 0), mean(.data[[agg_var]] < 0))
-    ) |>
-    mutate("{agg_var}_support" := case_when(
-      .data[[paste0(agg_var, "_lower_95")]] > 0 | .data[[paste0(agg_var, "_upper_95")]] < 0 ~ "strong",
-      .data[[paste0(agg_var, "_lower_50")]] > 0 | .data[[paste0(agg_var, "_upper_50")]] < 0 ~ "weak",
-      .default = "none"))
-}
+# shared with 05 and th_sensitivity_analysis: mmode, f_draw_agg (median_qi summaries with
+# pd / support), re_spp_env and the species contrast functions
+source(here("size_bd_unified", "contrast_functions.R"))
 
 ```
 
@@ -145,105 +121,41 @@ f_draw_agg <- function(draws, group_vars, agg_var) {
 ### Linpred Draws
 ```{r}
 
-# define linpred data
-nd_env_subadult = model_select$data %>%
-  group_by(taxon_capture, life_stage_simple) %>%
-  summarize(precip_mm_10_z = median(precip_mm_10_z),
-            temp_c_30_z = median(temp_c_30_z),
-            kg_code_3 = mmode(kg_code_3),
-            .groups = "drop") %>%
-  filter(life_stage_simple == "subadult")
+# species x life stage linpreds at each species' median subadult weather, with taxon-specific
+# weather slopes, and subadult - adult contrasts (contrast_functions.R; shared with 05 and
+# th_sensitivity_analysis)
+nd_spp_lss = spp_lss_newdata(model_select)
+spp_out = spp_contrasts(model_select)
 
-nd_spp_lss = model_select$data |>
-  distinct(taxon_capture, life_stage_simple) %>%
-  left_join(nd_env_subadult %>%
-              select(-life_stage_simple), by = "taxon_capture")
-
-# include taxon-specific env slopes (fixed + r_taxon_capture) so each species' linpred
-# at its median env uses its own slopes, not the population-average slopes (as in 05).
-# contrasts are unaffected (slopes do not vary by life stage).
-re_spp_env = ~ (0 + precip_mm_10_z + temp_c_30_z + I(temp_c_30_z^2) | taxon_capture)
-
-# hu contrast
-hu_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "hu",
-    re_formula = re_spp_env
-  ) %>%
-  ungroup()
-
-hu_spp_lss_contrast_draws = hu_spp_lss_draws |>
-  pivot_wider(
-    id_cols     = c(taxon_capture, .draw),
-    names_from  = life_stage_simple,
-    values_from = hu
-  ) |>
-  mutate(hu_contrast = subadult - adult,
-         contrast = "subadult - adult")
-
-# mu 
-mu_spp_lss_draws = model_select |>
-  linpred_draws(
-    newdata    = nd_spp_lss,
-    dpar       = "mu",
-    re_formula = re_spp_env
-  ) %>% ungroup()
-
-# species-level mu, diagnostic only: average life stages on the link scale within each draw
-mu_spp_draws = mu_spp_lss_draws |>
-  group_by(taxon_capture, .draw) |>
-  summarise(mu = mean(mu), .groups = "drop")
-
-mu_spp_lss_contrast_draws = mu_spp_lss_draws |>
-  pivot_wider(
-    id_cols     = c(taxon_capture, .draw),
-    names_from  = life_stage_simple,
-    values_from = mu
-  ) |>
-  mutate(mu_contrast = subadult - adult,
-         contrast = "subadult - adult")
-
-# mu contrast is only estimable where both life stages have Bd-positive loads;
-# otherwise one life stage's mu comes from the prior and model structure alone
-mu_resp = as.character(model_select$formula$formula[[2]])
-
-taxa_mu_contrast = model_select$data |>
-  group_by(taxon_capture, life_stage_simple) |>
-  summarise(n_pos = sum(.data[[mu_resp]] > 0), .groups = "drop") |>
-  group_by(taxon_capture) |>
-  filter(n_distinct(life_stage_simple) == 2, all(n_pos > 0)) |>
-  distinct(taxon_capture) |>
-  pull(taxon_capture)
+mu_resp = spp_out$mu_resp
+taxa_mu_contrast = spp_out$taxa_mu_contrast
+spp_lss_draws = spp_out$spp_lss_draws  # absolute levels: within-species use only
 
 setdiff(unique(model_select$data$taxon_capture), taxa_mu_contrast)  # mu contrast not estimable
 
-mu_spp_lss_contrast_draws = mu_spp_lss_contrast_draws |>
-  filter(taxon_capture %in% taxa_mu_contrast)
-
-mu_spp_agg = f_draw_agg(mu_spp_draws, c("taxon_capture"), "mu")
-mu_spp_lss_contrast_agg = f_draw_agg(mu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "mu_contrast")
-hu_spp_lss_contrast_agg = f_draw_agg(hu_spp_lss_contrast_draws, c("taxon_capture", "contrast"), "hu_contrast")
-
-# combine
-spp_lss_draws = hu_spp_lss_draws %>%
-  select(taxon_capture,
-         life_stage_simple,
-         .draw,
-         hu) %>%
-  mutate(prevalence = 1 - plogis(hu)) %>%
-  left_join(mu_spp_lss_draws %>%
-              select(taxon_capture,
-                     life_stage_simple,
-                     .draw,
-                     mu), by = c("taxon_capture", "life_stage_simple", ".draw"))
-
-# absolute levels: within-species use only (see the Export Essential Data note)
-write_parquet(spp_lss_draws, here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
+hu_spp_lss_contrast_draws = spp_out$contrast_draws |>
+  select(taxon_capture, .draw, contrast, hu_contrast)
+mu_spp_lss_contrast_draws = spp_out$contrast_draws |>
+  filter(!is.na(mu_contrast)) |>
+  select(taxon_capture, .draw, contrast, mu_contrast)
 
 # species without an estimable mu contrast keep their hu contrast, with NA mu contrast
-combined_agg = hu_spp_lss_contrast_agg %>%
-  left_join(mu_spp_lss_contrast_agg, by = c("contrast", "taxon_capture"))
+combined_agg = spp_out$combined_agg
+hu_spp_lss_contrast_agg = combined_agg |>
+  select(taxon_capture, contrast, starts_with("hu_contrast"))
+mu_spp_lss_contrast_agg = combined_agg |>
+  filter(!is.na(mu_contrast_median)) |>
+  select(taxon_capture, contrast, starts_with("mu_contrast"))
+
+# species-level mu, diagnostic only: average life stages on the link scale within each draw
+mu_spp_draws = spp_lss_draws |>
+  group_by(taxon_capture, .draw) |>
+  summarise(mu = mean(mu), .groups = "drop")
+
+mu_spp_agg = f_draw_agg(mu_spp_draws, c("taxon_capture"), "mu")
+
+# for 05 (absolute levels: within-species use only)
+write_parquet(spp_lss_draws, here("size_bd_unified", "intermediates", "unified_03_b_spp_lss_draws.parquet"))
 
 combined_agg_single = combined_agg %>%
   select(taxon_capture,
@@ -956,20 +868,8 @@ ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_10_day_sum, color = 
        title = "Temperature v. precipitation") +
   theme_minimal()
 
-# 30 day precip, 30-day temp by species
-ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = life_stage_simple)) +
-  geom_point(alpha = 0.1) +
-  stat_ellipse() +
-  facet_wrap(. ~ taxon_capture) +
-  xlim(-5, 40) +
-  ylim(0, 400) +
-  labs(x = "30-day temperature mean (degC)", 
-       y = "30-day precipitation total (mm)",
-       title = "Temperature v. precipitation") +
-  theme_minimal()
-
 # 30 day collective
-ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_30_day_sum, color = taxon_capture)) +
+ggplot(brms_data, aes(x = temp_c_30_day_mean, y = precip_mm_10_day_sum, color = taxon_capture)) +
   geom_point(alpha = 0.1) +
   stat_ellipse() +
   labs(x = "30-day temperature mean (degC)", 
@@ -1146,10 +1046,10 @@ p_env_slopes
 
 # pop coords
 pop_coords = brms_data %>%
-  distinct(site, latitude, longitude, population) %>%
+  distinct(site, site_latitude, site_longitude, population) %>%
   group_by(population) %>%
-  summarize(latitude = mean(latitude),
-            longitude = mean(longitude),
+  summarize(latitude = mean(site_latitude),
+            longitude = mean(site_longitude),
             .groups = "drop")
 
 # peace = as_tibble(get_variables(model_select))
@@ -2178,22 +2078,49 @@ p_combined
 repo_dir = gsub("size_bd_load_analysis", "", here())
 manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
 
-# save essential data
-# CAUTION: spp_lss_draws (species x life stage hu, prevalence, mu) and pop_agg_combined
-# (population adult/subadult levels) carry absolute values, which are not comparable across
-# species (labs and extraction methods differ). use them only within species (e.g. contrasts,
-# centered or within-panel plots), never to compare levels between species.
+# manuscript exports use the main (co100) model only
+stopifnot(mu_resp == "bd_load_co100_density")
+
+# save essential data. only within-species quantities leave this script: contrasts, responses
+# relative to each species' median conditions, within-species centered population values,
+# and within-species SDs. absolute levels (spp_lss_draws) stay in intermediates/ for 05.
+# pop_agg_centered still carries the absolute population medians alongside the centered
+# columns (*_c); the manuscript should plot only the centered columns across species.
+# remove stale files from earlier exports (absolute-level weather curves, species draws)
+stale_files = c("unified_03_b_spp_lss_draws.parquet",
+                "unified_03_d_precipitation_agg.parquet",
+                "unified_03_e_temperature_agg.parquet")
+file.remove(paste0(manuscript_data_dir, stale_files)[file.exists(paste0(manuscript_data_dir, stale_files))])
+
+# a. data summary (counts only)
 write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
-write_parquet(spp_lss_draws, paste0(manuscript_data_dir, "unified_03_b_spp_lss_draws.parquet"))
+
+# c. species contrasts (subadult - adult): hu and mu, log scale. cutoff sensitivity is in
+# th_sensitivity_analysis.Rmd (computed from each cutoff model there)
 write_csv(combined_agg, paste0(manuscript_data_dir, "unified_03_c_combined_effects_agg.csv"))
 
-# per-cutoff copy for th_sensitivity_analysis.Rmd (re-run 03 with each cutoff model)
-co_select = sub("^bd_load_(co[0-9]+)_density$", "\\1", mu_resp)
-write_csv(combined_agg, here("size_bd_unified", "intermediates", "th_sensitivity_analysis",
-                             paste0("unified_03_c_combined_effects_agg_m11d_", co_select, ".csv")))
-write_parquet(pop_agg_combined, paste0(manuscript_data_dir, "unified_03_f_population_agg.parquet"))
+# d, e. climate response curves relative to species median conditions (delta; hu sign-flipped
+# to log odds of detection), long format with .width = 0.5 / 0.95
+write_parquet(agg_precip, paste0(manuscript_data_dir, "unified_03_d_env_response_precip.parquet"))
+write_parquet(agg_temp, paste0(manuscript_data_dir, "unified_03_e_env_response_temp.parquet"))
+
+# f. population medians, with within-species centered columns (det_*_c, mu_*_c)
+write_parquet(pop_agg_centered, paste0(manuscript_data_dir, "unified_03_f_population_agg.parquet"))
+
+# g. sex composition check (supplementary)
 write_csv(sex_check, paste0(manuscript_data_dir, "unified_03_g_sex_composition_check.csv"))
 
+# h. env slopes at species median conditions, per 1 SD (hu sign-flipped)
+write_csv(env_slope_agg, paste0(manuscript_data_dir, "unified_03_h_env_slopes_agg.csv"))
+
+# i. sampled conditions per species (rugs for d, e)
+write_parquet(env_samples, paste0(manuscript_data_dir, "unified_03_i_env_samples.parquet"))
+
+# j. between-population spread (combined population + population-year SD) per species
+write_csv(pop_sd_agg, paste0(manuscript_data_dir, "unified_03_j_population_sd_agg.csv"))
+
+# k. variance components of mu per species (supplementary, within-species decomposition)
+write_csv(vc_agg, paste0(manuscript_data_dir, "unified_03_k_variance_components_agg.csv"))
 
 write.tree(jp_pruned, file = here(manuscript_data_dir, "jp_tree_pruned.nwk"))
 

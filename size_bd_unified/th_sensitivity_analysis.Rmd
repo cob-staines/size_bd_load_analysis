@@ -11,24 +11,66 @@ output: html_document
 #| code-fold: true
 #| code-summary: "Show setup code"
 
-librarian::shelf(tidyverse, here)
+librarian::shelf(tidyverse, here, brms, tidybayes)
+
+# shared with 03 and 05: species linpreds, subadult - adult contrasts, f_draw_agg summaries
+source(here("size_bd_unified", "contrast_functions.R"))
 
 ```
 
-## Load data
+## Compute contrasts per cutoff
 
 Compare species contrast estimates across Bd load cutoffs (copies per swab). The cutoff
-used in the main analysis is chosen a priori; the others are a sensitivity analysis.
+used in the main analysis (co100) is chosen a priori; the others are a sensitivity analysis.
 Cutoff models are not compared by LOO, since each cutoff changes the response data.
-Inputs are written by 03_size_bd_unified_analysis.qmd (Export Essential Data), one run
-per cutoff model.
+Contrasts are computed here from each cutoff model with the same code as 03
+(contrast_functions.R). Models are loaded one at a time (~850 MB each); the per-cutoff
+summaries are cached to intermediates/th_sensitivity_analysis/ so the models only need to be
+loaded again when a model file changes.
 
 ```{r}
 cutoffs = c("co0", "co30", "co100", "co300", "co1000")
 
-th_combined = map_dfr(cutoffs, function(co) {
-  read_csv(here("size_bd_unified", "intermediates", "th_sensitivity_analysis",
-                paste0("unified_03_c_combined_effects_agg_m11d_", co, ".csv"))) %>%
+model_dir = here("size_bd_unified", "unified_models")
+cache_dir = here("size_bd_unified", "intermediates", "th_sensitivity_analysis")
+if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
+
+# latest m11d fit per cutoff (file names end in _YYYYMMDD_HHMMSS_with_loo.rds)
+model_files = tibble(file = list.files(model_dir, pattern = "^unified_model_results_zln_m11d_co[0-9]+_.*_with_loo\\.rds$")) %>%
+  mutate(cutoff = str_extract(file, "co[0-9]+")) %>%
+  filter(cutoff %in% cutoffs) %>%
+  group_by(cutoff) %>%
+  slice_max(file, n = 1) %>%
+  ungroup()
+
+model_files
+
+missing_cutoffs = setdiff(cutoffs, model_files$cutoff)
+if (length(missing_cutoffs) > 0) {
+  stop("No model file for cutoff(s): ", paste(missing_cutoffs, collapse = ", "))
+}
+
+# contrasts for one cutoff, cached by model file name
+f_cutoff_contrasts = function(co, file) {
+  cache_file = file.path(cache_dir, paste0("combined_agg_", sub("\\.rds$", "", file), ".csv"))
+
+  if (file.exists(cache_file)) {
+    return(read_csv(cache_file, show_col_types = FALSE))
+  }
+
+  model = readRDS(file.path(model_dir, file))
+  stopifnot(model_response(model) == paste0("bd_load_", co, "_density"))
+
+  combined_agg = spp_contrasts(model)$combined_agg
+  rm(model)
+  gc()
+
+  write_csv(combined_agg, cache_file)
+  combined_agg
+}
+
+th_combined = map2_dfr(model_files$cutoff, model_files$file, function(co, file) {
+  f_cutoff_contrasts(co, file) %>%
     mutate(threshold = co)
 }) %>%
   mutate(threshold = factor(threshold, levels = cutoffs))

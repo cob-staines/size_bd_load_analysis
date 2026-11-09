@@ -65,7 +65,7 @@ sifl_data = brms_data %>%
 
 ```{r}
 # m11d_zln
-unified_model = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds"))
+unified_model = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
 
 # new-taxon predictive prior for the env slopes (precip, temp, temp^2).
 # per draw: fixed effect + a new taxon offset drawn from the m11d taxon RE distribution,
