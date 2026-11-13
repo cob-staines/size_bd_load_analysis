@@ -119,7 +119,7 @@ resp_co = paste0("bd_load_", co_select, "_density")
 # group sigma random effects by taxon
 # production fits run on the cluster with r-brms-contained/size_bd_modeling.R (same formula,
 # priors and settings; hpc/run_size_bd_cutoffs.sbatch fits all cutoffs). keep the two in sync
-m11d_zln <- brm(
+m11g_zln <- brm(
   formula = bf(
     reformulate(c("1",
                   "life_stage_simple * taxon_capture",
@@ -138,7 +138,7 @@ m11d_zln <- brm(
       (1 | gr(taxon_capture:population:life_stage_simple, by = taxon_capture)) +
       (0 + life_stage_simple | gr(taxon_capture:population:year, by = taxon_capture)),
     
-    sigma ~ 1 + taxon_capture + (1 | gr(taxon_capture:population, by = taxon_capture))
+    sigma ~ 1 + taxon_capture
   ),
   data = brms_data,
   family = hurdle_lognormal(),
@@ -154,10 +154,10 @@ m11d_zln <- brm(
   backend = "cmdstanr"
 )
 
-m11d_zln <- add_criterion(m11d_zln, "loo")
+m11g_zln <- add_criterion(m11d_zln, "loo")
 
-saveRDS(m11d_zln, file = here("size_bd_unified", "unified_models",
-                              paste0("unified_model_results_zln_m11d_", co_select, "_",
+saveRDS(m11g_zln, file = here("size_bd_unified", "unified_models",
+                              paste0("unified_model_results_zln_m11g_", co_select, "_",
                                      format(Sys.time(), "%Y%m%d_%H%M%S"), "_with_loo.rds")))
 ```
 
