@@ -25,7 +25,7 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, bayesplot, stan-dev/
 #| code-summary: "Show data loading code"
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
 
 # checks
 count_na = function(df, cols) {
@@ -154,7 +154,7 @@ m11g_zln <- brm(
   backend = "cmdstanr"
 )
 
-m11g_zln <- add_criterion(m11d_zln, "loo")
+m11g_zln <- add_criterion(m11g_zln, "loo")
 
 saveRDS(m11g_zln, file = here("size_bd_unified", "unified_models",
                               paste0("unified_model_results_zln_m11g_", co_select, "_",
