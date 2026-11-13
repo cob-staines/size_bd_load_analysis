@@ -35,8 +35,8 @@ model_dir = here("size_bd_unified", "unified_models")
 cache_dir = here("size_bd_unified", "intermediates", "th_sensitivity_analysis")
 if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
 
-# latest m11d fit per cutoff (file names end in _YYYYMMDD_HHMMSS_with_loo.rds)
-model_files = tibble(file = list.files(model_dir, pattern = "^unified_model_results_zln_m11d_co[0-9]+_.*_with_loo\\.rds$")) %>%
+# latest m11g fit per cutoff (file names end in _YYYYMMDD_HHMMSS_with_loo.rds)
+model_files = tibble(file = list.files(model_dir, pattern = "^unified_model_results_zln_m11g_co[0-9]+_.*_with_loo\\.rds$")) %>%
   mutate(cutoff = str_extract(file, "co[0-9]+")) %>%
   filter(cutoff %in% cutoffs) %>%
   group_by(cutoff) %>%
