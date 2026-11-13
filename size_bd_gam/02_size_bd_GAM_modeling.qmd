@@ -337,7 +337,7 @@ env_prior_sd = setNames(c(sqrt(diag(cov(new_taxon_b))), sqrt(diag(cov(new_taxon_
                         env_vars)
 
 env_sensitivity = species_list$taxon_capture |>
-  map(function(sp) {
+  purrr::map(function(sp) {
     fit = readRDS(here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", sp, ".rds")))
     post_sd = posterior_summary(fit, variable = env_vars)[, "Est.Error"]
     powerscale_sensitivity(fit, variable = env_vars) |>
