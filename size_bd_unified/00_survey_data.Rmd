@@ -70,6 +70,121 @@ rabo_valid = rabo_clean %>%
 
 ```
 
+### ANCA
+```{r}
+# load tables
+anca_raw = read.csv(here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821", "YOSE_Acanorus_Db_rev.csv"), na.strings = c("NA", ""))
+
+anca_qpcr_1 = read.csv(here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821", "YOSE_Daversa_qPCR_210529_rev.csv"), na.strings = c("NA", "")) %>%
+  mutate(year_extracted = 2021)
+anca_qpcr_2 = read.csv(here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821", "YOSE_Daversa_qPCR_230220_rev.csv"), na.strings = c("NA", "")) %>%
+  mutate(year_extracted = 2022)
+anca_qpcr_3 = read.csv(here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821", "YOSE_Daversa_qPCR_240802_rev.csv"), na.strings = c("NA", "")) %>%
+  dplyr::rename(plate = plate..) %>%
+  mutate(year_extracted = 2023,
+         swab_id = as.character(swab_id))
+
+anca_sites_raw  = read.csv(here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821", "YOSE_sites.csv"))
+                       
+# bind qpcr results
+peace = compare_df_cols(anca_qpcr_1,
+                        anca_qpcr_2,
+                        anca_qpcr_3)
+
+anca_results_raw = bind_rows(anca_qpcr_1,
+                             anca_qpcr_2,
+                             anca_qpcr_3) %>%
+  mutate(bd_load = if_else(is.nan(bd_load),
+                           0,
+                           bd_load),
+         start_quant = if_else(is.nan(start_quant),
+                           0,
+                           start_quant))
+
+peace = get_dupes(anca_results_raw, swab_id)
+
+anca_sites_clean = anca_sites_raw %>%
+  dplyr::rename(site_latitude = Y,
+                 site_longitude = X,
+                meadow_name = site,
+                meadow_ID = id) %>%
+  mutate(
+    # population = if_else(meadow_ID == 2407,
+                              # "72425_pop",
+                              # as.character(meadow_ID)),
+         meadow_ID = as.character(meadow_ID))
+  
+
+# join and clean
+anca_valid = anca_raw %>%
+  left_join(anca_results_raw, by = "swab_id") %>%
+  dplyr::rename(body_mass_g = wt,
+                bd_its_copies = bd_load) %>%
+  filter(!is.na(swab_id),
+         !is.na(species)) %>%
+  mutate(taxon_capture = recode_values(species,
+                                       "Ac" ~ "anaxyrus_canorus",
+                                       "Ps" ~ "pseudacris_regilla"),
+         svl_mm = if_else(sex_lifestage != "tadpole",
+                          svl_gosner,
+                          NA),
+         gosner_stage = if_else(sex_lifestage == "tadpole",
+                                svl_gosner,
+                                NA),
+         sex = if_else(sex_lifestage %in% c("M", "F"),
+                       sex_lifestage,
+                       NA),
+         sex = recode_values(sex,
+                             "M" ~ "male",
+                             "F" ~ "female",
+                             default = NA),
+         life_stage = recode_values(sex_lifestage,
+                                    c("M", "F") ~ "adult",
+                                    "subadult" ~ "subadult",
+                                    "metamorph" ~ "metamorph",
+                                    "tadpole" ~ "larva",
+                                    default = NA),
+         life_stage_simple = case_when(
+           svl_mm >= 40 ~ "adult",
+           life_stage %in% c("subadult", "adult") ~ "subadult",
+           .default = life_stage
+         ),
+         site = recode_values(meadow_name,
+           "Dana" ~ "2864",
+           "Delaney" ~ "2782",
+           "Lower Gaylor" ~ "2893",
+           "Mono Pass trail" ~ "2407",
+           default = as.character(meadow_ID)),
+         date = dmy(date),
+         country = "usa",
+         region = "california",
+         project = "daversa2026",
+         sample_id = as.character(entry_id)) %>%
+  filter(!is.na(svl_mm),
+         !is.na(bd_its_copies),
+         life_stage_simple %in% c("adult", "subadult"),
+         taxon_capture == "anaxyrus_canorus") %>%
+  left_join(anca_sites_clean %>%
+              select(-meadow_name), by = c("site" = "meadow_ID"))
+
+peace = anca_valid %>%
+  group_by(taxon_capture,
+           life_stage_simple) %>%
+  count()
+
+peace = anca_valid %>%
+  group_by(meadow_name,
+           site) %>%
+  count()
+
+peace = anca_raw %>%
+  group_by(meadow_ID,
+           meadow_name) %>%
+  count()
+
+peace = get_dupes(anca_valid, swab_id)
+```
+
 ### RACA
 ```{r}
 
@@ -225,6 +340,9 @@ usgs_clean = usgs_raw %>%
          bd_its_copies = copy_num,
          sample_id = swab_id) %>%
   mutate(taxon_capture = tolower(gsub(" ", "_", scientific_name)),
+         svl_mm = if_else(taxon_capture == "ambystoma_mavortium" & svl_mm < 20,
+                          svl_mm * 10,
+                          svl_mm),
          life_stage_simple = tolower(life_stage),
          life_stage_simple = recode_values(life_stage_simple,
                                         "juvenile" ~ "subadult",
@@ -240,7 +358,10 @@ usgs_clean = usgs_raw %>%
          life_stage_simple %in% c("subadult", "adult")) %>%
   group_by(sample_id) %>%
   slice_head(n = 1) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(svl_mm = if_else(svl_mm == "433" & taxon_capture == "notophthalmus_viridescens",
+         43,
+         svl_mm))
 
 usgs_taxon_valid = usgs_clean %>%
   group_by(taxon_capture) %>%
@@ -351,8 +472,8 @@ bd_life_stage = bd_sample %>%
     ((taxon_capture == "anaxyrus_americanus") & (svl_mm >= 54)) ~ "adult",
     ((taxon_capture == "anaxyrus_americanus") & (svl_mm < 54)) ~ "subadult",
     # Lannoo 2005 (Amphibian Declines: The Conservation Status of United States Species)
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 48)) ~ "adult",
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 48)) ~ "subadult",
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 40)) ~ "adult",
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 40)) ~ "subadult",
     # Lannoo 2005
     ((taxon_capture == "anaxyrus_debilis") & (svl_mm >= 37)) ~ "adult",
     ((taxon_capture == "anaxyrus_debilis") & (svl_mm < 37)) ~ "subadult",
@@ -398,14 +519,14 @@ bd_life_stage = bd_sample %>%
     # Knapp
     ((taxon_capture == "rana_muscosa") & is.na(svl_mm)) ~ life_stage,
     ((taxon_capture == "rana_muscosa") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_muscosa") & (svl_mm < 40)) ~ "subadult",
+    ((taxon_capture == "rana_muscosa") & (svl_mm > 8) & (svl_mm < 40)) ~ "subadult",
     # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
     ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
     ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
     # Knapp
     ((taxon_capture == "rana_sierrae") & is.na(svl_mm)) ~ life_stage,
     ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_sierrae") & (svl_mm < 40)) ~ "subadult",
+    ((taxon_capture == "rana_sierrae") & (svl_mm > 8) & (svl_mm < 40)) ~ "subadult",
     # Martof 1963
     ((taxon_capture == "rana_sylvatica") & (svl_mm >= 37)) ~ "adult",
     ((taxon_capture == "rana_sylvatica") & (svl_mm < 37)) ~ "subadult",
@@ -501,7 +622,7 @@ taxa_valid = bd_life_stage %>%
             n_subadult = sum(as.integer(life_stage_simple == "subadult"), na.rm = TRUE),
             .groups = "drop") %>%
   filter(n_adult >= 14,
-         n_subadult >= 14)
+         n_subadult >= 14 | taxon_capture == "anaxyrus_canorus")
 
 # identify valid samples
 bd_sample_valid = bd_life_stage %>%
@@ -619,7 +740,7 @@ bofa_valid = bofa_clean %>%
 ```{r}
 
 ## populations
-pops_in = read.csv(here("data", "size_load_pop_1_2026-09-11.csv"))
+pops_in = read.csv(here("data", "size_load_pop_1_2026-11-11.csv"))
 
 all_populations = pops_in %>%
   select(site, pop_id) %>%
@@ -630,6 +751,7 @@ all_populations = pops_in %>%
          population)
 
 column_check = compare_df_cols(rabo_valid,
+                               anca_valid,
                                raca_valid,
                                ralu_valid,
                                usgs_valid,
@@ -637,6 +759,7 @@ column_check = compare_df_cols(rabo_valid,
                                bofa_valid)
 
 bd_model = bind_rows(rabo_valid,
+                     anca_valid,
                      raca_valid,
                      ralu_valid,
                      usgs_valid,
@@ -703,6 +826,10 @@ bd_model = bd_model %>%
 (sites_without_population = bd_model %>%
   filter(!population_from_file) %>%
   count(taxon_capture, project, site, name = "n_samples"))
+
+pops_projects = bd_model %>%
+  group_by(project, population) %>%
+  count()
 
 bd_model = bd_model %>%
   select(-population_from_file)
@@ -800,5 +927,14 @@ if (anyNA(site_registry)) {
 write_csv(site_registry, here("size_bd_unified", "intermediates", "site_registry.csv"))
 saveRDS(bd_model_clean, here("size_bd_unified", "intermediates", "bd_survey_clean.rds"))
 write_csv(bd_model_stats, here("size_bd_unified", "intermediates", "size_bd_modeling_unified_stats.csv"))
+
+```
+
+# svl distributions
+```{r}
+ggplot(bd_model %>%
+         filter(taxon_capture == "silverstoneia_flotator"), aes(x = svl_mm, fill = life_stage)) +
+  geom_histogram() +
+  facet_wrap("taxon_capture", scales = "free")
 
 ```
