@@ -171,7 +171,7 @@ saveRDS(m11g_zln, file = here("size_bd_unified", "unified_models",
 # update with the cluster fits on bd_model_env_unified_2026-10-28 (the co100 file predates it)
 model_files = c(co0    = NA_character_,
                 co30   = NA_character_,
-                co100  = "unified_model_results_zln_m11d_co100_20260926_174424_with_loo.rds",
+                co100  = "unified_model_results_zln_m11g_co100_20261114_032511_with_loo.rds",
                 co300  = NA_character_,
                 co1000 = NA_character_)
 

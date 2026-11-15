@@ -8,7 +8,7 @@ format: html
 librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rstatix, helixcn/phylotools, rentrez, DECIPHER, phangorn, phytools, RColorBrewer, arrow, patchwork)
 
 # load bd_model_env
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
 
 size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
 
@@ -28,6 +28,18 @@ bd_model_env_stats = brms_data %>%
   arrange(country,
           taxon_capture) %>%
   left_join(size_cutoff, by = "taxon_capture")
+
+bd_model_lab_stats = brms_data %>%
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture))) %>%
+  select(project,
+         species,
+         year) %>%
+  distinct() %>%
+  group_by(project) %>%
+  summarize(first_year = min(year),
+            last_year = max(year),
+            species = paste0(sort(unique(species)), collapse = ", ")) %>%
+  arrange(first_year, last_year)
 
 bd_model_env_stats_sub = bd_model_env_stats %>%
   select(taxon_capture,
@@ -64,9 +76,11 @@ bd_model_env_stats_sub = bd_model_env_stats %>%
 # 
 # m11d_co50_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co50_20260926_130018_with_loo.rds"))
 
-m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
+# m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
 
-model_select = m11d_co100_zln
+m11g_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11g_co100_20261114_032511_with_loo.rds"))
+
+model_select = m11g_co100_zln
 
 ```
 
@@ -2094,6 +2108,8 @@ file.remove(paste0(manuscript_data_dir, stale_files)[file.exists(paste0(manuscri
 
 # a. data summary (counts only)
 write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
+write_csv(bd_model_lab_stats, paste0(manuscript_data_dir, "unified_03_b_lab_data_stats.csv"))
+
 
 # c. species contrasts (subadult - adult): hu and mu, log scale. cutoff sensitivity is in
 # th_sensitivity_analysis.Rmd (computed from each cutoff model there)

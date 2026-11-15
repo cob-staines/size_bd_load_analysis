@@ -23,7 +23,7 @@ librarian::shelf(tidyverse,  RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, jani
 # Load data
 ```{r}
 
-load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-10-28.RData"))
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-11-15.RData"))
 
 species_list = brms_data %>%
   select(taxon_capture) %>%
@@ -64,11 +64,11 @@ sifl_data = brms_data %>%
 # Load unified model
 
 ```{r}
-# m11d_zln
-unified_model = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
+# m11g_zln
+unified_model = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11g_co100_20261114_032511_with_loo.rds"))
 
 # new-taxon predictive prior for the env slopes (precip, temp, temp^2).
-# per draw: fixed effect + a new taxon offset drawn from the m11d taxon RE distribution,
+# per draw: fixed effect + a new taxon offset drawn from the m11g taxon RE distribution,
 # N(0, Sigma) with Sigma from sd_taxon_capture and cor_taxon_capture. this uses no
 # species-specific r_taxon_capture, so each species' data is not counted twice
 # (once in the prior, again in its GAM). the prior is therefore the same for all species.

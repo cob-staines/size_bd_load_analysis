@@ -37,8 +37,8 @@ env_agg_all = build_env_agg(unique(site_cells$cell_id))
 bd_gam_env = join_env(bd_gam_clean, site_cells, env_agg_all)
 
 # env standardization from the unified model data, so env slopes (and the env prior built from
-# m11d co100) are on the same scale. must be the data file m11d co100 was fit to
-load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-10-28.RData"))
+# m11g co100) are on the same scale. must be the data file m11g co100 was fit to
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
 
 unified_env_scale = list(
   precip_mean = mean(brms_data$precip_mm_10_day_sum),
