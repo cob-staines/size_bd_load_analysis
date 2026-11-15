@@ -129,6 +129,15 @@ if (sum(na_col_check$n_na) > 0) {
 
 ```
 
+# gam data summary
+```{r}
+(peace = brms_data %>%
+  group_by(taxon_capture,
+           life_stage_simple) %>%
+  count())
+
+```
+
 # save data
 ```{r}
 save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))

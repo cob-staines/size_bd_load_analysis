@@ -24,6 +24,103 @@ librarian::shelf(tidyverse, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, dbplyr, janit
 
 ```
 
+# ANCA
+```{r}
+# Daversa Yosemite A. canorus data (dryad doi:10.5061/dryad.4xgxd25t1), cleaned as in
+# size_bd_unified/00_survey_data.Rmd. GAM: metamorphs kept, bounded SVL ranges per life stage
+anca_dir = here("data", "doi_10_5061_dryad_4xgxd25t1__v20260821")
+
+anca_raw = read.csv(file.path(anca_dir, "YOSE_Acanorus_Db_rev.csv"), na.strings = c("NA", ""))
+
+anca_results_raw = bind_rows(
+  read.csv(file.path(anca_dir, "YOSE_Daversa_qPCR_210529_rev.csv"), na.strings = c("NA", "")),
+  read.csv(file.path(anca_dir, "YOSE_Daversa_qPCR_230220_rev.csv"), na.strings = c("NA", "")),
+  read.csv(file.path(anca_dir, "YOSE_Daversa_qPCR_240802_rev.csv"), na.strings = c("NA", "")) %>%
+    dplyr::rename(plate = plate..) %>%
+    mutate(swab_id = as.character(swab_id))) %>%
+  mutate(bd_load = if_else(is.nan(bd_load), 0, bd_load))
+
+peace = anca_raw %>%
+  group_by(meadow_ID,
+         meadow_name) %>%
+  count()
+
+anca_sites_clean = read.csv(file.path(anca_dir, "YOSE_sites.csv")) %>%
+  dplyr::rename(site_latitude = Y,
+                site_longitude = X,
+                meadow_ID = id) %>%
+  mutate(meadow_ID = as.character(meadow_ID)) %>%
+  select(meadow_ID,
+         site_latitude,
+         site_longitude)
+
+anca_valid = anca_raw %>%
+  left_join(anca_results_raw, by = "swab_id") %>%
+  dplyr::rename(body_mass_g = wt,
+                bd_its_copies = bd_load) %>%
+  filter(!is.na(swab_id),
+         species == "Ac",
+         sex_lifestage != "tadpole") %>%
+  mutate(taxon_capture = "anaxyrus_canorus",
+         svl_mm = svl_gosner,
+         sex = recode_values(sex_lifestage,
+                             "M" ~ "male",
+                             "F" ~ "female",
+                             default = NA),
+         life_stage = recode_values(sex_lifestage,
+                                    c("M", "F") ~ "adult",
+                                    "subadult" ~ "subadult",
+                                    "metamorph" ~ "metamorph",
+                                    default = NA),
+         # adult threshold as in the unified pipeline (40 mm)
+         life_stage_simple = case_when(
+           life_stage == "metamorph" ~ "metamorph",
+           (svl_mm >= 40) & (svl_mm < 100) ~ "adult",
+           (svl_mm >= 8) & (svl_mm < 40) ~ "subadult",
+           .default = NA),
+         # metamorphs without SVL: median metamorph SVL in this dataset (14.1 mm)
+         svl_mm = if_else(life_stage_simple == "metamorph" & is.na(svl_mm), 14, svl_mm),
+         site = recode_values(meadow_name,
+                              "Dana" ~ "2864",
+                              "Delaney" ~ "2782",
+                              "Lower Gaylor" ~ "2893",
+                              "Mono Pass trail" ~ "2407",
+                              default = as.character(meadow_ID)),
+         # site 2805 is not in YOSE_sites.csv; it belongs to site 2824
+         site = if_else(site == "2805", "2824", site),
+         date = dmy(date),
+         region = "california",
+         country = "usa",
+         project = "daversa2026",
+         sample_id = as.character(entry_id)) %>%
+  filter(!is.na(life_stage_simple),
+         !is.na(svl_mm),
+         !is.na(bd_its_copies)) %>%
+  left_join(anca_sites_clean, by = c("site" = "meadow_ID")) %>%
+  # drop sites 958 and 1019 (not in YOSE_sites.csv)
+  filter(!is.na(site_latitude)) %>%
+  select(sample_id,
+         taxon_capture,
+         date,
+         site,
+         bd_its_copies,
+         life_stage_simple,
+         life_stage,
+         sex,
+         svl_mm,
+         body_mass_g,
+         site_latitude,
+         site_longitude,
+         region,
+         country,
+         project)
+
+anca_valid %>%
+  count(life_stage_simple)
+
+get_dupes(anca_valid, sample_id)
+```
+
 # RACA
 ```{r}
 raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv")) %>%
@@ -238,7 +335,8 @@ bd_life_stage_nae = bd_sample %>%
                               "rana_clamitans",
                               "pseudacris_crucifer",
                               "lithobates_chiricahuensis",
-                              "lithobates_sphenocephalus"),
+                              "lithobates_sphenocephalus",
+                              "anaxyrus_canorus"),
          !(life_stage %in% c("larva"))) %>%
   mutate(life_stage_simple = case_when(
     life_stage == "metamorph" ~ "metamorph",
@@ -254,6 +352,9 @@ bd_life_stage_nae = bd_sample %>%
     ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm >= 10) & (svl_mm < 57)) ~ "subadult",
     ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 51) & (svl_mm < 100)) ~ "adult",
     ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 10) & (svl_mm < 51)) ~ "subadult",
+    # adult threshold as in the unified pipeline (40 mm; Daversa data)
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 40) & (svl_mm < 100)) ~ "adult",
+    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 8) & (svl_mm < 40)) ~ "subadult",
     .default = NA),
     svl_mm = case_when(
       taxon_capture == "pseudacris_crucifer" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 13,
@@ -262,6 +363,7 @@ bd_life_stage_nae = bd_sample %>%
       taxon_capture == "rana_pipiens" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 25,
       taxon_capture == "lithobates_chiricahuensis" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 40,
       taxon_capture == "lithobates_sphenocephalus" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 29,
+      taxon_capture == "anaxyrus_canorus" & life_stage_simple == "metamorph" & is.na(svl_mm) ~ 14,
       .default = svl_mm))
 
 ribbitr_cols = c("bd_its1_copies_per_swab",
@@ -303,7 +405,12 @@ ribbitr_valid = union_all(bd_life_stage_ranarasi %>% select(all_of(ribbitr_cols)
 ```{r}
 ## populations: same definition as the unified pipeline (cluster from the population file,
 ## else the site)
-pops_in = read.csv(here("data", "size_load_pop_1_2026-09-11.csv"))
+## 2026-09-11 covers the GAM sites; 2026-11-11 (unified sites only, same pop_ids where they
+## overlap) adds the Daversa ANCA sites
+pops_0911 = read.csv(here("data", "size_load_pop_1_2026-09-11.csv"))
+pops_1111 = read.csv(here("data", "size_load_pop_1_2026-11-11.csv"))
+pops_in = bind_rows(pops_0911,
+                    filter(pops_1111, !site %in% pops_0911$site))
 
 all_populations = pops_in %>%
   select(site, pop_id) %>%
@@ -314,10 +421,12 @@ all_populations = pops_in %>%
          population)
 
 col_compare = compare_df_cols(ribbitr_valid,
+                              anca_valid,
                               raca_valid,
                               usgs_valid)
 
 bd_gam = bind_rows(ribbitr_valid,
+                   anca_valid,
                    raca_valid,
                    usgs_valid) %>%
   left_join(all_populations, by = "site") %>%

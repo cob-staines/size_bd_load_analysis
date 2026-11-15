@@ -30,6 +30,8 @@ species_list = brms_data %>%
            distinct() %>%
   arrange(taxon_capture)
 
+anca_data = brms_data %>%
+  filter(taxon_capture == "anaxyrus_canorus")
 raca_data = brms_data %>%
   filter(taxon_capture == "rana_cascadae")
 ramu_data = brms_data %>%
@@ -302,6 +304,7 @@ model_svl_by_species = function(model_data, env_stanvars) {
   cat("Done.\n")
 }
 
+model_svl_by_species(anca_data, env_stanvars)
 model_svl_by_species(copa_data, env_stanvars)
 
 model_svl_by_species(lich_data, env_stanvars)
