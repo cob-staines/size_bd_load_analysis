@@ -17,38 +17,30 @@ librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork, arrow)
 # load models
 ```{r}
 
-# taxon names
-taxon_list = list("colostethus_panamansis",
-                  "lithobates_chiricahuensis",
-                  "lithobates_sphenocephalus",
-                  "lithobates_warszewitschii",
-                  "notophthalmus_viridescens",
-                  "pseudacris_crucifer",
-                  "rana_cascadae",
-                  "rana_catesbeiana",
-                  "rana_clamitans",
-                  "rana_muscosa",
-                  "rana_pipiens",
-                  "rana_sierrae",
-                  "silverstoneia_flotator")
+# taxon names and subadult/adult SVL cutoffs (mm), as in 00_GAM_survey_data.Rmd.
+# kept in one table so taxa and cutoffs cannot drift out of alignment
+taxa = tribble(
+  ~taxon_capture,              ~svl_cutoff_mm,
+  "anaxyrus_canorus",          40,
+  "colostethus_panamansis",    18.8,
+  "lithobates_chiricahuensis", 57,
+  "lithobates_sphenocephalus", 51,
+  "lithobates_warszewitschii", 35,
+  "notophthalmus_viridescens", NA,
+  "pseudacris_crucifer",       20,
+  "rana_cascadae",             50,
+  "rana_catesbeiana",          95,
+  "rana_clamitans",            60,
+  "rana_muscosa",              40,
+  "rana_pipiens",              51,
+  "rana_sierrae",              40,
+  "silverstoneia_flotator",    15.1)
+
+taxon_list = as.list(taxa$taxon_capture)
+co_list = taxa$svl_cutoff_mm
 
 # list of all models
 model_list = purrr::map(taxon_list, ~readRDS(file = here(paste0("size_bd_gam/models/size_bd_gam_model_zln_m3_", .x, ".rds"))))
-
-# subadult cutoffs
-co_list = c(18.8,
-            57,
-            51,
-            35,
-            NA,
-            20,
-            50,
-            95,
-            60,
-            40,
-            51,
-            40,
-            15.1)
 
 ```
 
