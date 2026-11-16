@@ -16,6 +16,11 @@ librarian::shelf(tidyverse, here, brms, tidybayes)
 # shared with 03 and 05: species linpreds, subadult - adult contrasts, f_draw_agg summaries
 source(here("size_bd_unified", "contrast_functions.R"))
 
+cutoffs = c("co0", "co30", "co100", "co300", "co1000")
+
+model_dir = here("size_bd_unified", "unified_models")
+cache_dir = here("size_bd_unified", "intermediates", "th_sensitivity_analysis")
+
 ```
 
 ## Compute contrasts per cutoff
@@ -29,10 +34,6 @@ summaries are cached to intermediates/th_sensitivity_analysis/ so the models onl
 loaded again when a model file changes.
 
 ```{r}
-cutoffs = c("co0", "co30", "co100", "co300", "co1000")
-
-model_dir = here("size_bd_unified", "unified_models")
-cache_dir = here("size_bd_unified", "intermediates", "th_sensitivity_analysis")
 if (!dir.exists(cache_dir)) dir.create(cache_dir, recursive = TRUE)
 
 # latest m11g fit per cutoff (file names end in _YYYYMMDD_HHMMSS_with_loo.rds)
@@ -162,5 +163,271 @@ plot_th_comparison("hu_contrast")
 #| fig.height: 16
 #| fig.width: 12
 plot_th_comparison("mu_contrast")
+
+```
+
+## Naive (raw data) sensitivity to the cutoff
+
+Model-free check of how the cutoff alone moves the raw summaries. The cutoff is swept over a
+log grid of ITS1 copies per swab from 10 to 1000, centered on the main cutoff (100), with
+co30 and co300 added so the fitted cutoffs appear on the grid. Swabs below the cutoff count as
+negative, as in 00_survey_data.Rmd (`bd_load_coX = 0` if `bd_its_copies < X`). At each cutoff,
+per species x life stage:
+
+- prevalence: share of swabs at or above the cutoff, also on the logit scale (empirical logit,
+  log((n_pos + 0.5) / (n - n_pos + 0.5)), finite at 0% and 100%), where a given change means
+  the same for low- and high-prevalence species
+- load: median log(copies / SVL) among positives, the same scale as the model's mu
+  (`bd_load_coX_density`)
+
+Uncertainty comes from resampling individuals within species x life stage (nonparametric
+bootstrap). The same resamples give the subadult - adult difference (paired by replicate) and
+the change relative to co100 (each replicate minus its own value at 100), so the intervals
+show how much a summary moves with the cutoff, not just how uncertain it is at each cutoff.
+Note the sign: prevalence is 1 - hu, so a positive naive prevalence difference corresponds
+to a negative model hu_contrast.
+
+```{r}
+# same data as the m11g cutoff fits
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+naive_data_tag = "2026-11-12"
+
+# log grid, 12 steps per decade from 10 to 1000 (contains 100 exactly), plus co30 and co300
+th_ref = 100
+th_grid = sort(unique(c(th_ref * 10^(seq(-12, 12) / 12), 30, 300)))
+
+n_boot = 500
+min_pos = 3              # fewest positives for a median load (else NA)
+min_valid_share = 0.9    # report an interval only if this share of replicates is estimable
+y_lim_width = 0.5        # shared y-axes cover every species' central y_lim_width bootstrap
+                         # interval (0.5 = the 50% bands); wider ribbons are clipped, not dropped
+
+naive_data = brms_data %>%
+  transmute(taxon_capture = as.character(taxon_capture),
+            life_stage_simple = as.character(life_stage_simple),
+            copies = bd_its_copies,
+            log_density = log(bd_its_copies / svl_mm))
+
+# prevalence and median positive load at every cutoff, for one resample
+naive_summaries = function(x, ld) {
+  tibble(threshold = th_grid,
+         n_pos = vapply(th_grid, function(th) sum(x >= th), integer(1)),
+         prevalence = n_pos / length(x),
+         load = vapply(th_grid, function(th) {
+           l = ld[x >= th]
+           if (length(l) >= min_pos) median(l) else NA_real_
+         }, numeric(1)))
+}
+
+# replicate 0 is the observed data, 1..n_boot are resamples of individuals
+naive_group_boot = function(copies, log_density) {
+  n = length(copies)
+  map_dfr(0:n_boot, function(b) {
+    idx = if (b == 0) seq_len(n) else sample.int(n, n, replace = TRUE)
+    naive_summaries(copies[idx], log_density[idx]) %>%
+      mutate(boot = b)
+  })
+}
+
+naive_cache = file.path(cache_dir, paste0("naive_boot_", naive_data_tag, "_B", n_boot, ".rds"))
+
+if (file.exists(naive_cache)) {
+  naive_boot = readRDS(naive_cache)
+} else {
+  set.seed(2026)
+  naive_boot = naive_data %>%
+    group_by(taxon_capture, life_stage_simple) %>%
+    group_modify(~naive_group_boot(.x$copies, .x$log_density)) %>%
+    ungroup()
+  saveRDS(naive_boot, naive_cache)
+}
+
+```
+
+### Reshape and summarise
+
+```{r}
+# group sizes (each resample has the same n as its group), for the empirical logit
+naive_n = naive_data %>%
+  count(taxon_capture, life_stage_simple, name = "n")
+
+# long: one row per species x stage x replicate x cutoff x metric
+naive_long = naive_boot %>%
+  left_join(naive_n, by = c("taxon_capture", "life_stage_simple")) %>%
+  mutate(prevalence_logit = qlogis((n_pos + 0.5) / (n + 1))) %>%
+  select(-n) %>%
+  pivot_longer(c(prevalence, prevalence_logit, load), names_to = "metric", values_to = "value") %>%
+  group_by(taxon_capture, life_stage_simple, boot, metric) %>%
+  mutate(value_centered = value - value[threshold == th_ref]) %>%
+  ungroup()
+
+# subadult - adult difference, paired by replicate
+naive_diff = naive_long %>%
+  select(taxon_capture, life_stage_simple, boot, threshold, metric, value) %>%
+  pivot_wider(names_from = life_stage_simple, values_from = value) %>%
+  mutate(value = subadult - adult) %>%
+  select(-adult, -subadult) %>%
+  group_by(taxon_capture, boot, metric) %>%
+  mutate(value_centered = value - value[threshold == th_ref]) %>%
+  ungroup()
+
+# observed value (replicate 0) and bootstrap median / 50% / 95% intervals, plus the central
+# y_lim_width interval (lim_lower, lim_upper) used to set shared y-axis limits.
+# intervals are NA where too few replicates are estimable (few positives at high cutoffs)
+summarise_naive = function(df, value_col, group_cols) {
+  df %>%
+    group_by(across(all_of(c(group_cols, "threshold", "metric")))) %>%
+    summarise(observed = .data[[value_col]][boot == 0],
+              valid_share = mean(!is.na(.data[[value_col]][boot > 0])),
+              median = median(.data[[value_col]][boot > 0], na.rm = TRUE),
+              lower_95 = quantile(.data[[value_col]][boot > 0], 0.025, na.rm = TRUE),
+              lower_50 = quantile(.data[[value_col]][boot > 0], 0.25, na.rm = TRUE),
+              upper_50 = quantile(.data[[value_col]][boot > 0], 0.75, na.rm = TRUE),
+              upper_95 = quantile(.data[[value_col]][boot > 0], 0.975, na.rm = TRUE),
+              lim_lower = quantile(.data[[value_col]][boot > 0], (1 - y_lim_width) / 2, na.rm = TRUE),
+              lim_upper = quantile(.data[[value_col]][boot > 0], (1 + y_lim_width) / 2, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(across(c(median, lower_95, lower_50, upper_50, upper_95, lim_lower, lim_upper),
+                  ~if_else(valid_share >= min_valid_share, .x, NA_real_)))
+}
+
+stage_cols = c("taxon_capture", "life_stage_simple")
+
+naive_stage_agg = summarise_naive(naive_long, "value", stage_cols)
+naive_stage_centered_agg = summarise_naive(naive_long, "value_centered", stage_cols)
+naive_diff_agg = summarise_naive(naive_diff, "value", "taxon_capture")
+naive_diff_centered_agg = summarise_naive(naive_diff, "value_centered", "taxon_capture")
+
+```
+
+### Life-stage difference at the fitted cutoffs
+
+Subadult - adult difference at co30, co100 and co300, and whether the sign of the observed
+difference holds over the cutoffs where it is estimable (th_range_estimable). Species with no
+estimable difference at any cutoff are left out.
+
+```{r}
+naive_diff_table = naive_diff_agg %>%
+  group_by(metric, taxon_capture) %>%
+  filter(!is.na(observed)) %>%
+  summarise(sign_agrees_grid = n_distinct(sign(observed)) == 1,
+            th_range_estimable = paste(signif(range(threshold), 3), collapse = "-"),
+            .groups = "drop") %>%
+  left_join(naive_diff_agg %>%
+              filter(threshold %in% c(30, 100, 300)) %>%
+              # observed [95% interval]; interval omitted where too few replicates are estimable
+              mutate(est = case_when(is.na(observed) ~ NA_character_,
+                                     is.na(lower_95) ~ sprintf("%.2f", observed),
+                                     .default = sprintf("%.2f [%.2f, %.2f]", observed, lower_95, upper_95))) %>%
+              select(metric, taxon_capture, threshold, est) %>%
+              pivot_wider(names_from = threshold, names_prefix = "co", values_from = est),
+            by = c("metric", "taxon_capture")) %>%
+  arrange(metric, sign_agrees_grid, taxon_capture)
+
+naive_diff_table
+
+naive_diff_table %>%
+  group_by(metric) %>%
+  summarise(n_species_estimable = n(),
+            n_sign_agrees_grid = sum(sign_agrees_grid),
+            .groups = "drop")
+
+```
+
+### Plots
+
+Lines are the bootstrap median, ribbons the 50% and 95% intervals; the dashed line marks the
+main cutoff (100).
+
+Y-axes are shared across species wherever the values are comparable: all change-from-co100
+plots and the absolute prevalence plots. There the axis spans every species' median and central
+`y_lim_width` interval; wider ribbons (species with few positives) are clipped at the panel
+edge. Absolute load and absolute subadult - adult differences keep free axes, since species
+differ by several log units in level and those plots are about each curve's shape.
+
+```{r}
+naive_metric_labels = c(prevalence = "prevalence",
+                        prevalence_logit = "logit prevalence",
+                        load = "median log(copies / SVL) | positive")
+naive_metric_titles = c(prevalence = "prevalence",
+                        prevalence_logit = "logit prevalence",
+                        load = "load")
+
+# by_stage: colour by life stage; otherwise one series (the subadult - adult difference).
+# scales = "fixed" shares the y-axis, limited to the medians and central y_lim_width intervals
+plot_naive = function(agg, metric_name, y_lab, by_stage = TRUE, zero_line = FALSE,
+                      scales = c("fixed", "free_y")) {
+  scales = match.arg(scales)
+
+  # drop species with nothing estimable (e.g. too few positives for a load median)
+  d = agg %>%
+    filter(metric == metric_name) %>%
+    group_by(taxon_capture) %>%
+    filter(any(!is.na(median))) %>%
+    ungroup()
+
+  p = if (by_stage) {
+    ggplot(d, aes(x = threshold, y = median, color = life_stage_simple, fill = life_stage_simple))
+  } else {
+    ggplot(d, aes(x = threshold, y = median))
+  }
+
+  y_limits = if (scales == "fixed") {
+    range(c(d$median, d$lim_lower, d$lim_upper, if (zero_line) 0), na.rm = TRUE)
+  } else {
+    NULL
+  }
+
+  p +
+    (if (zero_line) geom_hline(yintercept = 0, color = "#555")) +
+    geom_vline(xintercept = th_ref, linetype = "dashed", color = "#888") +
+    geom_ribbon(aes(ymin = lower_95, ymax = upper_95), alpha = 0.2, color = NA) +
+    geom_ribbon(aes(ymin = lower_50, ymax = upper_50), alpha = 0.35, color = NA) +
+    geom_line() +
+    scale_x_log10(breaks = c(10, 30, 100, 300, 1000)) +
+    facet_wrap("taxon_capture", scales = scales, ncol = 6) +
+    coord_cartesian(ylim = y_limits) +
+    labs(x = "cutoff (ITS1 copies per swab)", y = y_lab) +
+    (if (by_stage) labs(color = "life stage", fill = "life stage")) +
+    theme_minimal() +
+    theme(legend.position = "top")
+}
+
+```
+
+#### By life stage
+
+```{r}
+#| fig.height: 18
+#| fig.width: 14
+for (m in names(naive_metric_labels)) {
+  print(plot_naive(naive_stage_agg, m, naive_metric_labels[[m]],
+                   scales = if (m == "load") "free_y" else "fixed") +
+          labs(title = paste("Naive", naive_metric_titles[[m]], "by cutoff")))
+
+  print(plot_naive(naive_stage_centered_agg, m,
+                   paste("change in", naive_metric_labels[[m]], "from co100"),
+                   zero_line = TRUE, scales = "fixed") +
+          labs(title = paste("Naive", naive_metric_titles[[m]], "by cutoff: change from co100")))
+}
+
+```
+
+#### Subadult - adult difference
+
+```{r}
+#| fig.height: 18
+#| fig.width: 14
+for (m in names(naive_metric_labels)) {
+  print(plot_naive(naive_diff_agg, m, paste("subadult - adult", naive_metric_labels[[m]]),
+                   by_stage = FALSE, zero_line = TRUE, scales = "free_y") +
+          labs(title = paste("Naive subadult - adult", naive_metric_titles[[m]], "difference by cutoff")))
+
+  print(plot_naive(naive_diff_centered_agg, m,
+                   paste("change in subadult - adult", naive_metric_labels[[m]], "from co100"),
+                   by_stage = FALSE, zero_line = TRUE, scales = "fixed") +
+          labs(title = paste("Naive subadult - adult", naive_metric_titles[[m]],
+                             "difference: change from co100")))
+}
 
 ```
