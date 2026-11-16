@@ -198,6 +198,58 @@ m1d_lspr$criteria$loo_resp = loo_by_resp(m1d_lspr)
 saveRDS(m1d_lspr, file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
 m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_lspr.rds"))
 
+# include development mode
+m1e_lspr = brm(
+  mvbf(
+    bf(hu_contrast_mean | se(hu_contrast_sd, sigma = TRUE) ~ log_habitat_breadth + aquatic_index + development_stage + kg_3_breadth + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(mu_contrast_mean | se(mu_contrast_sd, sigma = TRUE) + subset(has_mu_contrast) ~ log_habitat_breadth + aquatic_index + development_stage + kg_3_breadth + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    rescor = FALSE
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  cores = 4,
+  backend = "cmdstanr",
+  save_pars = save_pars(all = TRUE)
+)
+
+m1e_lspr$criteria$loo_resp = loo_by_resp(m1e_lspr)
+
+saveRDS(m1e_lspr, file = here("size_bd_unified/unified_models/meta_model_m1e_lspr.rds"))
+m1e_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1e_lspr.rds"))
+
+# include development mode
+m1f_lspr = brm(
+  mvbf(
+    bf(hu_contrast_mean | se(hu_contrast_sd, sigma = TRUE) ~ aquatic_index + development_stage + kg_3_breadth + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    bf(mu_contrast_mean | se(mu_contrast_sd, sigma = TRUE) + subset(has_mu_contrast) ~ aquatic_index + development_stage + kg_3_breadth + (1 | p | gr(taxon_capture, cov = A)),
+       family = gaussian()),
+    rescor = FALSE
+  ),
+  data  = metrics_ls,
+  data2 = list(A = jp_phylo_cov),
+  control = list(adapt_delta = 0.98),
+  chains = 4,
+  iter = 4000,
+  warmup = 2000,
+  cores = 4,
+  backend = "cmdstanr",
+  save_pars = save_pars(all = TRUE)
+)
+
+m1f_lspr$criteria$loo_resp = loo_by_resp(m1e_lspr)
+
+saveRDS(m1f_lspr, file = here("size_bd_unified/unified_models/meta_model_m1f_lspr.rds"))
+m1f_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1f_lspr.rds"))
+
+
+
 ```
 
 # model comparison
@@ -206,7 +258,9 @@ m1d_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1d_ls
 (loo_comp_out = purrr::map(set_names(m1d_lspr$formula$responses), function(resp) {
   loo_compare(list(m1_lspr  = m1_lspr$criteria$loo_resp[[resp]],
                    m1b_lspr = m1b_lspr$criteria$loo_resp[[resp]],
-                   m1d_lspr = m1d_lspr$criteria$loo_resp[[resp]]))
+                   m1d_lspr = m1d_lspr$criteria$loo_resp[[resp]],
+                   m1e_lspr = m1e_lspr$criteria$loo_resp[[resp]],
+                   m1f_lspr = m1f_lspr$criteria$loo_resp[[resp]]))
 }))
 
 purrr::map(set_names(m1d_lspr$formula$responses), ~ bayes_R2(m1d_lspr, resp = .x))
