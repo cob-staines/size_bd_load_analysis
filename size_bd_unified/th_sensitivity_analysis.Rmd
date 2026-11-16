@@ -11,7 +11,7 @@ output: html_document
 #| code-fold: true
 #| code-summary: "Show setup code"
 
-librarian::shelf(tidyverse, here, brms, tidybayes)
+librarian::shelf(tidyverse, here, brms, tidybayes, arrow)
 
 # shared with 03 and 05: species linpreds, subadult - adult contrasts, f_draw_agg summaries
 source(here("size_bd_unified", "contrast_functions.R"))
@@ -429,5 +429,35 @@ for (m in names(naive_metric_labels)) {
           labs(title = paste("Naive subadult - adult", naive_metric_titles[[m]],
                              "difference: change from co100")))
 }
+
+```
+
+### Export to manuscript
+
+Everything needed to redraw the naive plots, in one long table. Each row is a cutoff x
+metric x species (x life stage for `comparison == "stage"`); `scale` is "absolute" or
+"centered" (change from co100). `life_stage_simple` is NA for the subadult - adult
+differences. lim_lower / lim_upper are the central `y_lim_width` interval used for the shared
+y-axis limits, and `th_ref` / `y_lim_width` are stored as columns so the plot settings travel
+with the data.
+
+```{r}
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
+
+naive_agg_export = bind_rows(
+  naive_stage_agg %>% mutate(comparison = "stage", scale = "absolute"),
+  naive_stage_centered_agg %>% mutate(comparison = "stage", scale = "centered"),
+  naive_diff_agg %>% mutate(comparison = "subadult - adult", scale = "absolute"),
+  naive_diff_centered_agg %>% mutate(comparison = "subadult - adult", scale = "centered")) %>%
+  mutate(th_ref = th_ref,
+         y_lim_width = y_lim_width,
+         n_boot = n_boot) %>%
+  select(comparison, scale, metric, taxon_capture, life_stage_simple, threshold,
+         observed, valid_share, median, lower_95, lower_50, upper_50, upper_95,
+         lim_lower, lim_upper, th_ref, y_lim_width, n_boot)
+
+write_parquet(naive_agg_export, paste0(manuscript_data_dir, "unified_th_a_naive_cutoff_agg.parquet"))
+write_csv(naive_diff_table, paste0(manuscript_data_dir, "unified_th_b_naive_diff_table.csv"))
 
 ```
