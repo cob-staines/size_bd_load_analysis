@@ -687,11 +687,13 @@ sym_div_cont_map = function(tree, var_values, species, center, p_title, style = 
   return(map_2)
 }
 
+# hu is non-detection, so flip to detection (log odds ratio, subadult / adult) to match the
+# mu tree's direction and the manuscript figure
 p_hu_contrast_med_map = sym_div_cont_map(jp_pruned,
-                                  combined_agg$hu_contrast_median,
+                                  -combined_agg$hu_contrast_median,
                                   combined_agg$taxon_capture,
                                   0,
-                                  "Bd prevalence (hu): median subadult effect")
+                                  "Bd detection: median subadult effect")
 
 p_mu_contrast_med_map = sym_div_cont_map(jp_pruned,
                                  combined_agg$mu_contrast_median,
