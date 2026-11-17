@@ -30,7 +30,14 @@ bd_model_env_stats = brms_data %>%
   left_join(size_cutoff, by = "taxon_capture")
 
 bd_model_lab_stats = brms_data %>%
-  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture))) %>%
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)),
+         project = case_when(
+           country == "brazil" ~ "becker",
+           country == "panama" ~ "voyles",
+           project == "ribbitr" & region == "california" ~ "mlrg",
+           project == "ribbitr" & region == "pennsylvania" ~ "rz",
+           .default = project
+         )) %>%
   select(project,
          species,
          year) %>%
@@ -2109,7 +2116,6 @@ file.remove(paste0(manuscript_data_dir, stale_files)[file.exists(paste0(manuscri
 # a. data summary (counts only)
 write_csv(bd_model_env_stats, paste0(manuscript_data_dir, "unified_03_a_species_data_stats.csv"))
 write_csv(bd_model_lab_stats, paste0(manuscript_data_dir, "unified_03_b_lab_data_stats.csv"))
-
 
 # c. species contrasts (subadult - adult): hu and mu, log scale. cutoff sensitivity is in
 # th_sensitivity_analysis.Rmd (computed from each cutoff model there)
