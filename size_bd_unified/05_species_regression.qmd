@@ -18,8 +18,8 @@ librarian::shelf(tidyverse, here, brms, tidybayes, cmdstanr, emmeans, arrow, rio
 # Load models and data
 ```{r}
 # load model
-m11d_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11d_co100_20261031_051814_with_loo.rds"))
-model_select = m11d_co100_zln
+m11g_co100_zln = readRDS(file = here("size_bd_unified/unified_models/unified_model_results_zln_m11g_co100_20261114_032511_with_loo.rds"))
+model_select = m11g_co100_zln
 
 # load life history
 ls_in = read_csv(here("size_bd_unified", "intermediates", "iucn_habitat_metrics.csv"))
@@ -243,7 +243,7 @@ m1f_lspr = brm(
   save_pars = save_pars(all = TRUE)
 )
 
-m1f_lspr$criteria$loo_resp = loo_by_resp(m1e_lspr)
+m1f_lspr$criteria$loo_resp = loo_by_resp(m1f_lspr)
 
 saveRDS(m1f_lspr, file = here("size_bd_unified/unified_models/meta_model_m1f_lspr.rds"))
 m1f_lspr = readRDS(file = here("size_bd_unified/unified_models/meta_model_m1f_lspr.rds"))
