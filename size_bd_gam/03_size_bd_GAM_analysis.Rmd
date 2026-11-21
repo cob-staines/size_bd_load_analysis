@@ -242,6 +242,16 @@ manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01
 
 write_parquet(svl_agg_all, paste0(manuscript_data_dir, "GAM_03_a_svl_agg.parquet"))
 
+# full sample-level gam model data (e.g. for seasonal size-structure / cohort plots). same
+# data file the models were fit to (02_size_bd_GAM_modeling.qmd)
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-11-15.RData"))
+
+stopifnot(nrow(brms_data) == sum(map_int(model_list, ~ nrow(.x$data))))
+
+write_parquet(brms_data, paste0(manuscript_data_dir, "GAM_03_b_model_data.parquet"))
+
+rm(brms_data)
+
 ```
 
 ## R2

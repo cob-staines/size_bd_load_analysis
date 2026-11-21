@@ -2146,6 +2146,10 @@ write_csv(pop_sd_agg, paste0(manuscript_data_dir, "unified_03_j_population_sd_ag
 # k. variance components of mu per species (supplementary, within-species decomposition)
 write_csv(vc_agg, paste0(manuscript_data_dir, "unified_03_k_variance_components_agg.csv"))
 
+# l. full sample-level unified model data (e.g. for observed seasonal size structure). raw
+# levels: any bd quantities from it must be compared within species only
+write_parquet(brms_data, paste0(manuscript_data_dir, "unified_03_l_model_data.parquet"))
+
 write.tree(jp_pruned, file = here(manuscript_data_dir, "jp_tree_pruned.nwk"))
 
 ```

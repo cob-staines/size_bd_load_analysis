@@ -142,4 +142,270 @@ if (sum(na_col_check$n_na) > 0) {
 ```{r}
 save(brms_data, file = here("size_bd_gam", "intermediates", paste0("brms_data_gam_", today(), ".RData")))
 
+# load(file = here("size_bd_gam", "intermediates", "brms_data_gam_2026-11-15.RData"))
+```
+
+# data visual summaries
+```{r}
+#| fig-width: 12
+#| fig-height: 10
+
+stage_colors = c(metamorph = "#E69F00", subadult = "#56B4E9", adult = "#0072B2")
+n_svl_bins = 30
+
+# post-metamorphic svl, binned per species so each panel gets its own binwidth
+svl_binned = brms_data %>%
+  filter(life_stage_simple != "metamorph") %>%
+  group_by(taxon_capture) %>%
+  mutate(svl_min = min(svl_mm),
+         binwidth = (max(svl_mm) - svl_min) / n_svl_bins,
+         bin_mid = svl_min + (pmin(floor((svl_mm - svl_min) / binwidth), n_svl_bins - 1) + 0.5) * binwidth) %>%
+  group_by(taxon_capture, life_stage_simple, bin_mid, binwidth, svl_min) %>%
+  summarise(n = n(), .groups = "drop")
+
+# metamorph counts as a single bar placed to the left of each species' svl axis
+meta_bars = brms_data %>%
+  filter(life_stage_simple == "metamorph") %>%
+  count(taxon_capture, life_stage_simple) %>%
+  inner_join(distinct(svl_binned, taxon_capture, binwidth, svl_min), by = "taxon_capture") %>%
+  mutate(bin_mid = svl_min - 2 * binwidth)
+
+(svl_hist = ggplot(mapping = aes(x = bin_mid, y = n, fill = life_stage_simple)) +
+  geom_col(data = svl_binned, aes(width = binwidth), position = "stack") +
+  geom_col(data = meta_bars, aes(width = binwidth)) +
+  geom_text(data = meta_bars, aes(label = n), vjust = -0.3, size = 3) +
+  facet_wrap(~ taxon_capture, scales = "free") +
+  scale_fill_manual(values = stage_colors, drop = FALSE) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "SVL (mm); metamorph count shown as separate bar at left",
+       y = "Samples",
+       fill = "Life stage") +
+  theme_minimal() +
+  theme(legend.position = "bottom"))
+
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+
+# seasonal sample counts by week of year (week 53 folded into 52)
+season_week = brms_data %>%
+  mutate(week = pmin(ceiling(yday(date) / 7), 52)) %>%
+  count(taxon_capture, life_stage_simple, week)
+
+month_start_weeks = ceiling(yday(make_date(2001, 1:12, 1)) / 7)
+
+# shared layers; polar and cartesian versions below
+season_base = ggplot(season_week, aes(x = week, y = n, fill = life_stage_simple)) +
+  geom_col(width = 1, position = "stack") +
+  facet_wrap(~ taxon_capture, scales = "free_y") +
+  scale_x_continuous(limits = c(0.5, 52.5),
+                     breaks = month_start_weeks,
+                     labels = month.abb) +
+  scale_fill_manual(values = stage_colors, drop = FALSE) +
+  labs(x = NULL,
+       y = "Samples per week",
+       fill = "Life stage") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+(season_polar = season_base +
+  coord_polar(start = 0) +
+  theme(axis.text.y = element_blank()))
+
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+
+(season_cart = season_base +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        panel.grid.minor.x = element_blank()))
+
+```
+
+```{r}
+# shared binning and plotting for the seasonal (week x svl) tile plots below.
+#   week_width: x binwidth in weeks (week 53 folded into 52; a last partial period is kept)
+#   svl_binwidth: y binwidth in mm, either one value for all species or a named vector by
+#     taxon_capture. NULL gives each species n_svl_bins bins over its own svl range
+#   min_n_week: columns (week periods) with fewer samples are dropped
+
+# subadult / adult svl cutoffs (mm), as in 03_size_bd_GAM_analysis.Rmd
+svl_cutoffs = tribble(
+  ~taxon_capture,              ~svl_cutoff_mm,
+  "anaxyrus_canorus",          40,
+  "colostethus_panamansis",    18.8,
+  "lithobates_chiricahuensis", 57,
+  "lithobates_sphenocephalus", 51,
+  "lithobates_warszewitschii", 35,
+  "notophthalmus_viridescens", NA,
+  "pseudacris_crucifer",       20,
+  "rana_cascadae",             50,
+  "rana_catesbeiana",          95,
+  "rana_clamitans",            60,
+  "rana_muscosa",              40,
+  "rana_pipiens",              51,
+  "rana_sierrae",              40,
+  "silverstoneia_flotator",    15.1) %>%
+  filter(!is.na(svl_cutoff_mm))
+
+resolve_svl_binwidth = function(taxon, svl_range, svl_binwidth, n_svl_bins) {
+  if (is.null(svl_binwidth)) {
+    return(svl_range / n_svl_bins)
+  }
+  if (is.null(names(svl_binwidth))) {
+    stopifnot(length(svl_binwidth) == 1)
+    return(svl_binwidth)
+  }
+  if (!(taxon %in% names(svl_binwidth))) {
+    stop("svl_binwidth has no value for ", taxon)
+  }
+  unname(svl_binwidth[taxon])
+}
+
+# sample-level column (center of each week_width period, in week units) and svl bin (center)
+bin_week_svl = function(data, week_width = 1, svl_binwidth = NULL, n_svl_bins = 30, min_n_week = 10) {
+  data %>%
+    mutate(week = pmin(ceiling(yday(date) / 7), 52),
+           week = (ceiling(week / week_width) - 0.5) * week_width + 0.5) %>%
+    group_by(taxon_capture) %>%
+    mutate(svl_min = min(svl_mm),
+           binwidth = resolve_svl_binwidth(cur_group()$taxon_capture, max(svl_mm) - svl_min,
+                                           svl_binwidth, n_svl_bins),
+           n_bins_spp = pmax(ceiling((max(svl_mm) - svl_min) / binwidth), 1),
+           svl_bin = svl_min + (pmin(floor((svl_mm - svl_min) / binwidth), n_bins_spp - 1) + 0.5) * binwidth) %>%
+    group_by(taxon_capture, week) %>%
+    filter(n() >= min_n_week) %>%
+    ungroup() %>%
+    select(-n_bins_spp)
+}
+
+# shared tile layers. coord_cartesian (not scale limits) so a partial last period is not dropped
+season_tile_base = function(cells, week_width, show_cutoffs = TRUE) {
+  ggplot(cells, aes(x = week, y = svl_bin, fill = value)) +
+    geom_tile(aes(height = binwidth), width = week_width) +
+    (if (show_cutoffs) geom_hline(data = svl_cutoffs, aes(yintercept = svl_cutoff_mm),
+                                  linetype = "dashed", color = "#333", linewidth = 0.5)) +
+    facet_wrap(~ taxon_capture, scales = "free_y") +
+    scale_x_continuous(breaks = month_start_weeks,
+                       labels = month.abb) +
+    coord_cartesian(xlim = c(0.5, 52.5), expand = FALSE) +
+    labs(x = NULL, y = "SVL (mm)") +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+          panel.grid.minor = element_blank())
+}
+
+period_label = function(week_width) {
+  if (week_width == 1) "weeks" else paste0(week_width, "-week periods")
+}
+
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+
+# svl distribution through the season: density within each column, scaled so each column's peak
+# = 1. a second bright band within a column suggests a distinct size cohort (e.g. young of the
+# year). all life stages included (metamorphs anchor the yoy cohort). sparse columns are dropped,
+# since a single animal would otherwise scale to full intensity.
+svl_density_tile = function(data, week_width = 1, svl_binwidth = NULL, n_svl_bins = 30,
+                            min_n_week = 10, show_cutoffs = FALSE) {
+  cells = bin_week_svl(data, week_width, svl_binwidth, n_svl_bins, min_n_week) %>%
+    group_by(taxon_capture, week, svl_bin, binwidth) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(taxon_capture, week) %>%
+    mutate(value = n / max(n)) %>%
+    ungroup()
+
+  season_tile_base(cells, week_width, show_cutoffs) +
+    scale_fill_viridis_c(option = "magma", direction = -1, limits = c(0, 1)) +
+    labs(fill = "Density within column\n(peak = 1)",
+         caption = paste0(str_to_sentence(period_label(week_width)), " with fewer than ",
+                          min_n_week, " samples omitted."))
+}
+
+(svl_season_tile = svl_density_tile(brms_data, week_width = 1, n_svl_bins = 30))
+
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+
+# bd prevalence and load (co100) in week x svl cells. bd levels are not comparable between
+# species (labs differ), so each cell is centered on its species' overall value (all of that
+# species' swabs) and shown on a diverging scale:
+#   prevalence: empirical log odds of detection, cell minus species (log odds ratio); cells
+#     need >= min_n_cell swabs
+#   load: mean log(bd load density) among positives, cell minus species (log fold difference);
+#     cells need >= min_pos_cell positives
+# color limits are symmetric at the 95th percentile of |value|, more extreme cells squished.
+emp_logit = function(k, n) log((k + 0.5) / (n - k + 0.5))
+
+bd_season_tile = function(data, metric = c("prevalence", "load"), week_width = 2,
+                          svl_binwidth = NULL, n_svl_bins = 15, min_n_week = 10,
+                          min_n_cell = 5, min_pos_cell = 3, show_cutoffs = TRUE) {
+  metric = match.arg(metric)
+
+  spp_ref = data %>%
+    group_by(taxon_capture) %>%
+    summarise(spp_logit_prev = emp_logit(sum(bd_detected_co100), n()),
+              spp_mean_log_load = mean(log(bd_load_co100_density[bd_detected_co100])),
+              .groups = "drop")
+
+  samples = bin_week_svl(data, week_width, svl_binwidth, n_svl_bins, min_n_week) %>%
+    left_join(spp_ref, by = "taxon_capture")
+
+  if (metric == "prevalence") {
+    cells = samples %>%
+      group_by(taxon_capture, week, svl_bin, binwidth, spp_logit_prev) %>%
+      summarise(n = n(),
+                n_pos = sum(bd_detected_co100),
+                .groups = "drop") %>%
+      filter(n >= min_n_cell) %>%
+      mutate(value = emp_logit(n_pos, n) - spp_logit_prev)
+
+    fill_label = "Log odds ratio of detection\n(cell vs. species overall)"
+    caption = paste0("Empirical logit. Cells with fewer than ", min_n_cell, " swabs")
+  } else {
+    cells = samples %>%
+      filter(bd_detected_co100) %>%
+      group_by(taxon_capture, week, svl_bin, binwidth, spp_mean_log_load) %>%
+      summarise(n_pos = n(),
+                mean_log_load = mean(log(bd_load_co100_density)),
+                .groups = "drop") %>%
+      filter(n_pos >= min_pos_cell) %>%
+      mutate(value = mean_log_load - spp_mean_log_load)
+
+    fill_label = "Log fold difference in Bd load density\namong positives (cell vs. species overall)"
+    caption = paste0("Cells with fewer than ", min_pos_cell, " Bd-positive swabs")
+  }
+
+  lim = quantile(abs(cells$value), 0.95)
+
+  season_tile_base(cells, week_width, show_cutoffs) +
+    scale_fill_distiller(palette = "RdBu", limits = c(-lim, lim), oob = scales::squish) +
+    labs(fill = fill_label,
+         caption = paste0(caption, " and ", period_label(week_width), " with fewer than ",
+                          min_n_week, " samples omitted.",
+                          if (show_cutoffs) " Dashed lines: subadult / adult SVL cutoff."))
+}
+
+(bd_prev_season_tile = bd_season_tile(brms_data, "prevalence", week_width = 2, n_svl_bins = 15))
+
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+
+(bd_load_season_tile = bd_season_tile(brms_data, "load", week_width = 2, n_svl_bins = 15))
+
 ```
