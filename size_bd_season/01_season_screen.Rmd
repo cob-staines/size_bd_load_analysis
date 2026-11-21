@@ -1,0 +1,342 @@
+---
+title: "01_season_screen"
+output: html_document
+---
+
+Purpose: a fast, frequentist screen of whether the subadult - adult difference in *Bd* infection
+changes through the season, before investing in a Bayesian seasonal model. This script fits
+`glmmTMB` mixed models per species; it does not produce inferential results for the manuscript.
+
+Questions this screen answers:
+
+1. Which species have enough co-sampling (both life stages sampled in the same weeks) to
+   estimate a stage x season interaction at all?
+2. Is season confounded with site (populations visited at different times of year) or does
+   sampling timing shift between years? Either would blur or fake a seasonal pattern.
+3. Does a stage x season interaction improve the fit, once population and population-year
+   variation are accounted for, and does it survive adding (pooled) weather?
+
+Why the interaction is the target: weather effects in the unified and GAM models do not vary by
+life stage, so weather (and its confounding with season) affects both stages equally and cancels
+out of the subadult - adult contrast. The same logic applies to season here: the seasonal curve
+shared by both stages may mix true seasonality with weather, but the *difference* between stages
+through the season (the interaction) is what this screen is about.
+
+Run order: needs the unified model data from `size_bd_unified/01_model_data.Rmd`
+(the same file model m11g was fit to).
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here, glmmTMB)
+
+figures_dir = here("size_bd_season", "figures")
+intermediates_dir = here("size_bd_season", "intermediates")
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(intermediates_dir, recursive = TRUE, showWarnings = FALSE)
+
+# unified model data (subadults and adults only, all species)
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+
+```
+
+# Screen parameters
+```{r}
+# a week counts as "co-sampled" for prevalence when both life stages have >= min_n_co swabs,
+# and for load when both have >= min_pos_co Bd-positive swabs
+min_n_co = 5
+min_pos_co = 3
+
+# species tiers, from the number of co-sampled weeks:
+#   tier 1: prevalence and load screens (enough co-sampled weeks for both)
+#   tier 2: prevalence screen only
+tier1_min_co_weeks = 15
+tier1_min_co_weeks_pos = 10
+tier2_min_co_weeks = 7
+
+```
+
+# Season terms
+```{r}
+# day of year as a first harmonic (one sine + one cosine). together, a * sin + b * cos is a
+# single smooth wave with a fitted amplitude and peak date, so two coefficients describe a full
+# seasonal cycle. for species sampled only part of the year (e.g. sierra lakes, ~4-6 months),
+# the full cycle is not identifiable: within the sampled window the wave acts as a smooth
+# within-season trend (rising, falling, or humped), which is fine for a screen but should not be
+# read as the shape of the full year.
+season_data = brms_data %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("adult", "subadult")),
+         doy = yday(date),
+         week = pmin(ceiling(doy / 7), 52),
+         s1 = sin(2 * pi * doy / 365.25),
+         c1 = cos(2 * pi * doy / 365.25),
+         # glmmTMB random-effect grouping needs factors; pop_year mirrors the unified model's
+         # population:year grouping
+         population = factor(population),
+         pop_year = interaction(population, year, drop = TRUE),
+         log_load = if_else(bd_detected_co100, log(bd_load_co100_density), NA_real_))
+
+```
+
+# Coverage and species tiers
+```{r}
+# weeks where both life stages were sampled (prevalence) or both had positives (load)
+co_weeks = season_data %>%
+  group_by(taxon_capture, week, life_stage_simple) %>%
+  summarise(n = n(),
+            n_pos = sum(bd_detected_co100),
+            .groups = "drop") %>%
+  pivot_wider(names_from = life_stage_simple, values_from = c(n, n_pos), values_fill = 0) %>%
+  mutate(co_prev = n_adult >= min_n_co & n_subadult >= min_n_co,
+         co_load = n_pos_adult >= min_pos_co & n_pos_subadult >= min_pos_co)
+
+coverage = season_data %>%
+  group_by(taxon_capture) %>%
+  summarise(n = n(),
+            years = n_distinct(year),
+            visits = n_distinct(paste(site, date)),
+            weeks = n_distinct(week),
+            .groups = "drop") %>%
+  left_join(co_weeks %>%
+              group_by(taxon_capture) %>%
+              summarise(co_weeks = sum(co_prev),
+                        co_weeks_pos = sum(co_load),
+                        .groups = "drop"),
+            by = "taxon_capture") %>%
+  mutate(tier = case_when(co_weeks >= tier1_min_co_weeks & co_weeks_pos >= tier1_min_co_weeks_pos ~ 1,
+                          co_weeks >= tier2_min_co_weeks ~ 2,
+                          .default = 3)) %>%
+  arrange(tier, desc(co_weeks))
+
+coverage
+
+tier1_spp = coverage %>% filter(tier == 1) %>% pull(taxon_capture)
+tier2_spp = coverage %>% filter(tier == 2) %>% pull(taxon_capture)
+
+```
+
+# Design checks
+
+## Season vs site
+```{r}
+#| fig-width: 12
+#| fig-height: 10
+
+# rows are populations, columns weeks, fill is the number of swabs. if different populations
+# are sampled at different times of year (e.g. high-elevation lakes late in summer), then
+# "season" partly means "site", and a stage x season interaction could reflect which sites
+# carry which life stages. the population random effect absorbs site-level differences in
+# average infection, but not site-specific seasonal patterns.
+p_pop_week = season_data %>%
+  filter(taxon_capture %in% tier1_spp) %>%
+  count(taxon_capture, population, week) %>%
+  group_by(taxon_capture) %>%
+  # order populations by their median sampling week, so timing differences show as a diagonal
+  mutate(population = fct_reorder(population, week, .fun = median)) %>%
+  ungroup() %>%
+  ggplot(aes(x = week, y = population, fill = n)) +
+  geom_tile() +
+  facet_wrap(~ taxon_capture, scales = "free_y") +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(x = "Week of year", y = "Population (ordered by median sampling week)", fill = "Swabs") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        panel.grid = element_blank())
+
+ggsave(file.path(figures_dir, "01_population_week_sampling.png"), p_pop_week, width = 12, height = 10)
+
+p_pop_week
+
+```
+
+## Timing between years
+```{r}
+#| fig-width: 12
+#| fig-height: 8
+
+# sampling dates by year and life stage (median and interquartile range of day of year). if
+# subadult timing shifts a lot between years, pooling years by day of year blurs seasonal
+# patterns; population-year random effects absorb year-level shifts in average infection, not
+# shifts in timing.
+p_year_timing = season_data %>%
+  filter(taxon_capture %in% tier1_spp) %>%
+  group_by(taxon_capture, year, life_stage_simple) %>%
+  summarise(doy_median = median(doy),
+            doy_q25 = quantile(doy, 0.25),
+            doy_q75 = quantile(doy, 0.75),
+            n = n(),
+            .groups = "drop") %>%
+  ggplot(aes(x = year, y = doy_median, color = life_stage_simple)) +
+  geom_pointrange(aes(ymin = doy_q25, ymax = doy_q75, size = n),
+                  position = position_dodge(width = 0.5)) +
+  scale_size_continuous(range = c(0.1, 0.8), trans = "sqrt") +
+  facet_wrap(~ taxon_capture, scales = "free_x") +
+  labs(x = "Year", y = "Day of year sampled (median, IQR)", color = "Life stage", size = "Swabs") +
+  theme_minimal()
+
+ggsave(file.path(figures_dir, "01_year_sampling_timing.png"), p_year_timing, width = 12, height = 8)
+
+p_year_timing
+
+```
+
+# Mixed-model screen
+```{r}
+# for each species and response, compare a model without and with the stage x season
+# interaction, using a likelihood-ratio test (LRT) and the change in AIC:
+#   m0: response ~ life_stage + s1 + c1                      (one seasonal curve, shifted by stage)
+#   m1: response ~ life_stage * (s1 + c1)                    (separate seasonal curve per stage)
+# both with (1 | population) + (1 | pop_year). the weather variant adds pooled (within-species,
+# not stage-specific) temp_c_30_z + precip_mm_10_z to both models, to check whether an
+# interaction survives with weather in the model.
+#
+# responses:
+#   prevalence: bd_detected_co100, binomial (logit link), all swabs
+#   load: log(bd load density), gaussian, bd-positive swabs only (the hurdle model's mu part)
+#
+# caveats:
+#   - random intercepts only. the unified model also lets population effects differ by life
+#     stage, (life_stage | pop_year); adding that here is possible but often fails to converge
+#     with these data sizes. without it, LRT p-values may be somewhat optimistic.
+#   - p-values from many species x response x variant tests are a screen, not a result; look
+#     for consistent, large effects (and the contrast curves below), not p < 0.05.
+
+fit_screen = function(d, response, family, weather) {
+  rhs_0 = "life_stage_simple + s1 + c1"
+  rhs_1 = "life_stage_simple * (s1 + c1)"
+  rhs_weather = if (weather) " + temp_c_30_z + precip_mm_10_z" else ""
+  rhs_re = " + (1 | population) + (1 | pop_year)"
+
+  f0 = as.formula(paste(response, "~", rhs_0, rhs_weather, rhs_re))
+  f1 = as.formula(paste(response, "~", rhs_1, rhs_weather, rhs_re))
+
+  # tryCatch keeps the loop going if one species fails to fit
+  m0 = tryCatch(glmmTMB(f0, data = d, family = family), error = function(e) NULL)
+  m1 = tryCatch(glmmTMB(f1, data = d, family = family), error = function(e) NULL)
+
+  if (is.null(m0) || is.null(m1)) {
+    return(tibble(converged = FALSE, lrt_p = NA_real_, delta_aic = NA_real_, fit_1 = list(m1)))
+  }
+
+  # pdHess = FALSE means the optimizer did not reach a well-defined optimum; treat with caution
+  converged = isTRUE(m0$sdr$pdHess) && isTRUE(m1$sdr$pdHess)
+  lrt = anova(m0, m1)
+
+  tibble(converged = converged,
+         lrt_p = lrt$`Pr(>Chisq)`[2],
+         delta_aic = AIC(m1) - AIC(m0),   # negative favors the interaction model
+         fit_1 = list(m1))
+}
+
+# one row per species x response x weather variant. tier 1: prevalence and load; tier 2:
+# prevalence only
+screen_grid = bind_rows(
+  expand_grid(taxon_capture = c(tier1_spp, tier2_spp), metric = "prevalence"),
+  expand_grid(taxon_capture = tier1_spp, metric = "load")) %>%
+  expand_grid(weather = c(FALSE, TRUE))
+
+screen_results = screen_grid %>%
+  mutate(fit = pmap(list(taxon_capture, metric, weather), function(spp, met, wx) {
+    d = season_data %>% filter(taxon_capture == spp)
+
+    if (met == "prevalence") {
+      fit_screen(d, "bd_detected_co100", binomial(), wx)
+    } else {
+      fit_screen(filter(d, bd_detected_co100), "log_load", gaussian(), wx)
+    }
+  })) %>%
+  unnest(fit)
+
+# summary table (without the fitted models)
+screen_table = screen_results %>%
+  select(-fit_1) %>%
+  arrange(metric, taxon_capture, weather)
+
+write_csv(screen_table, file.path(intermediates_dir, "01_season_screen_lrt.csv"))
+
+screen_table
+
+```
+
+# Contrast curves
+```{r}
+#| fig-width: 12
+#| fig-height: 9
+
+# subadult - adult contrast through the season from the interaction model (m1):
+#   contrast(doy) = b_subadult + b_subadult:s1 * sin(doy) + b_subadult:c1 * cos(doy)
+# on the logit scale (log odds ratio of detection) or log scale (log fold difference in load).
+# its standard error comes from the fixed-effect covariance matrix V: for the row vector
+# L = (1, sin, cos), var(contrast) = L V L'. intervals are approximate (wald, 95%).
+# curves are shown only at weeks where both stages were sampled (co_prev / co_load), so nothing
+# is extrapolated into unsampled parts of the season.
+contrast_terms = c("life_stage_simplesubadult",
+                   "life_stage_simplesubadult:s1",
+                   "life_stage_simplesubadult:c1")
+
+contrast_curve = function(fit, weeks) {
+  b = fixef(fit)$cond
+  V = vcov(fit)$cond
+  stopifnot(all(contrast_terms %in% names(b)))
+
+  doy = weeks * 7 - 3   # mid-week day of year
+  L = cbind(1, sin(2 * pi * doy / 365.25), cos(2 * pi * doy / 365.25))
+
+  est = as.vector(L %*% b[contrast_terms])
+  se = sqrt(diag(L %*% V[contrast_terms, contrast_terms] %*% t(L)))
+
+  tibble(week = weeks, contrast = est, lower = est - 1.96 * se, upper = est + 1.96 * se)
+}
+
+contrast_curves = screen_results %>%
+  filter(!map_lgl(fit_1, is.null)) %>%
+  mutate(curve = pmap(list(fit_1, taxon_capture, metric), function(fit, spp, met) {
+    co = co_weeks %>% filter(taxon_capture == spp)
+    weeks = if (met == "prevalence") co$week[co$co_prev] else co$week[co$co_load]
+    contrast_curve(fit, sort(weeks))
+  })) %>%
+  select(taxon_capture, metric, weather, converged, curve) %>%
+  unnest(curve)
+
+write_csv(contrast_curves, file.path(intermediates_dir, "01_season_contrast_curves.csv"))
+
+plot_contrast = function(met, y_label) {
+  contrast_curves %>%
+    filter(metric == met) %>%
+    mutate(weather = if_else(weather, "with weather", "season only")) %>%
+    ggplot(aes(x = week, y = contrast, color = weather)) +
+    geom_hline(yintercept = 0, color = "#555") +
+    geom_pointrange(aes(ymin = lower, ymax = upper), size = 0.2,
+                    position = position_dodge(width = 0.6)) +
+    facet_wrap(~ taxon_capture, scales = "free_y") +
+    labs(x = "Week of year (co-sampled weeks only)", y = y_label, color = NULL) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+p_contrast_prev = plot_contrast("prevalence", "Subadult - adult log odds ratio of detection")
+p_contrast_load = plot_contrast("load", "Subadult - adult log fold difference in Bd load density (positives)")
+
+ggsave(file.path(figures_dir, "01_season_contrast_prevalence.png"), p_contrast_prev, width = 12, height = 9)
+ggsave(file.path(figures_dir, "01_season_contrast_load.png"), p_contrast_load, width = 12, height = 7)
+
+p_contrast_prev
+p_contrast_load
+
+```
+
+# Reading the screen
+
+- A species is a good candidate for a Bayesian seasonal model if the interaction improves fit
+  (clearly negative `delta_aic`) in both the season-only and weather variants, the fit converged,
+  and the contrast curve changes substantially across co-sampled weeks (not just a constant
+  offset).
+- If the interaction disappears once weather is added, stage-specific weather sensitivity and
+  stage x season are not separable with these data (see weather anomalies in the brainstorm).
+- Check the design plots before trusting a strong interaction: a diagonal in the
+  population x week plot means season and site are entangled.
