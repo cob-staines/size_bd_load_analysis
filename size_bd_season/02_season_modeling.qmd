@@ -1,0 +1,242 @@
+---
+title: "Seasonal stage x Bd modeling"
+format:
+  html:
+    toc: true
+df-print: kable
+---
+
+Purpose: per-species Bayesian models of how the subadult - adult difference in *Bd* infection
+changes through the season (stage x season), following the glmmTMB screen in
+`01_season_screen.Rmd`.
+
+Design decisions (see the screen and brainstorm):
+
+- **No weather terms.** Within temperate species, 30-day temperature is largely seasonal, so
+  stage x season and stage x temperature cannot be separated. The seasonal curves here therefore
+  include whatever climate comes with the season. The unified model keeps weather for its own
+  purpose (adjusting the overall subadult - adult contrast).
+- **One model per species**, for the species with enough co-sampling of both life stages:
+  *A. canorus* and five ranids. The two-window Panamanian species (*Colostethus*,
+  *L. warszewitschii*) are dropped: their life stages are mostly sampled in different windows.
+- **Same random-effect structure as the GAM models**, so differences from them come from the
+  seasonal terms, not the random effects.
+
+Production fits run on the cluster with `r-brms-contained/size_bd_season_modeling.R` (same data
+prep, formula, priors and settings; `hpc/run_size_bd_season_modeling.sbatch` fits each species as
+an array task). Keep the two in sync.
+
+Run order: needs the unified model data from `size_bd_unified/01_model_data.Rmd` (the same file
+model m11g was fit to).
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here, brms, cmdstanr)
+
+models_dir = here("size_bd_season", "models")
+dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
+
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+
+```
+
+# Data
+```{r}
+# species with enough co-sampled weeks of both life stages (screen tier 1, 10 / 6), minus the
+# two-window panamanian species. alphabetical order = cluster array index (0-5)
+season_species = c("anaxyrus_canorus",
+                   "rana_cascadae",
+                   "rana_catesbeiana",
+                   "rana_clamitans",
+                   "rana_muscosa",
+                   "rana_sierrae")
+
+# season covariate: months from july 1 (day 182). centering and scaling only changes the units
+# of the smooth's linear (unpenalized) part, which makes its prior easier to set: a slope of 1
+# means a change of 1 on the logit (hu) or log (mu) scale per month.
+prep_season_data = function(brms_data, species_name) {
+  brms_data %>%
+    filter(taxon_capture == species_name) %>%
+    mutate(life_stage_simple = factor(life_stage_simple, levels = c("adult", "subadult")),
+           doy = as.integer(format(date, "%j")),
+           season_m = (doy - 182) / 30.44) %>%
+    # drop unused levels so random-effect terms have no empty columns
+    droplevels()
+}
+
+season_data = purrr::map(set_names(season_species), ~ prep_season_data(brms_data, .x))
+
+# sample sizes per species and stage
+map_dfr(season_data, ~ count(.x, life_stage_simple), .id = "taxon_capture") %>%
+  pivot_wider(names_from = life_stage_simple, values_from = n)
+
+```
+
+# Model structure
+```{r}
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+# for both the load part (mu, log scale, Bd-positive swabs) and the detection part (hu, logit
+# scale of non-detection):
+#   1 + life_stage_simple            stage intercepts (adult reference)
+#   s(season_m, by = life_stage_simple, k = 5)
+#                                    a separate seasonal curve per stage. a thin-plate spline,
+#                                    not cyclic: most species cover only part of the year, so the
+#                                    curve is a within-season shape, not a full annual cycle.
+#                                    k = 5 allows one dip-and-recovery (e.g. r. cascadae) without
+#                                    much wiggle. the subadult - adult contrast at a date is the
+#                                    gap between the two curves.
+#   (1 | population:life_stage_simple)
+#                                    population effects, separate by stage (as in unified / gam)
+#   (0 + life_stage_simple | population:year)
+#                                    population-year effects, correlated between stages
+# sigma ~ 1 + (1 | population)       residual spread of log load varies by population (as in gam)
+season_formula = bf(
+  bd_load_co100_density ~ 1 + life_stage_simple +
+    s(season_m, by = life_stage_simple, k = 5) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+
+  hu ~ 1 + life_stage_simple +
+    s(season_m, by = life_stage_simple, k = 5) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+
+  sigma ~ 1 + (1 | population)
+)
+
+# priors, on the same scales as the unified model (m11g). classes:
+#   Intercept:  intercept (adult, at the centered predictors)
+#   b:          the subadult offset AND the linear (unpenalized) part of each seasonal smooth
+#               (coef "sseason_m:life_stage_simple<stage>_1", per month). the class-wide b prior
+#               covers the subadult offset; the smooths' linear parts get their own prior by coef
+#   sds:        how wiggly each smooth may be. the brms default here is student_t(3, 0, 6)
+#               (scaled from the data), which allows very wiggly curves, especially on the logit
+#               (hu) scale; student_t(3, 0, 2.5) is moderately regularizing but still allows
+#               rises of several log units (e.g. r. sierrae subadult load)
+#   sd:         random-effect sds
+season_priors = c(
+  # mu: log load density among positives
+  prior(normal(5, 4), class = "Intercept"),
+  prior(normal(0, 3), class = "b"),                                              # subadult offset
+  prior(normal(0, 2), class = "b", coef = "sseason_m:life_stage_simpleadult_1"),
+  prior(normal(0, 2), class = "b", coef = "sseason_m:life_stage_simplesubadult_1"),
+  prior(student_t(3, 0, 2.5), class = "sds"),
+  prior(exponential(1), class = "sd"),
+
+  # hu: logit of non-detection
+  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 2), class = "b", dpar = "hu"),                                 # subadult offset
+  prior(normal(0, 2), class = "b", coef = "sseason_m:life_stage_simpleadult_1", dpar = "hu"),
+  prior(normal(0, 2), class = "b", coef = "sseason_m:life_stage_simplesubadult_1", dpar = "hu"),
+  prior(student_t(3, 0, 2.5), class = "sds", dpar = "hu"),
+  prior(exponential(1), class = "sd", dpar = "hu"),
+
+  # sigma: log residual sd of log load
+  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+  prior(exponential(1), class = "sd", dpar = "sigma")
+)
+
+# validate_prior errors if any prior does not match a model parameter, and shows the full prior
+# set (ours, plus brms defaults for anything not set, e.g. the lkj(1) prior on the adult /
+# subadult population-year correlation). the coef names come from the stage levels, so they are
+# the same for every species; checking one species is enough.
+validate_prior(season_priors,
+               formula = season_formula,
+               data = season_data[["anaxyrus_canorus"]],
+               family = hurdle_lognormal())
+
+```
+
+# Local timing test
+```{r}
+#| eval: false
+
+# short run of the real model, to estimate cluster run time and memory. warmup = 300 clears
+# stan's adaptation threshold (below ~150-200 warmup the adaptation schedule is compressed and
+# timing is not representative, see r-brms-contained/hpc/timing_probe.sbatch).
+#
+# extrapolating: sampling time scales roughly linearly with post-warmup iterations, warmup less
+# predictably (step size adapts). the estimate below scales the slowest chain's warmup by
+# 2000 / 300 and its sampling by 2000 / 100 (production: 2000 warmup + 2000 sampling; chains run
+# in parallel, so the slowest chain sets the wall time). treat it as an order of magnitude, and
+# compare species to see how time grows with n.
+timing_species = c("anaxyrus_canorus", "rana_cascadae", "rana_sierrae")   # n ~1k and ~3.4k; add rana_sierrae (~26.5k) if time allows
+
+timing_results = map_dfr(timing_species, function(spp) {
+  start = Sys.time()
+  fit = brm(
+    formula = season_formula,
+    data = season_data[[spp]],
+    family = hurdle_lognormal(),
+    prior = season_priors,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    chains = 4, iter = 400, warmup = 300,
+    seed = 127, cores = 4, backend = "cmdstanr",
+    refresh = 0
+  )
+  elapsed = as.numeric(difftime(Sys.time(), start, units = "mins"))
+
+  # per-chain warmup / sampling seconds from stan (excludes compilation)
+  chain_times = rstan::get_elapsed_time(fit$fit)
+
+  tibble(taxon_capture = spp,
+         n = nrow(season_data[[spp]]),
+         total_min = elapsed,                                 # includes compilation (~1 min)
+         max_chain_warmup_s = max(chain_times[, "warmup"]),
+         max_chain_sample_s = max(chain_times[, "sample"]),
+         # production estimate: warmup scaled 2000/300, sampling scaled 2000/100
+         est_production_h = (max(chain_times[, "warmup"]) * 2000 / 300 +
+                               max(chain_times[, "sample"]) * 2000 / 100) / 3600,
+         divergences = sum(nuts_params(fit) %>% filter(Parameter == "divergent__") %>% pull(Value)))
+})
+
+timing_results
+
+```
+
+# Model fitting
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model fitting code"
+
+# production fits run on the cluster (r-brms-contained/hpc/run_size_bd_season_modeling.sbatch).
+# this local version is for reference or a single small species.
+fit_season_model = function(spp) {
+  fit = brm(
+    formula = season_formula,
+    data = season_data[[spp]],
+    family = hurdle_lognormal(),
+    prior = season_priors,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    chains = 4, iter = 4000, warmup = 2000,
+    seed = 127, cores = 4, backend = "cmdstanr"
+  )
+
+  fit = add_criterion(fit, "loo")
+  saveRDS(fit, file.path(models_dir, paste0("size_bd_season_model_zln_s1_", spp, ".rds")))
+  fit
+}
+
+# e.g. fit_season_model("anaxyrus_canorus")
+
+```
+
+# Load fitted models
+```{r}
+#| eval: false
+
+# cluster fits are copied into size_bd_season/models/ (named as in fit_season_model)
+season_models = map(set_names(season_species), function(spp) {
+  readRDS(file.path(models_dir, paste0("size_bd_season_model_zln_s1_", spp, ".rds")))
+})
+
+```

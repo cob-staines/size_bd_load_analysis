@@ -55,8 +55,9 @@ min_pos_co = 3
 # species tiers, from the number of co-sampled weeks:
 #   tier 1: prevalence and load screens (enough co-sampled weeks for both)
 #   tier 2: prevalence screen only
-tier1_min_co_weeks = 15
-tier1_min_co_weeks_pos = 10
+# (10 / 6 adds anaxyrus canorus and colostethus panamansis to the five ranids)
+tier1_min_co_weeks = 10
+tier1_min_co_weeks_pos = 6
 tier2_min_co_weeks = 7
 
 ```
@@ -192,8 +193,11 @@ p_year_timing
 #   m0: response ~ life_stage + s1 + c1                      (one seasonal curve, shifted by stage)
 #   m1: response ~ life_stage * (s1 + c1)                    (separate seasonal curve per stage)
 # both with (1 | population) + (1 | pop_year). the weather variant adds pooled (within-species,
-# not stage-specific) temp_c_30_z + precip_mm_10_z to both models, to check whether an
-# interaction survives with weather in the model.
+# not stage-specific) temp_c_30_z + precip_mm_10_z to both models. this adjusts the shared
+# seasonal curve for weather, but a weather effect common to both stages cannot create or remove
+# a difference between stages, so the interaction is rarely changed much by it. whether the
+# interaction could instead be stage-specific weather sensitivity is tested in the separability
+# section below.
 #
 # responses:
 #   prevalence: bd_detected_co100, binomial (logit link), all swabs
@@ -330,13 +334,306 @@ p_contrast_load
 
 ```
 
+# Size class curves
+```{r}
+#| fig-width: 12
+#| fig-height: 9
+
+# seasonal curve for each life stage from the interaction model (m1), alongside observed weekly
+# values. the curves are fixed-effect predictions for a typical population and year (random
+# effects at 0):
+#   adult:    b0 + b_s1 * sin + b_c1 * cos [+ weather terms]
+#   subadult: adult + b_subadult + b_subadult:s1 * sin + b_subadult:c1 * cos
+# so the vertical gap between the two curves at any week is the contrast plotted above.
+# prevalence curves are back-transformed from the logit scale (inverse logit); load curves stay
+# on the log scale. intervals are approximate wald 95% intervals (L V L', as for the contrasts),
+# transformed with the curve.
+#
+# each stage's curve is drawn only at weeks where that stage was sampled (>= min_n_co swabs for
+# prevalence, >= min_pos_co positives for load), and lines break across unsampled weeks.
+# levels are within-species only: never compare curve heights between species.
+#
+# curve_weather: which screen variant to plot. FALSE = season only. TRUE = with weather, holding
+# temp_c_30_z and precip_mm_10_z at the species' median (so the curve shows season at typical
+# weather for that species, not the dataset-wide mean).
+curve_weather = FALSE
+
+# species-median weather (on the model's z scale), used only when curve_weather = TRUE
+spp_weather = season_data %>%
+  group_by(taxon_capture) %>%
+  summarise(temp_c_30_z = median(temp_c_30_z),
+            precip_mm_10_z = median(precip_mm_10_z),
+            .groups = "drop")
+
+stage_curves = function(fit, weeks_adult, weeks_subadult, weather_values) {
+  b = fixef(fit)$cond
+  V = vcov(fit)$cond
+
+  grid = bind_rows(tibble(life_stage_simple = "adult", week = weeks_adult),
+                   tibble(life_stage_simple = "subadult", week = weeks_subadult)) %>%
+    mutate(doy = week * 7 - 3,   # mid-week day of year
+           s1 = sin(2 * pi * doy / 365.25),
+           c1 = cos(2 * pi * doy / 365.25),
+           is_sub = as.numeric(life_stage_simple == "subadult"))
+
+  # one row of L per stage x week, one column per fixed effect (named as in fixef). any term
+  # not set here stays 0
+  L = matrix(0, nrow = nrow(grid), ncol = length(b), dimnames = list(NULL, names(b)))
+  L[, "(Intercept)"] = 1
+  L[, "s1"] = grid$s1
+  L[, "c1"] = grid$c1
+  L[, "life_stage_simplesubadult"] = grid$is_sub
+  L[, "life_stage_simplesubadult:s1"] = grid$is_sub * grid$s1
+  L[, "life_stage_simplesubadult:c1"] = grid$is_sub * grid$c1
+  for (wx in names(weather_values)) {
+    if (wx %in% names(b)) L[, wx] = weather_values[[wx]]
+  }
+
+  est = as.vector(L %*% b)
+  se = sqrt(rowSums((L %*% V) * L))   # diag(L V L') without building the full matrix
+
+  grid %>%
+    mutate(est = est, lower = est - 1.96 * se, upper = est + 1.96 * se) %>%
+    select(life_stage_simple, week, est, lower, upper)
+}
+
+# observed weekly values per stage: proportion positive (prevalence) and mean log load among
+# positives (load), with the counts they are based on
+observed_weekly = season_data %>%
+  group_by(taxon_capture, week, life_stage_simple) %>%
+  summarise(n = n(),
+            n_pos = sum(bd_detected_co100),
+            prevalence = n_pos / n,
+            load = if (n_pos > 0) mean(log_load, na.rm = TRUE) else NA_real_,
+            .groups = "drop") %>%
+  mutate(life_stage_simple = as.character(life_stage_simple))
+
+curves = screen_results %>%
+  filter(weather == curve_weather, !map_lgl(fit_1, is.null)) %>%
+  mutate(curve = pmap(list(fit_1, taxon_capture, metric), function(fit, spp, met) {
+    obs = observed_weekly %>% filter(taxon_capture == spp)
+    if (met == "prevalence") {
+      sampled = obs %>% filter(n >= min_n_co)
+    } else {
+      sampled = obs %>% filter(n_pos >= min_pos_co)
+    }
+    wx = spp_weather %>% filter(taxon_capture == spp) %>% select(-taxon_capture) %>% as.list()
+
+    stage_curves(fit,
+                 weeks_adult = sort(sampled$week[sampled$life_stage_simple == "adult"]),
+                 weeks_subadult = sort(sampled$week[sampled$life_stage_simple == "subadult"]),
+                 weather_values = wx)
+  })) %>%
+  select(taxon_capture, metric, converged, curve) %>%
+  unnest(curve) %>%
+  # back-transform prevalence from the logit scale
+  mutate(across(c(est, lower, upper), ~ if_else(metric == "prevalence", plogis(.x), .x))) %>%
+  # run id: a new run starts after any gap in sampled weeks, so lines are not drawn across gaps
+  group_by(taxon_capture, metric, life_stage_simple) %>%
+  arrange(week, .by_group = TRUE) %>%
+  mutate(run = cumsum(c(1, diff(week) > 1))) %>%
+  ungroup()
+
+write_csv(curves, file.path(intermediates_dir, "01_season_stage_curves.csv"))
+
+stage_colors = c(adult = "#0072B2", subadult = "#E69F00")
+
+plot_stage_curves = function(met, y_label) {
+  obs = observed_weekly %>%
+    filter(taxon_capture %in% unique(curves$taxon_capture[curves$metric == met])) %>%
+    filter(if (met == "prevalence") n >= min_n_co else n_pos >= min_pos_co) %>%
+    mutate(value = if (met == "prevalence") prevalence else load,
+           weight = if (met == "prevalence") n else n_pos)
+
+  curves %>%
+    filter(metric == met) %>%
+    ggplot(aes(x = week, color = life_stage_simple, fill = life_stage_simple)) +
+    geom_ribbon(aes(ymin = lower, ymax = upper, group = interaction(life_stage_simple, run)),
+                alpha = 0.2, color = NA) +
+    geom_line(aes(y = est, group = interaction(life_stage_simple, run)), linewidth = 0.8) +
+    geom_point(data = obs, aes(y = value, size = weight), alpha = 0.5, shape = 16) +
+    facet_wrap(~ taxon_capture, scales = "free_y") +
+    scale_color_manual(values = stage_colors) +
+    scale_fill_manual(values = stage_colors) +
+    scale_size_area(max_size = 3) +
+    labs(x = "Week of year", y = y_label, color = "Life stage", fill = "Life stage",
+         size = if (met == "prevalence") "Swabs" else "Positives",
+         caption = paste0("Lines: interaction-model fit (", if (curve_weather) "with weather at species median" else "season only",
+                          "), 95% wald intervals. Points: observed weekly values.")) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+p_curves_prev = plot_stage_curves("prevalence", "Bd prevalence (typical population and year)")
+p_curves_load = plot_stage_curves("load", "Mean log(Bd load density) among positives (typical population and year)")
+
+ggsave(file.path(figures_dir, "01_season_stage_curves_prevalence.png"), p_curves_prev, width = 12, height = 9)
+ggsave(file.path(figures_dir, "01_season_stage_curves_load.png"), p_curves_load, width = 12, height = 7)
+
+p_curves_prev
+p_curves_load
+
+```
+
+# Separability of stage x season and stage x weather
+
+Within temperate species, 30-day temperature closely follows the season, so "the subadult -
+adult difference changes through the season" (stage x season) and "subadults respond to
+temperature differently than adults" (stage x temperature) can produce nearly the same pattern.
+This section asks, per tier-1 species, whether the data can tell the two apart.
+
+## Temperature anomalies
+```{r}
+# split temperature, within each species, into a seasonal part (what the first harmonic of day
+# of year predicts) and an anomaly (warmer or colder than usual for that date, e.g. a warm
+# summer, or a low-elevation site). the anomaly is uncorrelated with s1 and c1 by construction
+# (least-squares residuals), so a stage x temp_anom term does not compete with stage x season.
+# the decomposition uses all of a species' swabs; in the positives-only load models the anomaly
+# is close to, but not exactly, uncorrelated with season.
+#
+# caveat: using anomalies assumes a frog responds the same way to "warmer than usual for june"
+# as to "june is warmer than may". acclimation could make these differ, and that cannot be
+# tested with these data.
+season_data = season_data %>%
+  group_by(taxon_capture) %>%
+  mutate(temp_seasonal = fitted(lm(temp_c_30_z ~ s1 + c1)),
+         temp_anom = temp_c_30_z - temp_seasonal) %>%
+  ungroup()
+
+# share of within-species temperature variance that is seasonal (high = stage x season and
+# stage x temperature are hard to separate)
+season_data %>%
+  filter(taxon_capture %in% tier1_spp) %>%
+  group_by(taxon_capture) %>%
+  summarise(temp_seasonal_r2 = var(temp_seasonal) / var(temp_c_30_z),
+            temp_anom_sd = sd(temp_anom),
+            .groups = "drop")
+
+```
+
+## Competing models
+```{r}
+# five models per species and response (same random effects as the screen):
+#   m_none:    stage + s1 + c1 + temp + precip                (no stage-dependent pattern)
+#   m_season:  stage * (s1 + c1) + temp + precip              (stage difference varies by date)
+#   m_weather: stage * (temp + precip) + s1 + c1              (stage difference varies by weather)
+#   m_both:    stage * (s1 + c1 + temp + precip)              (both)
+#   m_anom:    stage * (s1 + c1 + temp_anom) + precip         (both, with temperature anomalies)
+# temp = temp_c_30_z, precip = precip_mm_10_z. m_anom leaves out temp_seasonal on purpose:
+# within a species it is an exact linear combination of s1 and c1, so it is already in the model.
+#
+# checks (alpha = screen_alpha):
+#   1. aic_season_minus_weather: AIC(m_season) - AIC(m_weather). |gap| > ~4 favors one story
+#      (negative favors season); < ~2 means the data fit both equally well
+#   2. p_season_given_weather: LRT m_weather vs m_both (does stage x season add to stage x weather?)
+#      p_weather_given_season: LRT m_season vs m_both (does stage x weather add to stage x season?)
+#      p_season_alone / p_weather_alone: LRT vs m_none (does each improve on its own?)
+#   3. max_cor_season_temp: largest |correlation| between the stage:s1 / stage:c1 and the
+#      stage:temp estimates in m_both (near 0.9 or more = the model cannot tell them apart);
+#      se_ratio_stage_temp: SE of stage:temp in m_both / in m_weather (large = inflated by
+#      collinearity)
+#   4. anom_est, anom_lower, anom_upper: stage x temp_anom estimate in m_anom, with a wald 95%
+#      interval (logit scale for prevalence, log scale for load)
+screen_alpha = 0.05
+
+fit_glmm = function(d, response, rhs, family) {
+  f = as.formula(paste(response, "~", rhs, "+ (1 | population) + (1 | pop_year)"))
+  tryCatch(glmmTMB(f, data = d, family = family), error = function(e) NULL)
+}
+
+lrt_p = function(small, big) {
+  if (is.null(small) || is.null(big)) return(NA_real_)
+  anova(small, big)$`Pr(>Chisq)`[2]
+}
+
+sep_rhs = c(
+  none    = "life_stage_simple + s1 + c1 + temp_c_30_z + precip_mm_10_z",
+  season  = "life_stage_simple * (s1 + c1) + temp_c_30_z + precip_mm_10_z",
+  weather = "life_stage_simple * (temp_c_30_z + precip_mm_10_z) + s1 + c1",
+  both    = "life_stage_simple * (s1 + c1 + temp_c_30_z + precip_mm_10_z)",
+  anom    = "life_stage_simple * (s1 + c1 + temp_anom) + precip_mm_10_z")
+
+separability_one = function(d, response, family) {
+  # purrr:: prefix: maps::map() (from the maps package) masks purrr::map() when maps is attached
+  m = purrr::map(sep_rhs, ~ fit_glmm(d, response, .x, family))
+
+  converged = all(map_lgl(m, ~ !is.null(.x) && isTRUE(.x$sdr$pdHess)))
+
+  # 3. collinearity diagnostics from m_both (and m_weather for the SE ratio)
+  max_cor = NA_real_
+  se_ratio = NA_real_
+  if (!is.null(m$both) && !is.null(m$weather)) {
+    cor_both = cov2cor(vcov(m$both)$cond)
+    season_terms = c("life_stage_simplesubadult:s1", "life_stage_simplesubadult:c1")
+    temp_term = "life_stage_simplesubadult:temp_c_30_z"
+    max_cor = max(abs(cor_both[season_terms, temp_term]))
+    se_ratio = sqrt(vcov(m$both)$cond[temp_term, temp_term]) /
+      sqrt(vcov(m$weather)$cond[temp_term, temp_term])
+  }
+
+  # 4. stage x temperature anomaly
+  anom = tibble(anom_est = NA_real_, anom_lower = NA_real_, anom_upper = NA_real_)
+  if (!is.null(m$anom)) {
+    anom_term = "life_stage_simplesubadult:temp_anom"
+    est = fixef(m$anom)$cond[anom_term]
+    se = sqrt(vcov(m$anom)$cond[anom_term, anom_term])
+    anom = tibble(anom_est = est, anom_lower = est - 1.96 * se, anom_upper = est + 1.96 * se)
+  }
+
+  tibble(converged = converged,
+         aic_season_minus_weather = if (is.null(m$season) || is.null(m$weather)) NA_real_ else
+           AIC(m$season) - AIC(m$weather),
+         p_season_given_weather = lrt_p(m$weather, m$both),
+         p_weather_given_season = lrt_p(m$season, m$both),
+         p_season_alone = lrt_p(m$none, m$season),
+         p_weather_alone = lrt_p(m$none, m$weather),
+         max_cor_season_temp = max_cor,
+         se_ratio_stage_temp = se_ratio) %>%
+    bind_cols(anom)
+}
+
+separability = expand_grid(taxon_capture = tier1_spp,
+                           metric = c("prevalence", "load")) %>%
+  mutate(res = map2(taxon_capture, metric, function(spp, met) {
+    d = season_data %>% filter(taxon_capture == spp)
+    if (met == "prevalence") {
+      separability_one(d, "bd_detected_co100", binomial())
+    } else {
+      separability_one(filter(d, bd_detected_co100), "log_load", gaussian())
+    }
+  })) %>%
+  unnest(res) %>%
+  # reading, following the decision table:
+  #   - each adds to the other: separable, both contribute
+  #   - only one adds to the other: that story is preferred
+  #   - neither adds to the other, but at least one improves on m_none alone: not separable
+  #     (the two terms carry the same information)
+  #   - neither improves on m_none: no stage-dependent seasonal or weather pattern
+  mutate(reading = case_when(
+    p_season_given_weather < screen_alpha & p_weather_given_season < screen_alpha ~ "separable: both contribute",
+    p_season_given_weather < screen_alpha ~ "seasonal (not weather sensitivity)",
+    p_weather_given_season < screen_alpha ~ "weather sensitivity",
+    p_season_alone < screen_alpha | p_weather_alone < screen_alpha ~ "not separable",
+    !is.na(p_season_alone) ~ "no stage-dependent pattern",
+    .default = NA_character_)) %>%
+  arrange(metric, taxon_capture)
+
+write_csv(separability, file.path(intermediates_dir, "01_season_separability.csv"))
+
+separability
+
+```
+
 # Reading the screen
 
 - A species is a good candidate for a Bayesian seasonal model if the interaction improves fit
-  (clearly negative `delta_aic`) in both the season-only and weather variants, the fit converged,
-  and the contrast curve changes substantially across co-sampled weeks (not just a constant
-  offset).
-- If the interaction disappears once weather is added, stage-specific weather sensitivity and
-  stage x season are not separable with these data (see weather anomalies in the brainstorm).
+  (clearly negative `delta_aic`), the fits converged, the contrast curve changes substantially
+  across co-sampled weeks (not just a constant offset), and the separability reading is
+  "seasonal" or "separable".
+- A "not separable" reading means stage x season and stage-specific temperature sensitivity
+  cannot be told apart with these data. A seasonal model could still describe *when* the stage
+  difference is larger, but not *why* (date vs temperature). The stage x temp_anom estimate is
+  the best available hint: near zero with a tight interval argues against temperature
+  sensitivity.
 - Check the design plots before trusting a strong interaction: a diagonal in the
   population x week plot means season and site are entangled.
