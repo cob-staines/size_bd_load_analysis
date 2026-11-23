@@ -60,6 +60,8 @@ tier1_min_co_weeks = 10
 tier1_min_co_weeks_pos = 6
 tier2_min_co_weeks = 7
 
+stage_colors = c(adult = "#0072B2", subadult = "#E69F00")
+
 ```
 
 # Season terms
@@ -436,8 +438,6 @@ curves = screen_results %>%
 
 write_csv(curves, file.path(intermediates_dir, "01_season_stage_curves.csv"))
 
-stage_colors = c(adult = "#0072B2", subadult = "#E69F00")
-
 plot_stage_curves = function(met, y_label) {
   obs = observed_weekly %>%
     filter(taxon_capture %in% unique(curves$taxon_capture[curves$metric == met])) %>%
@@ -621,6 +621,208 @@ separability = expand_grid(taxon_capture = tier1_spp,
 write_csv(separability, file.path(intermediates_dir, "01_season_separability.csv"))
 
 separability
+
+```
+
+# Coverage for an all-species season model
+
+The tiers above pick species for per-species stage curves. The next modeling step aims instead
+at every species with both life stages, using one model form that lets the seasonal part of the
+stage contrast shrink to a constant when the data cannot support it (a shrinkage difference
+smooth, `s(season, by = ordered(stage), bs = "ts")`). Species with narrow or no co-sampling are
+then still included: their contrast becomes a constant offset, and the seasonal summary reports
+"uninformative" rather than dropping the species.
+
+This section prepares two things for that model, for all species in the unified data:
+
+1. **A seasonal origin per species**, so the season axis is continuous within each species'
+   sampled season. Day of year breaks at 1 January, which cuts the Panamanian dry season
+   (about December - April) in two. Placing the origin in the middle of each species' longest
+   sampling gap fixes this for any species; for temperate species the gap is winter, so their
+   axis is barely changed.
+2. **A coverage class per species**, describing how much the data can say about the seasonal
+   shape of the contrast (not whether the species is included).
+
+## Coverage parameters
+```{r}
+# a species enters the all-species model with at least min_n_stage swabs of each life stage.
+# this is low on purpose: the stage offset can be estimated from few swabs, and the shrinkage
+# smooth handles thin seasonal data
+min_n_stage = 20
+
+# a week counts as "sampled" (for finding the seasonal gap) with >= min_n_co swabs of either
+# stage combined, so a single stray swab does not split a gap
+min_n_gap = min_n_co
+
+# coverage classes, from co-sampled weeks (prevalence rule, both stages >= min_n_co swabs):
+#   broad:  >= broad_min_co_weeks co-sampled weeks spread over >= broad_min_co_span_weeks weeks
+#           of the (re-originated) season: the seasonal shape of the contrast can be estimated
+#   narrow: some co-sampled weeks, but fewer or bunched: expect a mostly constant contrast
+#   none:   no co-sampled week: the contrast relies on comparing stages sampled at different
+#           times, and the seasonal shape is not identifiable (expect full shrinkage)
+broad_min_co_weeks = 6
+broad_min_co_span_weeks = 8
+
+classify_coverage = function(co_weeks, co_span_weeks) {
+  class = case_when(co_weeks >= broad_min_co_weeks & co_span_weeks >= broad_min_co_span_weeks ~ "broad",
+                    co_weeks >= 1 ~ "narrow",
+                    .default = "none")
+  factor(class, levels = c("broad", "narrow", "none"))
+}
+
+```
+
+## Seasonal origin
+```{r}
+# origin week = middle of the longest circular run of unsampled weeks. "circular" because a
+# gap can wrap through the new year (e.g. a temperate winter gap spans weeks 45 - 10).
+# species sampled in every week (year-round) have no gap; for them the origin is the middle of
+# the 4-week window with the fewest swabs.
+find_origin_week = function(weekly_n) {
+  # weekly_n: swab counts for weeks 1-52 (zeros included)
+  sampled = weekly_n >= min_n_gap
+
+  if (all(sampled)) {
+    # rolling 4-week sum, wrapping around the year; origin at the window's 2nd-3rd week
+    roll = vapply(1:52, function(w) sum(weekly_n[((w - 1):(w + 2)) %% 52 + 1]), numeric(1))
+    return(((which.min(roll) + 1) - 1) %% 52 + 1)
+  }
+
+  # rotate the year to start at a sampled week, so no gap wraps past the end of the vector,
+  # then find the longest run of unsampled weeks with rle() (run-length encoding)
+  start = which(sampled)[1]
+  idx = c(start:52, seq_len(start - 1))
+  runs = rle(sampled[idx])
+  run_end = cumsum(runs$lengths)
+  run_start = run_end - runs$lengths + 1
+  gaps = which(!runs$values)
+  longest = gaps[which.max(runs$lengths[gaps])]
+  idx[floor((run_start[longest] + run_end[longest]) / 2)]
+}
+
+weekly_all = season_data %>%
+  count(taxon_capture, life_stage_simple, week) %>%
+  complete(taxon_capture, life_stage_simple, week = 1:52, fill = list(n = 0))
+
+season_origin = weekly_all %>%
+  group_by(taxon_capture, week) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  arrange(taxon_capture, week) %>%
+  group_by(taxon_capture) %>%
+  summarise(origin_week = find_origin_week(n), .groups = "drop") %>%
+  mutate(origin_doy = origin_week * 7 - 3)   # mid-week day of year
+
+season_origin
+
+```
+
+## Coverage table
+```{r}
+# week_r: weeks since the species' origin (1 = the origin week). sampled weeks then form one
+# continuous block in week_r, even when they straddle the new year
+week_since_origin = function(week, origin_week) (week - origin_week) %% 52 + 1
+
+co_weeks_all = co_weeks %>%
+  left_join(season_origin, by = "taxon_capture") %>%
+  mutate(week_r = week_since_origin(week, origin_week))
+
+coverage_all = season_data %>%
+  left_join(season_origin, by = "taxon_capture") %>%
+  mutate(week_r = week_since_origin(week, origin_week)) %>%
+  group_by(taxon_capture, origin_week) %>%
+  summarise(n_adult = sum(life_stage_simple == "adult"),
+            n_subadult = sum(life_stage_simple == "subadult"),
+            populations = n_distinct(population),
+            years = n_distinct(year),
+            # central 90% of swabs on the re-originated axis: the sampled season
+            season_first_week_r = quantile(week_r, 0.05, type = 1),
+            season_last_week_r = quantile(week_r, 0.95, type = 1),
+            .groups = "drop") %>%
+  mutate(season_span_weeks = season_last_week_r - season_first_week_r + 1) %>%
+  left_join(co_weeks_all %>%
+              group_by(taxon_capture) %>%
+              summarise(co_weeks = sum(co_prev),
+                        co_weeks_pos = sum(co_load),
+                        # weeks spanned (first to last co-sampled week, on the re-originated axis)
+                        co_span_weeks = if (any(co_prev)) max(week_r[co_prev]) - min(week_r[co_prev]) + 1 else 0,
+                        co_span_weeks_pos = if (any(co_load)) max(week_r[co_load]) - min(week_r[co_load]) + 1 else 0,
+                        .groups = "drop"),
+            by = "taxon_capture") %>%
+  mutate(include = n_adult >= min_n_stage & n_subadult >= min_n_stage,
+         # one class per model part: prevalence (hu) uses weeks where both stages have
+         # >= min_n_co swabs; load (mu) uses weeks where both have >= min_pos_co positives, which
+         # is often much thinner (e.g. a species can be broad for prevalence, none for load)
+         coverage_class_prev = classify_coverage(co_weeks, co_span_weeks),
+         coverage_class_load = classify_coverage(co_weeks_pos, co_span_weeks_pos)) %>%
+  arrange(desc(include), coverage_class_prev, coverage_class_load, desc(co_weeks))
+
+write_csv(coverage_all, file.path(intermediates_dir, "01_season_coverage_all.csv"))
+
+coverage_all
+
+coverage_all %>% count(include, coverage_class_prev, coverage_class_load)
+
+# species list for the all-species season model (02_season_all_species.qmd and the cluster
+# script r-brms-contained/size_bd_season_all_modeling.R read this file, so the species, their
+# order (= cluster array index) and their seasonal origins are defined in one place).
+# alphabetical, so array indices do not change when thresholds move species between classes.
+# copy to the cluster's data/ folder alongside the model data.
+season_species_all = coverage_all %>%
+  filter(include) %>%
+  select(taxon_capture, origin_week, n_adult, n_subadult,
+         coverage_class_prev, coverage_class_load, co_weeks, co_weeks_pos) %>%
+  mutate(origin_doy = origin_week * 7 - 3,   # mid-week day of year, as in season_origin
+         n = n_adult + n_subadult) %>%
+  arrange(taxon_capture) %>%
+  mutate(array_index = row_number() - 1)
+
+write_csv(season_species_all, file.path(intermediates_dir, "01_season_species_all.csv"))
+
+season_species_all
+
+```
+
+## Coverage plot
+```{r}
+#| fig-width: 14
+#| fig-height: 14
+
+# weekly swabs per species: adults above the axis, subadults below (mirrored), on the calendar
+# week axis. shading marks co-sampled weeks (both stages >= min_n_co swabs); the dashed line is
+# the seasonal origin (middle of the longest gap). the facet label gives the coverage
+# class for prevalence / load.
+cov_labels = coverage_all %>%
+  # label: prevalence class / load class
+  mutate(label = paste0(str_to_sentence(gsub("_", " ", taxon_capture)),
+                        " (", coverage_class_prev, " / ", coverage_class_load,
+                        if_else(include, "", ", excluded"), ")")) %>%
+  select(taxon_capture, label)
+
+p_coverage_all = weekly_all %>%
+  filter(n > 0) %>%
+  mutate(n_signed = if_else(life_stage_simple == "adult", n, -n)) %>%
+  left_join(cov_labels, by = "taxon_capture") %>%
+  ggplot(aes(x = week)) +
+  geom_rect(data = co_weeks_all %>% filter(co_prev) %>% left_join(cov_labels, by = "taxon_capture"),
+            aes(xmin = week - 0.5, xmax = week + 0.5, ymin = -Inf, ymax = Inf),
+            fill = "grey85", inherit.aes = FALSE) +
+  geom_col(aes(y = n_signed, fill = life_stage_simple), width = 0.9) +
+  geom_vline(data = season_origin %>% left_join(cov_labels, by = "taxon_capture"),
+             aes(xintercept = origin_week), linetype = "dashed", color = "grey30") +
+  geom_hline(yintercept = 0, color = "grey30", linewidth = 0.3) +
+  facet_wrap(~ label, scales = "free_y", ncol = 4) +
+  scale_fill_manual(values = stage_colors) +
+  scale_y_continuous(labels = abs) +
+  scale_x_continuous(breaks = seq(1, 52, by = 13), limits = c(0.5, 52.5)) +
+  labs(x = "Week of year", y = "Swabs (adults up, subadults down)", fill = "Life stage",
+       caption = "Grey: co-sampled weeks (prevalence rule). Dashed: seasonal origin (middle of the longest sampling gap).") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "italic"))
+
+ggsave(file.path(figures_dir, "01_season_coverage_all.png"), p_coverage_all, width = 14, height = 14)
+
+p_coverage_all
 
 ```
 

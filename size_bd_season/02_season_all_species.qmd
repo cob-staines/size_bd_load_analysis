@@ -1,0 +1,403 @@
+---
+title: "Seasonal stage x Bd modeling, all species"
+format:
+  html:
+    toc: true
+df-print: kable
+---
+
+Purpose: one model form, fit separately to every species with both life stages, describing how
+the subadult - adult difference in *Bd* infection changes through the season. The goal is not a
+cross-species claim but comparable per-species profiles (e.g. *R. muscosa* vs *R. sierrae*,
+*A. canorus* vs *A. americanus* / *A. fowleri*) that can inform what drives susceptibility or
+resilience.
+
+How this differs from `02_season_modeling.qmd` (six data-rich species, a separate seasonal curve
+per stage):
+
+- **The stage difference is modeled directly**, as a shrinkage difference smooth. When the data
+  cannot support a changing difference (narrow or no co-sampling), the smooth shrinks to zero
+  and the difference becomes a constant offset. With broad co-sampling, it can bend. So every
+  species can use the same model, and the amount of seasonal pattern is learned per species.
+- **The season axis starts at each species' seasonal origin** (the middle of its longest
+  sampling gap, from `01_season_screen.Rmd`), so each species' sampled season is continuous,
+  including Panamanian species whose season straddles the new year.
+- **Species list, order and origins come from `01_season_species_all.csv`**, written by the
+  screen (all species with >= 20 swabs of each stage).
+
+The six-species stage-curve models remain as a robustness comparison: where both agree, the
+pattern does not depend on the parameterization.
+
+Production fits run on the cluster with `r-brms-contained/size_bd_season_all_modeling.R` (same
+data prep, formula, priors and settings; `hpc/run_size_bd_season_all_modeling.sbatch`, one species
+per array task). Keep the two in sync.
+
+Run order: `size_bd_unified/01_model_data.Rmd` (model data), then the coverage sections of
+`01_season_screen.Rmd` (species list).
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here, brms, cmdstanr, patchwork)
+
+models_dir = here("size_bd_season", "models_all")
+dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
+
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+
+# model checks shared across the seasonal models
+source(here("size_bd_season", "season_check_functions.R"))
+
+```
+
+# Data
+```{r}
+# species, cluster array index, seasonal origin and coverage classes from the screen
+season_species_all = read_csv(here("size_bd_season", "intermediates", "01_season_species_all.csv"),
+                              show_col_types = FALSE)
+
+season_species_all
+
+# season covariate: months since the species' seasonal origin (origin_doy, mid-week of the
+# origin week). %% 365 wraps dates before the origin to the end of the axis, so the sampled
+# season runs continuously from ~0 to ~12 (in practice a smaller sampled block within that).
+# no centering is needed: with shrinkage smooths there is no separate linear slope whose prior
+# depends on the units.
+#
+# stage_o: an ORDERED copy of life stage. a smooth with by = <ordered factor> is built only for
+# the non-reference level (subadult), as a deviation from the shared smooth: the difference
+# curve. (with an unordered factor, brms / mgcv would build one full curve per level, as in
+# 02_season_modeling.qmd.)
+prep_season_all_data = function(brms_data, species_name, origin_doy) {
+  brms_data %>%
+    filter(taxon_capture == species_name) %>%
+    mutate(life_stage_simple = factor(life_stage_simple, levels = c("adult", "subadult")),
+           stage_o = ordered(life_stage_simple, levels = c("adult", "subadult")),
+           doy = as.integer(format(date, "%j")),
+           season_m = ((doy - origin_doy) %% 365) / 30.44) %>%
+    # drop unused levels so random-effect terms have no empty columns
+    droplevels()
+}
+
+season_data = season_species_all %>%
+  { set_names(.$origin_doy, .$taxon_capture) } %>%
+  imap(~ prep_season_all_data(brms_data, .y, .x))
+
+# check: the sampled season should be one block on the new axis (no swabs near both 0 and 12
+# unless the species is sampled year-round)
+map_dfr(season_data, ~ tibble(n = nrow(.x),
+                               season_m_min = min(.x$season_m),
+                               season_m_max = max(.x$season_m)),
+        .id = "taxon_capture")
+
+```
+
+# Model structure
+```{r}
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+# for both the load part (mu, log scale, Bd-positive swabs) and the detection part (hu, logit
+# scale of non-detection):
+#   1 + life_stage_simple            stage intercepts (adult reference). the subadult coefficient
+#                                    is the stage difference where the difference curve is 0;
+#                                    if the difference smooth shrinks away, it is THE difference
+#   s(season_m, bs = "ts", k = 5)    seasonal curve shared by both stages (adult curve)
+#   s(season_m, by = stage_o, bs = "ts", k = 5)
+#                                    subadult - adult difference curve, centered (averages ~0
+#                                    over the data), so the constant part stays with
+#                                    life_stage_simple
+#   (1 | population:life_stage_simple), (0 + life_stage_simple | population:year)
+#                                    random effects as in the unified / gam / stage-curve models
+# sigma ~ 1 + (1 | population)       residual spread of log load varies by population
+#
+# bs = "ts": shrinkage thin-plate spline. a standard thin-plate spline ("tp") splits into a
+# penalized wiggly part and an unpenalized straight line (in brms, a fixed "bs_" slope). "ts"
+# adds a small penalty to the straight line too, so ALL of the smooth sits under one sds and the
+# whole curve, slope included, can shrink to flat. this is what lets narrow-coverage species
+# fall back to a constant stage difference.
+season_all_formula = bf(
+  bd_load_co100_density ~ 1 + life_stage_simple +
+    s(season_m, bs = "ts", k = 5) +
+    s(season_m, by = stage_o, bs = "ts", k = 5) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+
+  hu ~ 1 + life_stage_simple +
+    s(season_m, bs = "ts", k = 5) +
+    s(season_m, by = stage_o, bs = "ts", k = 5) +
+    (1 | population:life_stage_simple) +
+    (0 + life_stage_simple | population:year),
+
+  sigma ~ 1 + (1 | population)
+)
+
+# priors. same scales as the stage-curve models, except the smooth sds:
+#   shared smooth sds      student_t(3, 0, 2.5): moderately regularizing, as before
+#   difference smooth sds  student_t(3, 0, 1): tighter, so the default is a constant stage
+#                          difference and a changing difference must be earned from the data.
+#                          the sds is not directly the curve's amplitude (it scales penalized
+#                          basis coefficients), so check what it implies with the sds
+#                          posterior-vs-prior plot below and adjust if it over- or under-shrinks
+# coef names are the smooth terms as brms labels them (copied from default_prior).
+sds_shared = 's(season_m, bs = "ts", k = 5)'
+sds_diff = 's(season_m, by = stage_o, bs = "ts", k = 5)'
+
+season_all_priors = c(
+  # mu: log load density among positives
+  prior(normal(5, 4), class = "Intercept"),
+  prior(normal(0, 3), class = "b"),                                  # subadult offset
+  set_prior("student_t(3, 0, 2.5)", class = "sds", coef = sds_shared),
+  set_prior("student_t(3, 0, 1)", class = "sds", coef = sds_diff),
+  prior(exponential(1), class = "sd"),
+
+  # hu: logit of non-detection
+  prior(normal(0, 2), class = "Intercept", dpar = "hu"),
+  prior(normal(0, 2), class = "b", dpar = "hu"),                     # subadult offset
+  set_prior("student_t(3, 0, 2.5)", class = "sds", coef = sds_shared, dpar = "hu"),
+  set_prior("student_t(3, 0, 1)", class = "sds", coef = sds_diff, dpar = "hu"),
+  prior(exponential(1), class = "sd", dpar = "hu"),
+
+  # sigma: log residual sd of log load
+  prior(normal(0, 1), class = "Intercept", dpar = "sigma"),
+  prior(exponential(1), class = "sd", dpar = "sigma")
+)
+
+# validate_prior errors if a prior matches no parameter. run for every species: this also
+# confirms each species' data can build the smooths (k = 5 needs enough distinct season values)
+# and random effects. fast (no sampling).
+# expected warning (2 per species, harmless): "the global prior 'student_t(3, 0, 2.5)' of class
+# 'sds' will not be used". that is brms' default class-wide sds prior; both smooths have their
+# own priors above, so the default has nothing left to apply to.
+prior_ok = imap_lgl(season_data, function(d, spp) {
+  tryCatch({
+    validate_prior(season_all_priors, formula = season_all_formula, data = d,
+                   family = hurdle_lognormal())
+    TRUE
+  }, error = function(e) {
+    message(spp, ": ", conditionMessage(e))
+    FALSE
+  })
+})
+
+prior_ok[!prior_ok]   # empty = all species OK
+
+# full prior set for one species (ours plus brms defaults, e.g. lkj on the stage correlation)
+validate_prior(season_all_priors, formula = season_all_formula,
+               data = season_data[["anaxyrus_canorus"]], family = hurdle_lognormal())
+
+```
+
+# Local timing test
+```{r}
+#| eval: false
+
+# short run to estimate cluster time for this model form (see 02_season_modeling.qmd for the
+# extrapolation logic: warmup x 2000/300, sampling x 2000/100, slowest chain). three species
+# spanning the range of n and population counts:
+#   silverstoneia_flotator    n ~600, 17 populations
+#   rana_catesbeiana          n ~1.8k, 28 populations
+#   notophthalmus_viridescens n ~5.3k, 281 populations (many random-effect levels)
+timing_species = c("silverstoneia_flotator", "rana_catesbeiana", "notophthalmus_viridescens")
+
+timing_results = map_dfr(timing_species, function(spp) {
+  start = Sys.time()
+  fit = brm(
+    formula = season_all_formula,
+    data = season_data[[spp]],
+    family = hurdle_lognormal(),
+    prior = season_all_priors,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    chains = 4, iter = 400, warmup = 300,
+    seed = 128, cores = 4, backend = "cmdstanr",
+    refresh = 0
+  )
+  elapsed = as.numeric(difftime(Sys.time(), start, units = "mins"))
+  chain_times = rstan::get_elapsed_time(fit$fit)
+
+  tibble(taxon_capture = spp,
+         n = nrow(season_data[[spp]]),
+         total_min = elapsed,                                 # includes compilation (~1 min)
+         max_chain_warmup_s = max(chain_times[, "warmup"]),
+         max_chain_sample_s = max(chain_times[, "sample"]),
+         est_production_h = (max(chain_times[, "warmup"]) * 2000 / 300 +
+                               max(chain_times[, "sample"]) * 2000 / 100) / 3600,
+         divergences = sum(nuts_params(fit) %>% filter(Parameter == "divergent__") %>% pull(Value)))
+})
+
+timing_results
+
+```
+
+# Model fitting
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model fitting code"
+
+# production fits run on the cluster (r-brms-contained/hpc/run_size_bd_season_all_modeling.sbatch).
+# this local version is for reference or a single small species.
+fit_season_all_model = function(spp) {
+  fit = brm(
+    formula = season_all_formula,
+    data = season_data[[spp]],
+    family = hurdle_lognormal(),
+    prior = season_all_priors,
+    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    chains = 4, iter = 4000, warmup = 2000,
+    seed = 128, cores = 4, backend = "cmdstanr"
+  )
+
+  fit = add_criterion(fit, "loo")
+  saveRDS(fit, file.path(models_dir, paste0("size_bd_season_all_model_zln_d1_", spp, ".rds")))
+  fit
+}
+
+# e.g. fit_season_all_model("silverstoneia_flotator")
+
+```
+
+# Load fitted models
+```{r}
+#| eval: false
+
+# cluster fits are copied into size_bd_season/models_all/ (named as in fit_season_all_model).
+# species without a fit file yet are skipped with a message.
+model_files = file.path(models_dir, paste0("size_bd_season_all_model_zln_d1_",
+                                           season_species_all$taxon_capture, ".rds"))
+names(model_files) = season_species_all$taxon_capture
+
+missing_fits = names(model_files)[!file.exists(model_files)]
+if (length(missing_fits) > 0) message("no fit yet: ", paste(missing_fits, collapse = ", "))
+
+season_models = purrr::map(model_files[file.exists(model_files)], readRDS)
+
+```
+
+# Model checks
+
+Same order as in `02_season_modeling.qmd`: sampler -> predictive fit -> priors. Functions are in
+`season_check_functions.R`. With many small species, expect the small ones to be the most
+fragile (few populations, few swabs per population-year).
+
+## Convergence
+```{r}
+#| eval: false
+
+convergence = map_dfr(season_models, conv_check, .id = "taxon_capture") %>%
+  left_join(season_species_all %>% select(taxon_capture, coverage_class_prev, coverage_class_load),
+            by = "taxon_capture")
+
+convergence
+
+# species needing attention (thresholds as in the comments of conv_check)
+convergence %>%
+  filter(max_rhat > 1.01 | min_ess_bulk < 400 | min_ess_tail < 400 |
+           n_divergent > 0 | min_ebfmi < 0.3)
+
+```
+
+## LOO / Pareto k
+```{r}
+#| eval: false
+
+loo_table = map_dfr(season_models, loo_check, .id = "taxon_capture")
+loo_table %>% arrange(desc(pct_k_gt_0.7))
+
+```
+
+## Posterior predictive checks by stage
+```{r}
+#| eval: false
+#| fig-height: 60
+#| fig-width: 10
+
+imap(season_models, ppc_stage) %>%
+  wrap_plots(ncol = 1)
+
+```
+
+## Seasonal posterior predictive check
+```{r}
+#| eval: false
+#| fig-height: 16
+#| fig-width: 16
+
+season_ppc_all = map_dfr(season_models, season_ppc, .id = "taxon_capture")
+
+plot_season_ppc(season_ppc_all, "prevalence")
+plot_season_ppc(season_ppc_all, "log load (positives)")
+
+season_ppc_coverage(season_ppc_all)
+
+```
+
+## Smooth sds: posterior vs prior
+```{r}
+#| eval: false
+#| fig-height: 14
+#| fig-width: 12
+
+# the difference-smooth sds is the key quantity here: pulled to ~0 = constant stage difference
+# (no seasonal change, or data can't tell); well away from 0 and narrower than the prior = the
+# data support a changing difference. compare against the coverage class: broad-coverage
+# species should be the ones with informative difference sds.
+sds_prior = tribble(
+  ~smooth,      ~prior_median,              ~prior_upper_95,
+  "shared",     half_t_quantile(0.5, 2.5),  half_t_quantile(0.95, 2.5),
+  "difference", half_t_quantile(0.5, 1),    half_t_quantile(0.95, 1))
+
+sds_all = map_dfr(season_models, sds_summary, .id = "taxon_capture") %>%
+  left_join(season_species_all %>% select(taxon_capture, coverage_class_prev, coverage_class_load),
+            by = "taxon_capture") %>%
+  mutate(coverage_class = if_else(part == "hu", coverage_class_prev, coverage_class_load))
+
+sds_all %>%
+  filter(smooth == "difference") %>%
+  select(taxon_capture, part, coverage_class, Q2.5, Q50, Q97.5) %>%
+  arrange(part, coverage_class, desc(Q50))
+
+sds_all %>%
+  left_join(sds_prior, by = "smooth") %>%
+  mutate(species = str_to_sentence(gsub("_", " ", taxon_capture)),
+         part = if_else(part == "hu", "detection (hu)", "load (mu)")) %>%
+  ggplot(aes(x = Q50, xmin = Q2.5, xmax = Q97.5, y = species, color = coverage_class)) +
+  geom_rect(aes(xmin = 0, xmax = prior_upper_95, ymin = -Inf, ymax = Inf),
+            fill = "grey92", color = NA, inherit.aes = FALSE) +
+  geom_vline(aes(xintercept = prior_median), linetype = "dashed", color = "grey50") +
+  geom_pointrange(size = 0.2) +
+  facet_grid(part ~ smooth, scales = "free_x") +
+  labs(x = "sds (posterior median, 95% interval)", y = NULL, color = "coverage",
+       subtitle = "grey band = prior 95% range; dashed = prior median") +
+  theme_classic() +
+  theme(axis.text.y = element_text(face = "italic"))
+
+```
+
+## Prior sensitivity
+```{r}
+#| eval: false
+
+# power-scaling sensitivity for the parameters that shape the stage contrast: subadult offsets
+# and smooth sds. "prior" > ~0.05 flags a prior-dominated parameter. for the difference sds
+# in narrow / none species, prior sensitivity is EXPECTED (that is the shrinkage working); it
+# matters for broad-coverage species.
+library(priorsense)
+
+season_all_sensitivity = imap(season_models, function(fit, spp) {
+  vars = grep("^b_(hu_)?life_stage_simplesubadult$|^sds_", variables(fit), value = TRUE)
+  powerscale_sensitivity(fit, variable = vars) %>%
+    as_tibble() %>%
+    mutate(taxon_capture = spp)
+}) %>%
+  list_rbind()
+
+season_all_sensitivity %>%
+  filter(diagnosis != "-")
+
+```
