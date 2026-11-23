@@ -156,9 +156,11 @@ process_season_fit = function(fit, spp) {
   # ---- curves ----
   stage_curves = map_dfr(c("prevalence", "load"), function(metric) {
     map_dfr(c("adult", "subadult"), function(stage) {
+      # computed before tibble(): inside tibble(), later arguments see earlier columns, so
+      # `metric` there would be the whole new column, not this loop's single value
       m = lp[[metric]][[stage]]
-      tibble(metric = metric, life_stage_simple = stage, day = days, week = grid_week,
-             summ_cols(if (metric == "prevalence") plogis(m) else m))
+      curve = summ_cols(if (metric == "prevalence") plogis(m) else m)
+      tibble(metric = metric, life_stage_simple = stage, day = days, week = grid_week, curve)
     })
   }) %>%
     left_join(stage_weeks %>%
@@ -200,8 +202,10 @@ process_season_fit = function(fit, spp) {
              amplitude = apply(cw, 1, function(x) max(x) - min(x)))
     } else {
       # too few co-sampled days for a seasonal summary: report the constant offset only
+      # (looked up before tibble(), for the same reason as in stage_curves)
+      constant = offset[[metric]]
       tibble(metric = metric, .draw = seq_along(draw_ids), window = "none (constant offset)",
-             window_mean = offset[[metric]], early = NA_real_, late = NA_real_,
+             window_mean = constant, early = NA_real_, late = NA_real_,
              late_minus_early = NA_real_, amplitude = NA_real_)
     }
   })
