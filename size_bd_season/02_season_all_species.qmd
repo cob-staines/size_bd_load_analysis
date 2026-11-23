@@ -198,7 +198,8 @@ validate_prior(season_all_priors, formula = season_all_formula,
 #| eval: false
 
 # short run to estimate cluster time for this model form (see 02_season_modeling.qmd for the
-# extrapolation logic: warmup x 2000/300, sampling x 2000/100, slowest chain). three species
+# extrapolation logic: warmup x 2000/300, sampling x 2000/100, slowest chain). run at 0.95;
+# production uses 0.99 for all but r. sierrae (~1.5-2x slower, see the fitting chunk). three species
 # spanning the range of n and population counts:
 #   silverstoneia_flotator    n ~600, 17 populations
 #   rana_catesbeiana          n ~1.8k, 28 populations
@@ -242,13 +243,24 @@ timing_results
 
 # production fits run on the cluster (r-brms-contained/hpc/run_size_bd_season_all_modeling.sbatch).
 # this local version is for reference or a single small species.
+
+# sampler target acceptance rate per species, as used on the cluster (ADAPT_DELTA). 0.99 by
+# default: the local timing test (at 0.95) showed divergences in small / sparse species, and a
+# higher target makes the sampler take smaller steps through tight curvature. this changes how
+# the posterior is explored, not the model, so fits at different targets are comparable.
+# r. sierrae: 0.95 (well informed; 0.99 would roughly double a ~13-15 h run). record any
+# resubmission at a different target here so the code says what each fit used.
+season_adapt_delta = function(spp) {
+  if (spp == "rana_sierrae") 0.95 else 0.99
+}
+
 fit_season_all_model = function(spp) {
   fit = brm(
     formula = season_all_formula,
     data = season_data[[spp]],
     family = hurdle_lognormal(),
     prior = season_all_priors,
-    control = list(adapt_delta = 0.95, max_treedepth = 12),
+    control = list(adapt_delta = season_adapt_delta(spp), max_treedepth = 12),
     chains = 4, iter = 4000, warmup = 2000,
     seed = 128, cores = 4, backend = "cmdstanr"
   )
