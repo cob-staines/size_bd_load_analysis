@@ -1,0 +1,616 @@
+---
+title: "03_season_all_species_analysis"
+output: html_document
+---
+
+Purpose: process the all-species seasonal models (`02_season_all_species.qmd`, one shrinkage
+difference-smooth model per species) into per-species stage curves, subadult - adult contrast
+curves and summaries, an "is seasonal change assessable?" flag, a first-pass typology, and
+consistency checks against the unified model (m11g) and the six-species stage-curve models
+(`03_season_analysis.Rmd`). Export basic results.
+
+The aim is comparable per-species profiles, not a cross-species claim: species are shown in
+phylogenetic order so related species (e.g. *R. muscosa* / *R. sierrae*, the three *Anaxyrus*)
+can be read side by side.
+
+Scales used throughout (as in `03_season_analysis.Rmd`):
+
+- **prevalence part**: the hurdle (hu) is the probability of a zero (Bd not detected). Curves are
+  shown as prevalence = 1 - hu; contrasts are on the **logit prevalence** scale (= -logit(hu)),
+  so a positive contrast means subadults are *more often infected*.
+- **load part**: mu = mean log Bd load density among positive swabs. Contrasts are differences in
+  mu (log scale): positive = subadults carry *higher loads when infected*.
+- All curves exclude random effects (`re_formula = NA`): a typical population and year.
+- **Season axis**: days (or weeks) since each species' seasonal origin (the middle of its longest
+  sampling gap, from `01_season_screen.Rmd`). For plots this is mapped back to calendar months,
+  starting at the origin, so seasons that cross the new year (Panama) stay continuous.
+
+Run order: `01_season_screen.Rmd` (species table), cluster fits copied into
+`size_bd_season/models_all/`, `02_season_all_species.qmd` (full model checks), then this script.
+For the six-species comparison, run `03_season_analysis.Rmd` first (optional).
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+# setup
+librarian::shelf(tidyverse, here, brms, posterior, patchwork, arrow)
+
+models_dir = here("size_bd_season", "models_all")
+figures_dir = here("size_bd_season", "figures")
+intermediates_dir = here("size_bd_season", "intermediates")
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(intermediates_dir, recursive = TRUE, showWarnings = FALSE)
+
+# conv_check, sds_summary, half_t_quantile
+source(here("size_bd_season", "season_check_functions.R"))
+# f_draw_agg: median / 50% / 95% intervals, net effect, pd and support labels, so contrasts are
+# reported in the same language as the unified analysis
+source(here("size_bd_unified", "contrast_functions.R"))
+
+```
+
+# Species table and fits
+```{r}
+# species, seasonal origin (origin_doy) and coverage classes from the screen
+season_species_all = read_csv(here("size_bd_season", "intermediates", "01_season_species_all.csv"),
+                              show_col_types = FALSE)
+
+model_files = file.path(models_dir, paste0("size_bd_season_all_model_zln_d1_",
+                                           season_species_all$taxon_capture, ".rds"))
+names(model_files) = season_species_all$taxon_capture
+
+missing_fits = names(model_files)[!file.exists(model_files)]
+if (length(missing_fits) > 0) message("no fit yet: ", paste(missing_fits, collapse = ", "))
+model_files = model_files[file.exists(model_files)]
+
+# phylogenetic order for plots and tables: tips of the pruned tree from the unified analysis, in
+# plotting order after ladderizing (so sister species are adjacent). species not in the tree go
+# last, alphabetically.
+phylo_tree = ape::ladderize(ape::read.tree(here("size_bd_unified", "intermediates", "phylo_tree.nwk")))
+is_tip = phylo_tree$edge[, 2] <= ape::Ntip(phylo_tree)
+tip_order = phylo_tree$tip.label[phylo_tree$edge[is_tip, 2]]
+species_order = c(intersect(tip_order, names(model_files)),
+                  sort(setdiff(names(model_files), tip_order)))
+
+species_label = function(taxon) str_to_sentence(gsub("_", " ", taxon))
+species_levels = species_label(species_order)
+
+```
+
+# Process each fit
+```{r}
+# the fits are large (r. sierrae especially), so each is read, processed and dropped in turn:
+# only summaries and a few numbers per draw are kept. the result is cached in intermediates/;
+# set refresh = TRUE after replacing any fit.
+refresh = FALSE
+results_file = file.path(intermediates_dir, "03_all_processed.rds")
+
+# a week counts as sampled for a stage with >= min_n_co swabs (prevalence) or >= min_pos_co
+# positive swabs (load), as in the screen. the contrast is only summarized over weeks where BOTH
+# stages are sampled ("co-sampled"); elsewhere it is one stage's curve extrapolated.
+min_n_co = 5
+min_pos_co = 3
+
+# thinning: 2000 of the 8000 draws and a 2-day grid are plenty for summaries and keep memory low
+ndraws_use = 2000
+grid_step_days = 2
+
+# column-wise median and 50% / 95% intervals of a draws x grid matrix
+summ_cols = function(m) {
+  q = apply(m, 2, quantile, probs = c(0.025, 0.25, 0.5, 0.75, 0.975))
+  tibble(median = q[3, ], lower_95 = q[1, ], lower_50 = q[2, ],
+         upper_50 = q[4, ], upper_95 = q[5, ])
+}
+
+process_season_fit = function(fit, spp) {
+  # ---- sampled and co-sampled weeks (weeks since origin) ----
+  d = fit$data %>%
+    mutate(day = season_m * 30.44,
+           week = floor(day / 7))
+
+  stage_weeks = d %>%
+    group_by(life_stage_simple, week) %>%
+    summarise(n = n(), n_pos = sum(bd_load_co100_density > 0), .groups = "drop") %>%
+    mutate(sampled_prevalence = n >= min_n_co,
+           sampled_load = n_pos >= min_pos_co)
+
+  co_weeks = stage_weeks %>%
+    group_by(week) %>%
+    summarise(co_prevalence = sum(sampled_prevalence) == 2,
+              co_load = sum(sampled_load) == 2,
+              .groups = "drop")
+
+  # ---- linear predictor draws on a grid over the sampled range ----
+  days = seq(floor(min(d$day)), ceiling(max(d$day)), by = grid_step_days)
+  grid = expand_grid(life_stage_simple = factor(c("adult", "subadult"), levels = c("adult", "subadult")),
+                     day = days) %>%
+    mutate(season_m = day / 30.44,
+           # the difference smooth needs the ordered stage factor in newdata too
+           stage_o = ordered(life_stage_simple, levels = c("adult", "subadult")))
+  grid_week = floor(days / 7)
+
+  # the same draws for every quantity, so per-draw differences are valid
+  set.seed(128)
+  draw_ids = sort(sample.int(ndraws(fit), min(ndraws_use, ndraws(fit))))
+
+  hu = posterior_linpred(fit, newdata = grid, dpar = "hu", re_formula = NA, draw_ids = draw_ids)
+  mu = posterior_linpred(fit, newdata = grid, dpar = "mu", re_formula = NA, draw_ids = draw_ids)
+
+  ad = grid$life_stage_simple == "adult"
+  sa = grid$life_stage_simple == "subadult"
+  lp = list(prevalence = list(adult = -hu[, ad], subadult = -hu[, sa]),   # logit prevalence
+            load = list(adult = mu[, ad], subadult = mu[, sa]))
+
+  # constant stage offsets: the subadult coefficient is the stage difference where the
+  # (centered) difference smooth is 0, i.e. THE difference when that smooth shrinks away. used
+  # as the summary for parts with no co-sampled weeks.
+  b = as_draws_matrix(fit, variable = c("b_life_stage_simplesubadult",
+                                        "b_hu_life_stage_simplesubadult")) %>%
+    subset_draws(draw = draw_ids)
+  offset = list(prevalence = -as.vector(b[, "b_hu_life_stage_simplesubadult"]),
+                load = as.vector(b[, "b_life_stage_simplesubadult"]))
+
+  # ---- curves ----
+  stage_curves = map_dfr(c("prevalence", "load"), function(metric) {
+    map_dfr(c("adult", "subadult"), function(stage) {
+      m = lp[[metric]][[stage]]
+      tibble(metric = metric, life_stage_simple = stage, day = days, week = grid_week,
+             summ_cols(if (metric == "prevalence") plogis(m) else m))
+    })
+  }) %>%
+    left_join(stage_weeks %>%
+                mutate(life_stage_simple = as.character(life_stage_simple)) %>%
+                select(life_stage_simple, week, sampled_prevalence, sampled_load),
+              by = c("life_stage_simple", "week")) %>%
+    mutate(sampled = replace_na(if_else(metric == "prevalence", sampled_prevalence, sampled_load), FALSE)) %>%
+    select(-sampled_prevalence, -sampled_load)
+
+  contrast_curves = map_dfr(c("prevalence", "load"), function(metric) {
+    contrast = lp[[metric]]$subadult - lp[[metric]]$adult
+    tibble(metric = metric, day = days, week = grid_week,
+           summ_cols(contrast), p_gt_0 = colMeans(contrast > 0))
+  }) %>%
+    left_join(co_weeks, by = "week") %>%
+    mutate(co_sampled = replace_na(if_else(metric == "prevalence", co_prevalence, co_load), FALSE)) %>%
+    select(-co_prevalence, -co_load)
+
+  # ---- per-draw summaries over the co-sampled window ----
+  #   window_mean       mean contrast over co-sampled days (each day weighted equally)
+  #   early / late      mean contrast over the first / last third of co-sampled days (thirds
+  #                     rather than end points: spline edges are the least certain)
+  #   late_minus_early  change in the stage gap through the season (> 0: subadults gain)
+  #   amplitude         max - min of the contrast curve within the window: how much it moves
+  #                     at all (always >= 0, so its pd / support are not meaningful)
+  summary_draws = map_dfr(c("prevalence", "load"), function(metric) {
+    contrast = lp[[metric]]$subadult - lp[[metric]]$adult
+    co_week_set = co_weeks$week[co_weeks[[paste0("co_", metric)]]]
+    idx = which(grid_week %in% co_week_set)
+
+    if (length(idx) >= 3) {
+      thirds = cut(seq_along(idx), 3, labels = FALSE)
+      cw = contrast[, idx, drop = FALSE]
+      early = rowMeans(contrast[, idx[thirds == 1], drop = FALSE])
+      late = rowMeans(contrast[, idx[thirds == 3], drop = FALSE])
+      tibble(metric = metric, .draw = seq_along(draw_ids), window = "co-sampled",
+             window_mean = rowMeans(cw), early = early, late = late,
+             late_minus_early = late - early,
+             amplitude = apply(cw, 1, function(x) max(x) - min(x)))
+    } else {
+      # too few co-sampled days for a seasonal summary: report the constant offset only
+      tibble(metric = metric, .draw = seq_along(draw_ids), window = "none (constant offset)",
+             window_mean = offset[[metric]], early = NA_real_, late = NA_real_,
+             late_minus_early = NA_real_, amplitude = NA_real_)
+    }
+  })
+
+  window_info = map_dfr(c("prevalence", "load"), function(metric) {
+    co_week_set = co_weeks$week[co_weeks[[paste0("co_", metric)]]]
+    tibble(metric = metric,
+           n_co_weeks = length(co_week_set),
+           first_co_day = if (length(co_week_set) > 0) min(co_week_set) * 7 else NA_real_,
+           last_co_day = if (length(co_week_set) > 0) max(co_week_set) * 7 + 6 else NA_real_)
+  })
+
+  # ---- contrast averaged over subadult swab dates (for the m11g comparison) ----
+  # m11g has no season term; the closest seasonal equivalent of its contrast is the contrast
+  # averaged over the days subadults were actually swabbed
+  sa_day = d$day[d$life_stage_simple == "subadult"]
+  w = tabulate(round((sa_day - days[1]) / grid_step_days) + 1, nbins = length(days))
+  w = w / sum(w)
+  subadult_weighted = tibble(
+    .draw = seq_along(draw_ids),
+    prevalence = as.vector((lp$prevalence$subadult - lp$prevalence$adult) %*% w),
+    load = as.vector((lp$load$subadult - lp$load$adult) %*% w))
+
+  list(convergence = conv_check(fit),
+       sds = sds_summary(fit),
+       stage_curves = stage_curves,
+       contrast_curves = contrast_curves,
+       summary_draws = summary_draws,
+       window_info = window_info,
+       subadult_weighted = subadult_weighted) %>%
+    map(~ mutate(.x, taxon_capture = spp, .before = 1))
+}
+
+if (refresh || !file.exists(results_file)) {
+  processed = imap(model_files, function(f, spp) {
+    message("processing ", spp)
+    fit = readRDS(f)
+    out = process_season_fit(fit, spp)
+    rm(fit); gc()
+    out
+  })
+  saveRDS(processed, results_file)
+} else {
+  processed = readRDS(results_file)
+}
+
+# stack each component across species
+bind_part = function(part) map_dfr(processed, part)
+convergence = bind_part("convergence")
+sds_all = bind_part("sds")
+stage_curves = bind_part("stage_curves")
+contrast_curves = bind_part("contrast_curves")
+summary_draws = bind_part("summary_draws")
+window_info = bind_part("window_info")
+subadult_weighted = bind_part("subadult_weighted")
+
+```
+
+# Fit health
+```{r}
+# a compact flag carried with every result, so a problem fit is not read uncritically. the full
+# checks (LOO, predictive checks, prior sensitivity) are in 02_season_all_species.qmd.
+# thresholds as in conv_check (season_check_functions.R); a few divergences are tolerated.
+fit_health = convergence %>%
+  mutate(fit_ok = max_rhat < 1.01 & min_ess_bulk > 400 & min_ess_tail > 400 &
+           n_divergent <= 5 & min_ebfmi > 0.3)
+
+fit_health %>%
+  select(taxon_capture, n_obs, max_rhat, min_ess_bulk, min_ess_tail, n_divergent, min_ebfmi, fit_ok) %>%
+  arrange(fit_ok, desc(n_divergent))
+
+```
+
+# Contrast summaries
+```{r}
+# coverage class for each part: prevalence uses all swabs, load only positive swabs
+coverage_long = season_species_all %>%
+  select(taxon_capture, coverage_class_prev, coverage_class_load) %>%
+  pivot_longer(-taxon_capture, names_to = "metric", values_to = "coverage_class") %>%
+  mutate(metric = if_else(metric == "coverage_class_prev", "prevalence", "load"))
+
+# difference-smooth sds vs its prior: how far the difference curve was allowed to bend. a
+# posterior median well above the prior median, with a narrower interval, means the data pull
+# the curve away from a constant difference; near or below the prior median means shrunk / not
+# informed. context only: the assessable flag below rests on coverage.
+sds_prior_median = half_t_quantile(0.5, 1)
+
+sds_diff = sds_all %>%
+  filter(smooth == "difference") %>%
+  transmute(taxon_capture,
+            metric = if_else(part == "hu", "prevalence", "load"),
+            sds_diff_median = Q50, sds_diff_lower_95 = Q2.5, sds_diff_upper_95 = Q97.5,
+            sds_diff_vs_prior = Q50 / sds_prior_median)
+
+# median / intervals / pd / support for each summary quantity (f_draw_agg, as in the unified
+# analysis). long -> wide: window_mean_median, early_lower_95, ...
+summary_draws_long = summary_draws %>%
+  pivot_longer(c(window_mean, early, late, late_minus_early, amplitude),
+               names_to = "quantity", values_to = "value") %>%
+  filter(!is.na(value))
+
+contrast_agg = f_draw_agg(summary_draws_long, c("taxon_capture", "metric", "quantity"), "value") %>%
+  pivot_wider(names_from = quantity, values_from = starts_with("value_"),
+              names_glue = "{quantity}_{.value}") %>%
+  rename_with(~ sub("_value_", "_", .x))
+
+# posterior probabilities used by the typology
+contrast_probs = summary_draws %>%
+  group_by(taxon_capture, metric, window) %>%
+  summarise(p_early_gt_0 = mean(early > 0),
+            p_late_gt_0 = mean(late > 0),
+            p_late_gt_early = mean(late > early),
+            # is the gap smaller (in absolute size) late than early?
+            p_abs_shrinks = mean(abs(late) < abs(early)),
+            .groups = "drop")
+
+# is seasonal change assessable for this part? only with broad co-sampling coverage (from the
+# screen) and enough co-sampled days here. otherwise the summary is a constant offset or a
+# window mean over a narrow band, and any curve shape is extrapolation or shrinkage.
+contrast_summary = window_info %>%
+  left_join(coverage_long, by = c("taxon_capture", "metric")) %>%
+  left_join(contrast_probs, by = c("taxon_capture", "metric")) %>%
+  left_join(contrast_agg, by = c("taxon_capture", "metric")) %>%
+  left_join(sds_diff, by = c("taxon_capture", "metric")) %>%
+  left_join(fit_health %>% select(taxon_capture, fit_ok), by = "taxon_capture") %>%
+  mutate(assessable = coverage_class == "broad" & window == "co-sampled")
+
+# readable version
+q_str = function(x) sprintf("%.2f [%.2f, %.2f]", median(x), quantile(x, 0.025), quantile(x, 0.975))
+
+summary_draws %>%
+  group_by(taxon_capture, metric) %>%
+  summarise(window = first(window),
+            window_mean = q_str(window_mean),
+            late_minus_early = if (all(is.na(late_minus_early))) NA_character_ else q_str(late_minus_early),
+            amplitude = if (all(is.na(amplitude))) NA_character_ else q_str(amplitude),
+            .groups = "drop") %>%
+  left_join(contrast_summary %>% select(taxon_capture, metric, coverage_class, assessable, fit_ok),
+            by = c("taxon_capture", "metric")) %>%
+  mutate(taxon_capture = factor(taxon_capture, levels = species_order)) %>%
+  arrange(metric, taxon_capture)
+
+```
+
+# Typology (first pass)
+```{r}
+# rules as in 03_season_analysis.Rmd, applied only where seasonal change is assessable:
+#   reversing   credibly one sign early and the other late (p > typology_p for each end)
+#   constant    late - early not credible: the season does not detectably alter the gap
+#   converging  the gap credibly changes and shrinks in absolute size
+#   diverging   the gap credibly changes and grows in absolute size
+#   shifting    the gap credibly changes, but whether it shrinks or grows is unclear
+# elsewhere: "constant offset (not assessable)". this says the data cannot address seasonal
+# change, NOT that the gap is constant.
+typology_p = 0.9
+
+typology = contrast_summary %>%
+  mutate(type = case_when(
+    !assessable ~ "constant offset (not assessable)",
+    (p_early_gt_0 > typology_p & p_late_gt_0 < 1 - typology_p) |
+      (p_early_gt_0 < 1 - typology_p & p_late_gt_0 > typology_p) ~ "reversing",
+    p_late_gt_early > 1 - typology_p & p_late_gt_early < typology_p ~ "constant",
+    p_abs_shrinks > typology_p ~ "converging",
+    p_abs_shrinks < 1 - typology_p ~ "diverging",
+    .default = "shifting")) %>%
+  select(taxon_capture, metric, coverage_class, assessable, type, window_mean_median,
+         window_mean_support, early_median, late_median, p_late_gt_early, p_abs_shrinks,
+         sds_diff_vs_prior, fit_ok)
+
+typology %>% filter(assessable)
+
+# one row per species, phylogenetic order
+typology %>%
+  select(taxon_capture, metric, type) %>%
+  pivot_wider(names_from = metric, values_from = type) %>%
+  mutate(taxon_capture = factor(taxon_capture, levels = species_order)) %>%
+  arrange(taxon_capture)
+
+```
+
+# Consistency with the unified model (m11g)
+```{r}
+# seasonal contrast averaged over subadult swab dates vs m11g's contrast at each species' median
+# subadult weather. not expected to match exactly (m11g has weather terms and a different
+# random-effect / prior structure), but intervals that do not overlap are worth understanding
+# before interpreting the seasonal curves.
+seasonal_weighted = subadult_weighted %>%
+  pivot_longer(c(prevalence, load), names_to = "metric", values_to = "contrast") %>%
+  mutate(model = "seasonal (subadult-date weighted)")
+
+# m11g species x stage draws (link scale), exported by 03_size_bd_unified_analysis.qmd
+m11g_draws = read_parquet(here("size_bd_unified", "intermediates",
+                               "unified_03_b_spp_lss_draws.parquet")) %>%
+  filter(taxon_capture %in% names(model_files)) %>%
+  select(taxon_capture, life_stage_simple, .draw, hu, mu) %>%
+  pivot_wider(names_from = life_stage_simple, values_from = c(hu, mu)) %>%
+  transmute(taxon_capture, .draw,
+            prevalence = -(hu_subadult - hu_adult),   # logit prevalence = -logit(hu)
+            load = mu_subadult - mu_adult) %>%
+  pivot_longer(c(prevalence, load), names_to = "metric", values_to = "contrast") %>%
+  filter(!is.na(contrast)) %>%                       # species without an estimable m11g mu contrast
+  mutate(model = "unified m11g")
+
+consistency_m11g = bind_rows(seasonal_weighted, m11g_draws) %>%
+  f_draw_agg(c("taxon_capture", "metric", "model"), "contrast")
+
+# do the 95% intervals overlap?
+consistency_m11g %>%
+  select(taxon_capture, metric, model, contrast_lower_95, contrast_upper_95) %>%
+  pivot_wider(names_from = model, values_from = c(contrast_lower_95, contrast_upper_95)) %>%
+  rename_with(~ str_replace_all(.x, c(" \\(subadult-date weighted\\)" = "", "unified " = ""))) %>%
+  mutate(overlap = contrast_lower_95_seasonal <= contrast_upper_95_m11g &
+           contrast_lower_95_m11g <= contrast_upper_95_seasonal) %>%
+  filter(!overlap | is.na(overlap))
+
+```
+
+# Consistency with the six-species stage-curve models
+```{r}
+# for the six data-rich species: the same quantity (window mean over co-sampled days) from the
+# stage-curve parameterization (03_season_analysis.Rmd). agreement = the pattern does not depend
+# on how the model is parameterized. windows differ slightly (day-of-year vs origin weeks).
+six_file = here("size_bd_season", "intermediates", "03_season_contrast_summary.csv")
+
+if (file.exists(six_file)) {
+  consistency_six = bind_rows(
+    read_csv(six_file, show_col_types = FALSE) %>%
+      transmute(taxon_capture, metric, model = "stage curves (six species)",
+                median = window_mean_median, lower_95 = window_mean_lower_95,
+                upper_95 = window_mean_upper_95),
+    contrast_summary %>%
+      transmute(taxon_capture, metric, model = "difference smooth (all species)",
+                median = window_mean_median, lower_95 = window_mean_lower_95,
+                upper_95 = window_mean_upper_95)) %>%
+    group_by(taxon_capture, metric) %>%
+    filter(n() == 2) %>%
+    ungroup()
+  consistency_six
+} else {
+  consistency_six = NULL
+  message("run 03_season_analysis.Rmd first for the six-species comparison")
+}
+
+```
+
+# Visualize
+```{r}
+#| fig-height: 10
+#| fig-width: 12
+
+stage_colors = c(adult = "#7570B3", subadult = "#D95F02")
+coverage_colors = c(broad = "#1B9E77", narrow = "#E6AB02", none = "grey60")
+
+# days since origin -> calendar date in a dummy year starting at the species' origin. dates run
+# past the year end where the season crosses the new year, so the axis stays continuous.
+add_date = function(df) {
+  df %>%
+    left_join(season_species_all %>% select(taxon_capture, origin_doy), by = "taxon_capture") %>%
+    mutate(date = as.Date("2001-01-01") + (origin_doy - 1) + day,
+           species = factor(species_label(taxon_capture), levels = species_levels))
+}
+
+assessable_species = function(metric_name) {
+  contrast_summary %>% filter(metric == metric_name, assessable) %>% pull(taxon_capture)
+}
+
+# ---- window-mean contrast, all species ----
+# the main per-species comparison: average stage gap over the co-sampled window (or the constant
+# offset where nothing is co-sampled), colored by coverage. hollow points: fit flagged.
+p_window = contrast_summary %>%
+  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+         metric = factor(metric, levels = c("prevalence", "load"),
+                         labels = c("logit prevalence contrast", "log load contrast")),
+         fit_flag = if_else(fit_ok, "ok", "check fit")) %>%
+  ggplot(aes(x = window_mean_median, y = species, color = coverage_class)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_linerange(aes(xmin = window_mean_lower_95, xmax = window_mean_upper_95), linewidth = 0.5) +
+  geom_linerange(aes(xmin = window_mean_lower_50, xmax = window_mean_upper_50), linewidth = 1.5) +
+  geom_point(aes(shape = fit_flag), size = 2, fill = "white") +
+  facet_wrap(~ metric, scales = "free_x") +
+  scale_color_manual(values = coverage_colors) +
+  scale_shape_manual(values = c(ok = 16, `check fit` = 21)) +
+  labs(x = "subadult - adult (median, 50% / 95% interval)", y = NULL,
+       color = "coverage", shape = NULL,
+       subtitle = "mean over co-sampled weeks (constant offset where none); phylogenetic order") +
+  theme_classic() +
+  theme(axis.text.y = element_text(face = "italic"), legend.position = "bottom")
+
+# ---- contrast curves, assessable species ----
+plot_contrast_curves = function(metric_name, y_lab, color) {
+  contrast_curves %>%
+    filter(metric == metric_name, taxon_capture %in% assessable_species(metric_name)) %>%
+    add_date() %>%
+    mutate(across(c(median, lower_50, upper_50, lower_95, upper_95),
+                  ~ if_else(co_sampled, .x, NA_real_))) %>%
+    ggplot(aes(x = date)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = color, alpha = 0.25) +
+    geom_ribbon(aes(ymin = lower_50, ymax = upper_50), fill = color, alpha = 0.5) +
+    geom_line(aes(y = median), linewidth = 1) +
+    facet_wrap(~ species, scales = "free_x") +
+    scale_x_date(date_labels = "%b") +
+    labs(x = NULL, y = y_lab,
+         subtitle = "broad-coverage species; co-sampled weeks only; > 0 = subadults higher") +
+    theme_classic() +
+    theme(strip.text = element_text(face = "italic"))
+}
+
+# ---- stage curves, assessable species ----
+# solid where the stage was sampled, faint where the curve is extrapolated
+plot_stage_curves = function(metric_name, y_lab) {
+  stage_curves %>%
+    filter(metric == metric_name, taxon_capture %in% assessable_species(metric_name)) %>%
+    add_date() %>%
+    mutate(across(c(median, lower_50, upper_50, lower_95, upper_95),
+                  ~ if_else(sampled, .x, NA_real_), .names = "{.col}_s")) %>%
+    ggplot(aes(x = date, group = life_stage_simple)) +
+    geom_line(aes(y = median, color = life_stage_simple), alpha = 0.25, linewidth = 0.5) +
+    geom_ribbon(aes(ymin = lower_95_s, ymax = upper_95_s, fill = life_stage_simple), alpha = 0.15) +
+    geom_ribbon(aes(ymin = lower_50_s, ymax = upper_50_s, fill = life_stage_simple), alpha = 0.3) +
+    geom_line(aes(y = median_s, color = life_stage_simple), linewidth = 1) +
+    facet_wrap(~ species, scales = "free") +
+    scale_x_date(date_labels = "%b") +
+    scale_color_manual(values = stage_colors) +
+    scale_fill_manual(values = stage_colors) +
+    labs(x = NULL, y = y_lab, color = "stage", fill = "stage",
+         subtitle = "broad-coverage species; typical population and year; faint = outside sampled weeks") +
+    theme_classic() +
+    theme(strip.text = element_text(face = "italic"))
+}
+
+p_contrast_prev = plot_contrast_curves("prevalence", "subadult - adult (logit prevalence)", "#8DA0CB")
+p_contrast_load = plot_contrast_curves("load", "subadult - adult (log load)", "#FC8D62")
+p_stage_prev = plot_stage_curves("prevalence", "Bd prevalence")
+p_stage_load = plot_stage_curves("load", "log Bd load (positives)")
+
+# ---- consistency plots ----
+plot_consistency = function(df, colors) {
+  df %>%
+    mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+           metric = factor(metric, levels = c("prevalence", "load"),
+                           labels = c("logit prevalence contrast", "log load contrast"))) %>%
+    ggplot(aes(x = median, y = species, color = model)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
+    geom_linerange(aes(xmin = lower_95, xmax = upper_95), linewidth = 0.5,
+                   position = position_dodge(width = 0.6)) +
+    geom_point(size = 2, position = position_dodge(width = 0.6)) +
+    facet_wrap(~ metric, scales = "free_x") +
+    scale_color_manual(values = colors) +
+    labs(x = "subadult - adult (median, 95% interval)", y = NULL, color = NULL) +
+    theme_classic() +
+    theme(axis.text.y = element_text(face = "italic"), legend.position = "bottom")
+}
+
+p_consistency_m11g = consistency_m11g %>%
+  rename_with(~ sub("^contrast_", "", .x)) %>%
+  plot_consistency(c("#1B9E77", "#7570B3"))
+
+p_consistency_six = if (!is.null(consistency_six)) {
+  plot_consistency(consistency_six, c("#1B9E77", "#D95F02"))
+}
+
+# ---- save ----
+ggsave(file.path(figures_dir, "03_all_window_mean_contrast.png"), p_window, width = 10, height = 9)
+ggsave(file.path(figures_dir, "03_all_contrast_curves_prevalence.png"), p_contrast_prev, width = 12, height = 8)
+ggsave(file.path(figures_dir, "03_all_contrast_curves_load.png"), p_contrast_load, width = 12, height = 8)
+ggsave(file.path(figures_dir, "03_all_stage_curves_prevalence.png"), p_stage_prev, width = 12, height = 8)
+ggsave(file.path(figures_dir, "03_all_stage_curves_load.png"), p_stage_load, width = 12, height = 8)
+ggsave(file.path(figures_dir, "03_all_consistency_m11g.png"), p_consistency_m11g, width = 10, height = 9)
+if (!is.null(p_consistency_six)) {
+  ggsave(file.path(figures_dir, "03_all_consistency_six_species.png"), p_consistency_six, width = 9, height = 4.5)
+}
+
+p_window
+p_contrast_prev
+p_contrast_load
+p_stage_prev
+p_stage_load
+p_consistency_m11g
+p_consistency_six
+
+```
+
+# Export
+```{r}
+# day = days since the species' seasonal origin; add origin_doy so curves can be put back on the
+# calendar downstream
+stage_curves_out = stage_curves %>%
+  left_join(season_species_all %>% select(taxon_capture, origin_doy), by = "taxon_capture")
+contrast_curves_out = contrast_curves %>%
+  left_join(season_species_all %>% select(taxon_capture, origin_doy), by = "taxon_capture")
+contrast_summary_out = contrast_summary %>%
+  left_join(typology %>% select(taxon_capture, metric, type), by = c("taxon_capture", "metric"))
+
+# local intermediates
+write_parquet(stage_curves_out, file.path(intermediates_dir, "03_all_stage_curves.parquet"))
+write_parquet(contrast_curves_out, file.path(intermediates_dir, "03_all_contrast_curves.parquet"))
+write_csv(contrast_summary_out, file.path(intermediates_dir, "03_all_contrast_summary.csv"))
+write_csv(typology, file.path(intermediates_dir, "03_all_typology.csv"))
+write_csv(fit_health, file.path(intermediates_dir, "03_all_fit_health.csv"))
+write_csv(consistency_m11g, file.path(intermediates_dir, "03_all_consistency_m11g.csv"))
+
+# manuscript essential data. stage curves are absolute levels (comparable within a species only:
+# labs differ); center within species when plotting in build_intermediates.Rmd
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
+
+write_parquet(stage_curves_out, paste0(manuscript_data_dir, "season_all_03_a_stage_curves.parquet"))
+write_csv(contrast_summary_out, paste0(manuscript_data_dir, "season_all_03_b_contrast_summary.csv"))
+write_parquet(contrast_curves_out, paste0(manuscript_data_dir, "season_all_03_c_contrast_curves.parquet"))
+
+```
