@@ -37,7 +37,7 @@ model m11g was fit to).
 #| code-fold: true
 #| code-summary: "Show setup code"
 
-librarian::shelf(tidyverse, here, brms, cmdstanr)
+librarian::shelf(tidyverse, here, brms, cmdstanr, patchwork)
 
 models_dir = here("size_bd_season", "models")
 dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
@@ -168,7 +168,7 @@ validate_prior(season_priors,
 # 2000 / 300 and its sampling by 2000 / 100 (production: 2000 warmup + 2000 sampling; chains run
 # in parallel, so the slowest chain sets the wall time). treat it as an order of magnitude, and
 # compare species to see how time grows with n.
-timing_species = c("anaxyrus_canorus", "rana_cascadae", "rana_sierrae")   # n ~1k and ~3.4k; add rana_sierrae (~26.5k) if time allows
+timing_species = c("anaxyrus_canorus", "rana_cascadae", "rana_sierrae")   # n ~1k, ~3.4k, ~26.5k
 
 timing_results = map_dfr(timing_species, function(spp) {
   start = Sys.time()
@@ -232,11 +232,273 @@ fit_season_model = function(spp) {
 
 # Load fitted models
 ```{r}
-#| eval: false
 
 # cluster fits are copied into size_bd_season/models/ (named as in fit_season_model)
-season_models = map(set_names(season_species), function(spp) {
+season_models = purrr::map(set_names(season_species), function(spp) {
   readRDS(file.path(models_dir, paste0("size_bd_season_model_zln_s1_", spp, ".rds")))
 })
+
+```
+
+# Model checks
+
+Checks run in order of "can we trust the sampler" -> "does the model reproduce the data" ->
+"how much do the priors drive the result". Fix problems at an earlier step before reading the
+later ones: a model with divergences or low ESS can't be judged on its predictive checks.
+
+## Convergence
+```{r}
+# one row per species. what to look for:
+#   max_rhat          < 1.01. rhat compares between- and within-chain variance; above 1.01 the
+#                     chains have not mixed (they disagree about the posterior)
+#   min_ess_bulk/tail > ~400 (100 per chain). effective sample size: the number of independent
+#                     draws the autocorrelated chains are worth. bulk = centre of the
+#                     distribution (medians), tail = 5% / 95% quantiles (intervals)
+#   n_divergent       0 ideally; a handful at adapt_delta 0.95 is usually tolerable, many means
+#                     the sampler cannot explore part of the posterior (often a funnel in a
+#                     random-effect sd) and the estimates there may be biased
+#   n_max_treedepth   iterations that hit max_treedepth (12). this is an efficiency warning,
+#                     not a validity one: the sampler stopped a trajectory early
+#   min_ebfmi         > 0.3. energy bfmi: low values mean the sampler moves slowly between
+#                     levels of the posterior (again, often hierarchical sds)
+# posterior::summarise_draws runs over every parameter, including each population-year effect,
+# so the minima / maxima flag the worst-behaved parameter. this takes a minute for r. sierrae.
+max_treedepth = 12   # as fit (see the fitting chunk and the cluster script)
+
+conv_check = function(fit) {
+  np = nuts_params(fit)
+  dr = posterior::summarise_draws(posterior::as_draws_df(fit),
+                                  posterior::default_convergence_measures())
+  tibble(n_obs = nrow(fit$data),
+         max_rhat = max(dr$rhat, na.rm = TRUE),
+         worst_rhat_par = dr$variable[which.max(dr$rhat)],
+         min_ess_bulk = min(dr$ess_bulk, na.rm = TRUE),
+         min_ess_tail = min(dr$ess_tail, na.rm = TRUE),
+         n_divergent = sum(np$Value[np$Parameter == "divergent__"]),
+         n_max_treedepth = sum(np$Value[np$Parameter == "treedepth__"] >= max_treedepth),
+         # per-chain e-bfmi; brms converts cmdstanr output to a stanfit, so rstan can read it
+         min_ebfmi = min(rstan::get_bfmi(fit$fit)))
+}
+
+convergence = map_dfr(season_models, conv_check, .id = "taxon_capture")
+convergence
+
+```
+
+## LOO / Pareto k
+```{r}
+# psis-loo was added on the cluster. each observation gets a pareto k, which says how well
+# importance sampling approximates leaving that observation out:
+#   k < 0.7  reliable
+#   k > 0.7  unreliable for that point: it is very influential (often an outlying load, or the
+#            only swab in a population-year). a few are common in hierarchical models with
+#            many small groups; many (> ~1%) mean elpd comparisons with this model are shaky.
+# loo is not used to compare models here (one model per species), so this is a diagnostic of
+# influential points rather than a gate.
+loo_check = map_dfr(season_models, function(fit) {
+  k = loo::pareto_k_values(fit$criteria$loo)
+  tibble(n_obs = length(k),
+         n_k_gt_0.7 = sum(k > 0.7),
+         pct_k_gt_0.7 = round(100 * mean(k > 0.7), 2),
+         max_k = max(k))
+}, .id = "taxon_capture")
+
+loo_check
+
+```
+
+## Posterior predictive checks by stage
+```{r}
+#| fig-height: 14
+#| fig-width: 10
+
+# simulate replicate datasets from the posterior and compare summary statistics with the
+# observed data, separately per stage. the two statistics map onto the two model parts:
+#   prop_zero    share of Bd-negative swabs -> the hurdle (hu) part
+#   mean_log_pos mean log load among positives -> the lognormal (mu) part
+#   sd_log_pos   spread of log load among positives -> sigma
+# the observed value (dark line) should sit inside the histogram of replicated values.
+# random effects are included (the default), so these check fit to the observed groups.
+prop_zero = function(y) mean(y == 0)
+mean_log_pos = function(y) mean(log(y[y > 0]))
+sd_log_pos = function(y) sd(log(y[y > 0]))
+
+ppc_stage = function(fit, spp) {
+  stats = list(prop_zero = prop_zero, mean_log_pos = mean_log_pos, sd_log_pos = sd_log_pos)
+  plots = imap(stats, function(f, nm) {
+    pp_check(fit, type = "stat_grouped", stat = f, group = "life_stage_simple", ndraws = 500) +
+      labs(title = if (nm == "prop_zero") str_to_sentence(gsub("_", " ", spp)) else NULL,
+           subtitle = nm) +
+      theme(legend.position = "none")
+  })
+  wrap_plots(plots, nrow = 1)
+}
+
+imap(season_models, ppc_stage) %>%
+  wrap_plots(ncol = 1)
+
+```
+
+## Seasonal posterior predictive check
+```{r}
+#| fig-height: 10
+#| fig-width: 12
+
+# the key check for a seasonal model: do the fitted stage curves follow the observed data
+# through the season? observed prevalence and mean log load (among positives) per 2-week period
+# and stage are plotted as points over the 50% / 95% intervals of the same summaries computed
+# from replicated datasets. points consistently outside the intervals in some period mean the
+# k = 5 smooth (or the random effects) misses a seasonal feature there.
+# periods are kept only when the observed summary is reasonably precise (>= 5 swabs for
+# prevalence, >= 3 positives for load, as in the screen).
+min_n_period = 5
+min_pos_period = 3
+
+season_ppc = function(fit, ndraws = 200) {
+  d = fit$data %>%
+    mutate(doy = round(season_m * 30.44 + 182),
+           period = floor((doy - 1) / 14),
+           grp = paste(life_stage_simple, period, sep = "|"),
+           # one factor fixes the group order for rowsum(), table() and arrange() alike
+           grp = factor(grp, levels = sort(unique(grp))))
+
+  yrep = posterior_predict(fit, ndraws = ndraws)   # draws x observations
+  pos = t(yrep > 0)                                # observations x draws
+  logy = t(ifelse(yrep > 0, log(yrep), 0))
+
+  # rowsum() sums rows within each group: (groups x draws) matrices of counts and sums
+  n_grp = as.vector(table(d$grp))
+  n_pos = rowsum(pos * 1, d$grp)
+  sum_log = rowsum(logy, d$grp)
+
+  prev_rep = n_pos / n_grp
+  load_rep = sum_log / n_pos       # NaN where a replicate has no positives in that group
+
+  q = function(m) {
+    t(apply(m, 1, quantile, probs = c(0.025, 0.25, 0.5, 0.75, 0.975), na.rm = TRUE))
+  }
+
+  obs = d %>%
+    group_by(grp, life_stage_simple, period) %>%
+    summarise(n = n(),
+              n_pos_obs = sum(bd_load_co100_density > 0),
+              prev_obs = mean(bd_load_co100_density > 0),
+              load_obs = if (n_pos_obs > 0) mean(log(bd_load_co100_density[bd_load_co100_density > 0])) else NA_real_,
+              .groups = "drop") %>%
+    arrange(grp)
+
+  bind_rows(
+    bind_cols(obs, as_tibble(q(prev_rep), .name_repair = ~ c("l95", "l50", "med", "u50", "u95"))) %>%
+      filter(n >= min_n_period) %>%
+      mutate(metric = "prevalence", observed = prev_obs),
+    bind_cols(obs, as_tibble(q(load_rep), .name_repair = ~ c("l95", "l50", "med", "u50", "u95"))) %>%
+      filter(n_pos_obs >= min_pos_period) %>%
+      mutate(metric = "log load (positives)", observed = load_obs)
+  ) %>%
+    mutate(period_mid_doy = period * 14 + 7.5)
+}
+
+season_ppc_all = map_dfr(season_models, season_ppc, .id = "taxon_capture")
+
+plot_season_ppc = function(ppc, metric_name) {
+  ppc %>%
+    filter(metric == metric_name) %>%
+    mutate(date = as.Date(period_mid_doy - 1, origin = "2001-01-01"),
+           species = str_to_sentence(gsub("_", " ", taxon_capture))) %>%
+    ggplot(aes(x = date, color = life_stage_simple, fill = life_stage_simple)) +
+    geom_linerange(aes(ymin = l95, ymax = u95), linewidth = 0.5, alpha = 0.5,
+                   position = position_dodge(width = 6)) +
+    geom_linerange(aes(ymin = l50, ymax = u50), linewidth = 1.5, alpha = 0.6,
+                   position = position_dodge(width = 6)) +
+    geom_point(aes(y = observed), shape = 21, color = "black", size = 1.8,
+               position = position_dodge(width = 6)) +
+    facet_wrap(~ species, scales = "free") +
+    scale_x_date(date_labels = "%b") +
+    labs(x = NULL, y = metric_name, color = "stage", fill = "stage",
+         title = paste("Seasonal predictive check:", metric_name),
+         subtitle = "points = observed per 2-week period; bars = 50% / 95% predictive intervals") +
+    theme_classic() +
+    theme(strip.text = element_text(face = "italic"))
+}
+
+plot_season_ppc(season_ppc_all, "prevalence")
+plot_season_ppc(season_ppc_all, "log load (positives)")
+
+# share of observed period summaries inside their 95% predictive interval (expect ~0.95;
+# much lower = misfit somewhere in the season, much higher is fine with few periods)
+season_ppc_all %>%
+  group_by(taxon_capture, metric) %>%
+  summarise(n_periods = n(),
+            coverage_95 = mean(observed >= l95 & observed <= u95),
+            .groups = "drop")
+
+```
+
+## Smooth wiggliness: posterior vs prior
+```{r}
+# each smooth's wiggly (penalized) part has one sd ("sds_..."): 0 = the smooth is just its
+# linear part, larger = more curvature. the prior is half student_t(3, 0, 2.5). if the posterior
+# looks like the prior, the data say little about curvature and the curve's shape is
+# prior-driven; if it is pulled towards 0 the data prefer a near-linear seasonal trend; if it is
+# well away from 0 and narrower than the prior, the data support curvature.
+# the prior quantiles below are for the half-t: quantile p of |t| = 2.5 * qt((1 + p) / 2, 3)
+sds_prior = tibble(prior_median = 2.5 * qt(0.75, 3),
+                   prior_upper_95 = 2.5 * qt(0.975, 3))
+sds_prior
+
+sds_summary = map_dfr(season_models, function(fit) {
+  posterior_summary(fit, variable = "^sds_", regex = TRUE, probs = c(0.025, 0.5, 0.975)) %>%
+    as_tibble(rownames = "variable")
+}, .id = "taxon_capture") %>%
+  mutate(part = if_else(str_detect(variable, "^sds_hu_"), "hu", "mu"),
+         # check "subadult" first: the string "adult" also matches inside it
+         stage = if_else(str_detect(variable, "subadult"), "subadult", "adult"))
+
+sds_summary %>%
+  select(taxon_capture, part, stage, Q2.5, Q50, Q97.5)
+
+ggplot(sds_summary, aes(x = Q50, xmin = Q2.5, xmax = Q97.5,
+                        y = interaction(stage, part, sep = " / "))) +
+  annotate("rect", xmin = 0, xmax = sds_prior$prior_upper_95, ymin = -Inf, ymax = Inf,
+           fill = "grey90") +
+  geom_vline(xintercept = sds_prior$prior_median, linetype = "dashed", color = "grey50") +
+  geom_pointrange() +
+  facet_wrap(~ str_to_sentence(gsub("_", " ", taxon_capture))) +
+  labs(x = "sds (posterior median, 95% interval)", y = NULL,
+       subtitle = "grey band = prior 95% range; dashed = prior median") +
+  theme_classic() +
+  theme(strip.text = element_text(face = "italic"))
+
+```
+
+## Prior sensitivity
+```{r}
+#| eval: false
+
+# power-scaling sensitivity (priorsense): how much would the posterior move if the prior (or
+# likelihood) were made a little stronger or weaker? "prior" values above ~0.05 flag
+# prior-data conflict or a prior-dominated parameter. checked only for the parameters that
+# shape the seasonal contrast: the subadult offsets, the smooths' linear parts and the smooth
+# sds. slow for r. sierrae (it reweights all draws for each scaling).
+# install.packages("priorsense")
+library(priorsense)
+
+season_sensitivity = imap(season_models, function(fit, spp) {
+  vars = grep("^b_(hu_)?life_stage_simplesubadult$|^bs_|^sds_", variables(fit), value = TRUE)
+  powerscale_sensitivity(fit, variable = vars) %>%
+    as_tibble() %>%
+    mutate(taxon_capture = spp)
+}) %>%
+  list_rbind()
+
+season_sensitivity %>%
+  filter(diagnosis != "-")
+
+ggplot(season_sensitivity, aes(x = prior, y = variable, color = diagnosis)) +
+  geom_vline(xintercept = 0.05, linetype = "dashed") +
+  geom_point() +
+  facet_wrap(~ taxon_capture) +
+  theme_classic() +
+  labs(x = "Prior sensitivity (power-scaling)", y = NULL)
 
 ```
