@@ -142,6 +142,8 @@ brms_data = bd_env_kg
 save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
 
+load(file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_2026-11-12.RData")))
+
 ```
 
 # population species and year distributions

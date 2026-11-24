@@ -1,0 +1,206 @@
+---
+title: "01_contrast_tiers"
+output: html_document
+---
+
+Purpose: decide, per species and per model part, which levels of the stage contrast the data can
+support, and write the species table and the cluster job table for the stage 1 contrast models.
+Definitions and rules are in `README.md`; constants are in `contrast_data_functions.R`.
+
+In short:
+
+- **co-sampled unit** (event, site-year, population): >= 5 swabs of each stage (and, for load,
+  >= 1 positive swab of each stage)
+- **inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population
+- **tiers**, separately for prevalence (hu) and load (mu): A >= 10 co-sampled events; B >= 5
+  co-sampled site-years; C otherwise; load "none" when a stage has no positives
+
+Run order: `size_bd_unified/01_model_data.Rmd` (model data), then this script.
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here)
+
+intermediates_dir = here("size_bd_contrast", "intermediates")
+dir.create(intermediates_dir, recursive = TRUE, showWarnings = FALSE)
+
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+
+source(here("size_bd_contrast", "contrast_data_functions.R"))
+
+```
+
+# Data
+```{r}
+# stage_c, pop_year and pop_year_event (14-day events) added; see contrast_data_functions.R
+contrast_data = add_contrast_groups(brms_data)
+
+# swabs and positives per stage, per species
+stage_counts = contrast_data %>%
+  group_by(taxon_capture, life_stage_simple) %>%
+  summarise(n = n(), n_pos = sum(.data[[response_col]] > 0), .groups = "drop") %>%
+  pivot_wider(names_from = life_stage_simple, values_from = c(n, n_pos), values_fill = 0)
+
+```
+
+# Event definition screen
+```{r}
+#| fig-height: 9
+#| fig-width: 12
+
+# the evidence behind the event definition and swab threshold used for the tiers. co-sampled
+# units per species under several unit definitions, finest to coarsest, at two swab thresholds:
+#   population:date        one site visit
+#   population:year:2wk / 3wk / 4wk
+#                          14 / 21 / 28-day bins of day of year (bins cut at the new year)
+#   population:year:month  calendar month
+#   population:year        site-year (the tier B level; also m11g's population:year)
+#   population             both stages ever found at the site (inclusion; population-level contrast)
+# thresholds: >= 2 swabs of each stage is lenient (a very noisy unit-level contrast); >= 5 shows
+# how much of the information is solid.
+#
+# what this decided (2026-11-24):
+#   - event = 2-week bins (event_days = 14). counts barely change from single dates to 2-, 3- or
+#     4-week bins (merging nearby visits lowers the count, pooling their swabs lets more units
+#     reach the threshold; the two roughly cancel), and 2 weeks keeps the finest resolution.
+#     3 weeks would also drop l. chiricahuensis below tier A (10 -> 9 events).
+#   - threshold = 5 swabs of each stage (min_swabs_unit). at >= 2, several species reach tier A
+#     only through events with 2-4 swabs per stage (e.g. l. sphenocephalus: 24 events at >= 2,
+#     1 at >= 5), whose event-level contrasts would barely be informed.
+screen_data = contrast_data %>%
+  mutate(pop_date = paste(population, date, sep = "_"),
+         pop_year_2wk = paste(population, year, (yday(date) - 1) %/% 14, sep = "_"),
+         pop_year_3wk = paste(population, year, (yday(date) - 1) %/% 21, sep = "_"),
+         pop_year_4wk = paste(population, year, (yday(date) - 1) %/% 28, sep = "_"),
+         pop_year_month = paste(population, year, month(date), sep = "_"))
+
+unit_defs = c(`population:date` = "pop_date",
+              `population:year:2wk` = "pop_year_2wk",
+              `population:year:3wk` = "pop_year_3wk",
+              `population:year:4wk` = "pop_year_4wk",
+              `population:year:month` = "pop_year_month",
+              `population:year` = "pop_year",
+              population = "population")
+
+# one count per definition x threshold, using the same function as the tiers
+event_screen = expand_grid(unit_def = names(unit_defs), min_swabs = c(2, 5)) %>%
+  pmap_dfr(function(unit_def, min_swabs) {
+    count_co_units(screen_data, unit_defs[[unit_def]], min_swabs = min_swabs) %>%
+      mutate(unit_def = unit_def, min_swabs = min_swabs, .after = taxon_capture)
+  }) %>%
+  mutate(unit_def = factor(unit_def, levels = names(unit_defs)))
+
+# wide: co-sampled units (prevalence / load) per definition and threshold, one row per species
+event_screen %>%
+  mutate(value = paste0(n_co, " / ", n_co_load),
+         col = paste0(unit_def, " (>=", min_swabs, ")")) %>%
+  select(taxon_capture, col, value) %>%
+  pivot_wider(names_from = col, values_from = value) %>%
+  arrange(taxon_capture)
+
+ggplot(event_screen, aes(x = n_co + 1, y = fct_rev(taxon_capture), color = unit_def)) +
+  geom_vline(xintercept = tier_a_min_events + 1, linetype = "dashed", color = "grey60") +
+  geom_point() +
+  scale_x_log10() +
+  facet_wrap(~ min_swabs, labeller = labeller(min_swabs = function(x) paste0(">= ", x, " swabs of each stage"))) +
+  labs(x = "co-sampled units + 1 (log scale)", y = NULL, color = "unit",
+       subtitle = paste0("prevalence definition; dashed = tier A threshold (", tier_a_min_events, " units)")) +
+  theme_minimal()
+
+```
+
+# Co-sampled units
+```{r}
+# one count per unit type; columns renamed by level so they can sit side by side.
+# events -> informs the event-level contrast (tier A); site-years -> tier B; populations ->
+# inclusion and the population-level contrast
+co_counts = list(event = "pop_year_event", popyear = "pop_year", pop = "population") %>%
+  imap(function(unit, level) {
+    count_co_units(contrast_data, unit) %>%
+      rename_with(~ paste0(.x, "_", level), -taxon_capture)
+  }) %>%
+  reduce(left_join, by = "taxon_capture")
+
+co_counts
+
+```
+
+# Inclusion, tiers and flags
+```{r}
+# time-segregated flag: stages often meet in the same site-year but rarely in the same 14-day
+# event (adults and subadults swabbed at different times of year), so part of the contrast
+# compares different times of year. rule: >= 3 co-sampled site-years and fewer than half as many
+# co-sampled events.
+# between-population flag: < 25% of swabs fall in co-sampled populations, so the contrast mostly
+# compares different populations.
+species_table = stage_counts %>%
+  left_join(co_counts, by = "taxon_capture") %>%
+  mutate(
+    include = n_adult >= min_n_stage & n_subadult >= min_n_stage & n_co_pop >= min_co_pops,
+    exclude_reason = case_when(
+      n_adult < min_n_stage | n_subadult < min_n_stage ~ paste0("< ", min_n_stage, " swabs of a stage"),
+      n_co_pop < min_co_pops ~ "no co-sampled population",
+      .default = NA_character_),
+    tier_hu = tier_from_counts(n_co_event, n_co_popyear),
+    # load part: no stage term if a stage has no positive swabs (contrast not estimable)
+    tier_mu = if_else(n_pos_adult == 0 | n_pos_subadult == 0, "none",
+                      tier_from_counts(n_co_load_event, n_co_load_popyear)),
+    flag_time_segregated = n_co_popyear >= 3 & n_co_event < n_co_popyear / 2,
+    flag_between_population = pct_swabs_in_co_pop < 25) %>%
+  mutate(across(c(tier_hu, tier_mu), ~ if_else(include, .x, NA_character_))) %>%
+  arrange(desc(include), tier_hu, tier_mu, taxon_capture)
+
+# excluded species and why
+species_table %>%
+  filter(!include) %>%
+  select(taxon_capture, n_adult, n_subadult, n_co_pop, exclude_reason)
+
+# included species: tiers, key counts and flags
+species_table %>%
+  filter(include) %>%
+  select(taxon_capture, tier_hu, tier_mu, n_co_event, n_co_load_event, n_co_popyear,
+         n_co_load_popyear, n_co_pop, flag_time_segregated, flag_between_population)
+
+# tier cross-tab (prevalence x load)
+species_table %>%
+  filter(include) %>%
+  count(tier_hu, tier_mu)
+
+```
+
+# Cluster jobs
+```{r}
+# one row per model fit. main fits use each species' tiers; sensitivity fits override them.
+# anaxyrus_canorus: tier C by the rules, but a focal species with 13 co-sampled events at >= 2
+# swabs, so also fit with the tier A structure for both parts.
+sensitivity_jobs = tribble(
+  ~taxon_capture,      ~variant,     ~tier_hu, ~tier_mu,
+  "anaxyrus_canorus",  "sens_tierA", "A",      "A")
+
+contrast_jobs = species_table %>%
+  filter(include) %>%
+  transmute(taxon_capture, variant = "main", tier_hu, tier_mu) %>%
+  bind_rows(sensitivity_jobs) %>%
+  left_join(species_table %>% select(taxon_capture, n_adult, n_subadult,
+                                     flag_time_segregated, flag_between_population),
+            by = "taxon_capture") %>%
+  mutate(n = n_adult + n_subadult) %>%
+  arrange(taxon_capture, variant) %>%
+  # 0-based, as SLURM_ARRAY_TASK_ID
+  mutate(array_index = row_number() - 1)
+
+contrast_jobs
+
+```
+
+# Export
+```{r}
+write_csv(event_screen, file.path(intermediates_dir, "01_contrast_event_screen.csv"))
+write_csv(species_table, file.path(intermediates_dir, "01_contrast_species.csv"))
+write_csv(contrast_jobs, file.path(intermediates_dir, "01_contrast_jobs.csv"))
+
+```
