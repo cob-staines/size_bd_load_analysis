@@ -255,3 +255,77 @@ brms_data |>
 
 
 ```
+
+# svl distributions by species
+```{r}
+#| fig-width: 14
+#| fig-height: 14
+
+# svl histograms per species, stacked by life stage, with the subadult / adult cutoff(s) from
+# svl_stage_cutoffs.R (the same rules 00_survey_data.Rmd uses to assign stages). each sample's
+# rule is looked up by species and data source: external datasets by their project name, all
+# other samples by the RIBBiTR database rules. species staged from field labels get no line.
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+
+stage_colors = c(subadult = "#56B4E9", adult = "#0072B2")
+n_svl_bins = 30
+external_datasets = unique(svl_stage_cutoffs$dataset[svl_stage_cutoffs$dataset != "ribbitr_db"])
+
+svl_data = brms_data %>%
+  mutate(dataset = if_else(project %in% external_datasets, as.character(project), "ribbitr_db"))
+
+# rules in use: one row per species x data source present in the data
+svl_rules = svl_data %>%
+  distinct(taxon_capture, dataset) %>%
+  left_join(svl_stage_cutoffs, by = c("taxon_capture", "dataset"))
+
+# every species x source in the data should have a rule
+svl_rules %>% filter(is.na(stage_rule))
+
+# check: do the stages in the data follow the cutoffs? counts of subadults at or above, and
+# adults below, their cutoff (0 expected; daversa2026 subadults below 40 come from field labels,
+# which is consistent)
+svl_data %>%
+  inner_join(svl_rules %>% filter(stage_rule == "svl_cutoff"), by = c("taxon_capture", "dataset")) %>%
+  group_by(taxon_capture, dataset, svl_cutoff_mm) %>%
+  summarise(n_subadult_above = sum(life_stage_simple == "subadult" & svl_mm >= svl_cutoff_mm),
+            n_adult_below = sum(life_stage_simple == "adult" & svl_mm < svl_cutoff_mm),
+            .groups = "drop") %>%
+  filter(n_subadult_above > 0 | n_adult_below > 0)
+
+# panel titles: note species staged (partly) from field labels
+svl_panels = svl_rules %>%
+  group_by(taxon_capture) %>%
+  summarise(field_label = any(stage_rule == "field_label", na.rm = TRUE), .groups = "drop") %>%
+  mutate(panel = str_to_sentence(gsub("_", " ", taxon_capture)),
+         panel = if_else(field_label, paste0(panel, "\n(stage from field labels)"), panel))
+
+svl_lines = svl_rules %>%
+  filter(stage_rule == "svl_cutoff") %>%
+  distinct(taxon_capture, svl_cutoff_mm) %>%
+  left_join(svl_panels, by = "taxon_capture")
+
+# bin per species so each panel gets its own binwidth
+svl_binned = svl_data %>%
+  group_by(taxon_capture) %>%
+  mutate(svl_min = min(svl_mm),
+         binwidth = max((max(svl_mm) - svl_min) / n_svl_bins, 0.1),   # floor for constant svl
+         bin_mid = svl_min + (pmin(floor((svl_mm - svl_min) / binwidth), n_svl_bins - 1) + 0.5) * binwidth) %>%
+  group_by(taxon_capture, life_stage_simple, bin_mid, binwidth) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  left_join(svl_panels, by = "taxon_capture") %>%
+  mutate(life_stage_simple = factor(life_stage_simple, levels = c("subadult", "adult")))
+
+(svl_hist_unified = ggplot(svl_binned, aes(x = bin_mid, y = n, fill = life_stage_simple)) +
+  geom_col(aes(width = binwidth), position = "stack") +
+  geom_vline(data = svl_lines, aes(xintercept = svl_cutoff_mm), linetype = "dashed", color = "grey30") +
+  facet_wrap(~ panel, scales = "free") +
+  scale_fill_manual(values = stage_colors) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "SVL (mm); dashed = subadult / adult cutoff (svl_stage_cutoffs.R)",
+       y = "Samples", fill = "Life stage") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "italic")))
+
+```

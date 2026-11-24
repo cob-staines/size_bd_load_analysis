@@ -17,24 +17,28 @@ librarian::shelf(tidyverse, janitor, here, tidybayes, patchwork, arrow)
 # load models
 ```{r}
 
-# taxon names and subadult/adult SVL cutoffs (mm), as in 00_GAM_survey_data.Rmd.
-# kept in one table so taxa and cutoffs cannot drift out of alignment
-taxa = tribble(
-  ~taxon_capture,              ~svl_cutoff_mm,
-  "anaxyrus_canorus",          40,
-  "colostethus_panamansis",    18.8,
-  "lithobates_chiricahuensis", 57,
-  "lithobates_sphenocephalus", 51,
-  "lithobates_warszewitschii", 35,
-  "notophthalmus_viridescens", NA,
-  "pseudacris_crucifer",       20,
-  "rana_cascadae",             50,
-  "rana_catesbeiana",          95,
-  "rana_clamitans",            60,
-  "rana_muscosa",              40,
-  "rana_pipiens",              51,
-  "rana_sierrae",              40,
-  "silverstoneia_flotator",    15.1)
+# GAM species and their subadult / adult svl cutoffs (mm), from the shared stage rules
+# (size_bd_unified/svl_stage_cutoffs.R, also used by 00_GAM_survey_data.Rmd). one table so taxa
+# and cutoffs cannot drift out of alignment. NA = staged from field labels (n. viridescens)
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+
+gam_species = c("anaxyrus_canorus",
+                "colostethus_panamansis",
+                "lithobates_chiricahuensis",
+                "lithobates_sphenocephalus",
+                "lithobates_warszewitschii",
+                "notophthalmus_viridescens",
+                "pseudacris_crucifer",
+                "rana_cascadae",
+                "rana_catesbeiana",
+                "rana_clamitans",
+                "rana_muscosa",
+                "rana_pipiens",
+                "rana_sierrae",
+                "silverstoneia_flotator")
+
+taxa = svl_cutoff_species(gam_species) %>%
+  select(taxon_capture, svl_cutoff_mm = svl_mm_cutoff)
 
 taxon_list = as.list(taxa$taxon_capture)
 co_list = taxa$svl_cutoff_mm

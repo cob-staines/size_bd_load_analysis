@@ -234,23 +234,12 @@ season_base = ggplot(season_week, aes(x = week, y = n, fill = life_stage_simple)
 #     taxon_capture. NULL gives each species n_svl_bins bins over its own svl range
 #   min_n_week: columns (week periods) with fewer samples are dropped
 
-# subadult / adult svl cutoffs (mm), as in 03_size_bd_GAM_analysis.Rmd
-svl_cutoffs = tribble(
-  ~taxon_capture,              ~svl_cutoff_mm,
-  "anaxyrus_canorus",          40,
-  "colostethus_panamansis",    18.8,
-  "lithobates_chiricahuensis", 57,
-  "lithobates_sphenocephalus", 51,
-  "lithobates_warszewitschii", 35,
-  "notophthalmus_viridescens", NA,
-  "pseudacris_crucifer",       20,
-  "rana_cascadae",             50,
-  "rana_catesbeiana",          95,
-  "rana_clamitans",            60,
-  "rana_muscosa",              40,
-  "rana_pipiens",              51,
-  "rana_sierrae",              40,
-  "silverstoneia_flotator",    15.1) %>%
+# subadult / adult svl cutoffs (mm) for the species in the data, from the shared stage rules
+# (size_bd_unified/svl_stage_cutoffs.R); species staged from field labels have no cutoff
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+
+svl_cutoffs = svl_cutoff_species(unique(brms_data$taxon_capture)) %>%
+  select(taxon_capture, svl_cutoff_mm = svl_mm_cutoff) %>%
   filter(!is.na(svl_cutoff_mm))
 
 resolve_svl_binwidth = function(taxon, svl_range, svl_binwidth, n_svl_bins) {

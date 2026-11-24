@@ -10,7 +10,10 @@ librarian::shelf(tidyverse, here, janitor, brms, tidybayes, ggrepel, emmeans, rs
 # load bd_model_env
 load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
 
-size_cutoff = read_csv(here("data", "Species notes - size cutoffs.csv"))
+# subadult / adult svl cutoff and reference per species, from the shared stage rules
+# (svl_stage_cutoffs.R; replaces "data/Species notes - size cutoffs.csv")
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+size_cutoff = svl_cutoff_species(unique(brms_data$taxon_capture))
 
 bd_model_env_stats = brms_data %>%
   group_by(taxon_capture, country) %>%

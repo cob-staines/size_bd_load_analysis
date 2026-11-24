@@ -14,6 +14,10 @@ output: html_document
 # setup
 librarian::shelf(tidyverse, dbplyr, here, janitor, RPostgres, DBI, RIBBiTR-BII/ribbitrrr, terra, rio)
 
+# subadult / adult stage rules (svl cutoffs and their references) per species and data source,
+# shared with 01_model_data.Rmd: svl_stage_cutoffs, svl_cutoff_for(), svl_stage_case()
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+
 ```
 
 ## Datasets
@@ -32,8 +36,8 @@ rabo_clean = kupferberg_raw %>%
   dplyr::rename(sample_id = materialSampleID) %>%
   mutate(svl_mm = as.numeric(length),
          life_stage_simple = case_when(
-           svl_mm >= 38 ~ "adult",
-           svl_mm < 38 ~ "subadult"),
+           svl_mm >= svl_cutoff_for("rana_boylii", "kupferberg2022") ~ "adult",
+           svl_mm < svl_cutoff_for("rana_boylii", "kupferberg2022") ~ "subadult"),
          date = as.Date(eventdate),
          # Ze is per swab (per-reaction quantity x extract dilution, quantityDetected x dilution).
          # zoospore equivalents -> ITS copies (x60, SNARL estimate for Bd in R. muscosa/sierrae)
@@ -145,7 +149,7 @@ anca_valid = anca_raw %>%
                                     "tadpole" ~ "larva",
                                     default = NA),
          life_stage_simple = case_when(
-           svl_mm >= 40 ~ "adult",
+           svl_mm >= svl_cutoff_for("anaxyrus_canorus", "daversa2026") ~ "adult",
            life_stage %in% c("subadult", "adult") ~ "subadult",
            .default = life_stage
          ),
@@ -199,8 +203,8 @@ raca_clean = read.csv(here("data", "JPSL_RACA_Swabbed_Individuals_2026-03-03.csv
          site_utmn = utmn_site,
          bd_its_copies = bd_swab_results_its) %>%
   mutate(life_stage_simple = case_when(
-    svl_mm >= 50 ~ "adult",
-    svl_mm < 50 ~ "subadult"),
+    svl_mm >= svl_cutoff_for("rana_cascadae", "RACA") ~ "adult",
+    svl_mm < svl_cutoff_for("rana_cascadae", "RACA") ~ "subadult"),
     date = as.Date(date),
     site = tolower(gsub(" ", "_", site)),
     site_utm_zone = 11,
@@ -463,141 +467,12 @@ bd_life_stage = bd_sample %>%
                            "subadult",
                            "juvenile",
                            NA)) %>%
-  mutate(life_stage_simple = case_when(
-    # us
-    # https://animaldiversity.org/accounts/Acris_blanchardi/
-    ((taxon_capture == "acris_blanchardi") & (svl_mm >= 16)) ~ "adult",
-    ((taxon_capture == "acris_blanchardi") & (svl_mm < 16)) ~ "subadult",
-    # Wright and Wright 1949
-    ((taxon_capture == "anaxyrus_americanus") & (svl_mm >= 54)) ~ "adult",
-    ((taxon_capture == "anaxyrus_americanus") & (svl_mm < 54)) ~ "subadult",
-    # Lannoo 2005 (Amphibian Declines: The Conservation Status of United States Species)
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "anaxyrus_canorus") & (svl_mm < 40)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "anaxyrus_debilis") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "anaxyrus_debilis") & (svl_mm < 37)) ~ "subadult",
-    # Conant and Collins 1991
-    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "anaxyrus_fowleri") & (svl_mm < 51)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_chrysoscelis") & (svl_mm < 32)) ~ "subadult",
-    # Conant & Collins 1998
-    ((taxon_capture == "hyla_cinerea") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_cinerea") & (svl_mm < 32)) ~ "subadult",
-    # Johnson 1987
-    ((taxon_capture == "hyla_versicolor") & (svl_mm >= 32)) ~ "adult",
-    ((taxon_capture == "hyla_versicolor") & (svl_mm < 32)) ~ "subadult",
-    # Minton, 2001 / Lanoo 2005
-    ((taxon_capture == "lithobates_blairi") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "lithobates_blairi") & (svl_mm < 51)) ~ "subadult",
-    # Platz and Mecham 1963
-    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm >= 57)) ~ "adult",
-    ((taxon_capture == "lithobates_chiricahuensis") & (svl_mm < 57)) ~ "subadult",
-    # Minton 2001
-    ((taxon_capture == "lithobates_palustris") & (svl_mm >= 43)) ~ "adult",
-    ((taxon_capture == "lithobates_palustris") & (svl_mm < 43)) ~ "subadult",
-    # Conant and Collins, 1991
-    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "lithobates_sphenocephalus") & (svl_mm < 51)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "pseudacris_crucifer") & (svl_mm >= 20)) ~ "adult",
-    ((taxon_capture == "pseudacris_crucifer") & (svl_mm < 20)) ~ "subadult",
-    # Hulse, C. and McCoy C. J. and Ellen Censky ,1998.
-    ((taxon_capture == "pseudacris_feriarum") & (svl_mm >= 19)) ~ "adult",
-    ((taxon_capture == "pseudacris_feriarum") & (svl_mm < 19)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "pseudacris_regilla") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "pseudacris_regilla") & (svl_mm < 25)) ~ "subadult",
-    # Howard 1981
-    ((taxon_capture == "rana_catesbeiana") & (svl_mm >= 95)) ~ "adult",
-    ((taxon_capture == "rana_catesbeiana") & (svl_mm < 95)) ~ "subadult",
-    # Lannoo 2005
-    ((taxon_capture == "rana_clamitans") & (svl_mm >= 60)) ~ "adult",
-    ((taxon_capture == "rana_clamitans") & (svl_mm < 60)) ~ "subadult",
-    # Knapp
-    ((taxon_capture == "rana_muscosa") & is.na(svl_mm)) ~ life_stage,
-    ((taxon_capture == "rana_muscosa") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_muscosa") & (svl_mm > 8) & (svl_mm < 40)) ~ "subadult",
-    # https://www.nrc.gov/docs/ML1428/ML14282A848.pdf
-    ((taxon_capture == "rana_pipiens") & (svl_mm >= 51)) ~ "adult",
-    ((taxon_capture == "rana_pipiens") & (svl_mm < 51)) ~ "subadult",
-    # Knapp
-    ((taxon_capture == "rana_sierrae") & is.na(svl_mm)) ~ life_stage,
-    ((taxon_capture == "rana_sierrae") & (svl_mm >= 40)) ~ "adult",
-    ((taxon_capture == "rana_sierrae") & (svl_mm > 8) & (svl_mm < 40)) ~ "subadult",
-    # Martof 1963
-    ((taxon_capture == "rana_sylvatica") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "rana_sylvatica") & (svl_mm < 37)) ~ "subadult",
-    # Conant and Collins, 1991
-    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm >= 44)) ~ "adult",
-    ((taxon_capture == "scaphiopus_holbrookii") & (svl_mm < 44)) ~ "subadult",
-    # Stebbins, 1985
-    ((taxon_capture == "spea_multiplicata") & (svl_mm >= 37)) ~ "adult",
-    ((taxon_capture == "spea_multiplicata") & (svl_mm < 37)) ~ "subadult",
-    
-    # brasil
-    # Heyer, W. R., and R. B. Cocroft. 1986
-    ((taxon_capture == "hylodes_phyllodes") & (svl_mm >= 27.5)) ~ "adult",
-    ((taxon_capture == "hylodes_phyllodes") & (svl_mm < 27.5)) ~ "subadult",
-    # Kwet, A., and M. Solé. 2005 (21)
-    ((taxon_capture == "ischnocnema_henselii") & (svl_mm >= 23.0)) ~ "adult",
-    ((taxon_capture == "ischnocnema_henselii") & (svl_mm < 23.0)) ~ "subadult",
-    # Kwet, A., and M. Solé. 2005
-    ((taxon_capture == "brachycephalus_pitanga") & (svl_mm >= 10.8)) ~ "adult",
-    ((taxon_capture == "brachycephalus_pitanga") & (svl_mm <10.8)) ~ "subadult",
-    
-    ((taxon_capture == "boana_faber") & (svl_mm >= 70)) ~ "adult",
-    ((taxon_capture == "boana_faber") & (svl_mm < 70)) ~ "subadult",
-    # country == "brazil" & life_stage == "adult" ~ "adult",
-    # country == "brazil" & life_stage %in% c("subadult", "juvenile") ~ "subadult",
-    
-    # panama
-    # Savage 1972 & Crump 1988
-    ((taxon_capture == "atelopus_varius") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "atelopus_varius") & (svl_mm < 25)) ~ "subadult",
-    # Lynch and Myers 1983
-    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm >= 20.2)) ~ "adult",
-    ((taxon_capture == "craugastor_crassidigitus") & (svl_mm < 20.2)) ~ "subadult",
-    # Lynch and Myers 1983
-    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm >= 23.5)) ~ "adult",
-    ((taxon_capture == "craugastor_fitzingeri") & (svl_mm < 23.5)) ~ "subadult",
-    # Amphibiaweb
-    ((taxon_capture == "colostethus_panamansis") & (svl_mm >= 18.8)) ~ "adult",
-    ((taxon_capture == "colostethus_panamansis") & (svl_mm < 18.8)) ~ "subadult",
-    # Leenders 2001
-    ((taxon_capture == "dendrobates_auratus") & (svl_mm >= 25)) ~ "adult",
-    ((taxon_capture == "dendrobates_auratus") & (svl_mm < 25)) ~ "subadult",
-    # Amphibiaweb
-    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm >= 21)) ~ "adult",
-    ((taxon_capture == "espadarana_prosoblepon") & (svl_mm < 21)) ~ "subadult",
-    # Basante 2025
-    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm >= 35)) ~ "adult",
-    ((taxon_capture == "lithobates_warszewitschii") & (svl_mm < 35)) ~ "subadult",
-    # Wang 2008
-    ((taxon_capture == "pristimantis_ridens") & (svl_mm >= 16)) ~ "adult",
-    ((taxon_capture == "pristimantis_ridens") & (svl_mm < 16)) ~ "subadult",
-    # Savage 2002
-    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm >= 42)) ~ "adult",
-    ((taxon_capture == "rhaebo_haematiticus") & (svl_mm < 42)) ~ "subadult",
-    # Easteal 1963
-    ((taxon_capture == "rhinella_marina") & (svl_mm >= 85)) ~ "adult",
-    ((taxon_capture == "rhinella_marina") & (svl_mm < 85)) ~ "subadult",
-    # Savage 2002
-    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm >= 20.5)) ~ "adult",
-    ((taxon_capture == "sachatamia_albomaculata") & (svl_mm < 20.5)) ~ "subadult",
-    # Ibunez & Smith 1995
-    ((taxon_capture == "silverstoneia_flotator") & (svl_mm >= 15.1)) ~ "adult",
-    ((taxon_capture == "silverstoneia_flotator") & (svl_mm < 15.1)) ~ "subadult",
-    # Grant & Myers 2013
-    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm >= 15.4)) ~ "adult",
-    ((taxon_capture == "silverstoneia_nubicola") & (svl_mm < 15.4)) ~ "subadult",
-    # Duellman, W. E. 2001
-    ((taxon_capture == "smilisca_sila") & (svl_mm >= 31.6)) ~ "adult",
-    ((taxon_capture == "smilisca_sila") & (svl_mm < 31.6)) ~ "subadult",
-    .default = NA_character_
-  )) %>%
+  # svl cutoffs per species from svl_stage_cutoffs.R (dataset "ribbitr_db"; references there).
+  # svl_stage_case() writes them out as one case_when(), which dbplyr runs inside the database
+  # query: svl_mm >= cutoff -> adult, below -> subadult (r. muscosa / sierrae subadults also
+  # need svl_mm > 8), species without a rule -> NA (dropped below). animals without svl are
+  # dropped below too.
+  mutate(life_stage_simple = !!svl_stage_case(filter(svl_stage_cutoffs, dataset == "ribbitr_db"))) %>%
   filter(!is.na(life_stage_simple),
          !is.na(svl_mm))
 
@@ -690,8 +565,8 @@ bofa_clean = bofa_raw %>%
     date = as.Date(capture_date, format = "%d/%m/%Y"),
     svl_mm = as.numeric(svl),
     life_stage_simple = case_when(
-      svl_mm < 63 ~ "subadult",
-      svl_mm >= 63 ~ "adult",
+      svl_mm < svl_cutoff_for("boana_faber", "BOFA") ~ "subadult",
+      svl_mm >= svl_cutoff_for("boana_faber", "BOFA") ~ "adult",
       .default = NA),
     # single qPCR replicate per sample, as for other datasets: Q1, or Q2 where Q1 failed ("N/A").
     # samples with no value in either replicate are negatives (confirmed with the data source)
