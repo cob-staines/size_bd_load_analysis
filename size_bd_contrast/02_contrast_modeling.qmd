@@ -122,6 +122,15 @@ validate_prior(contrast_priors("A", "A"), formula = contrast_formula("A", "A"),
 #   rana_clamitans           n ~2.6k, tier A x A (the full structure)
 # r. sierrae (n ~26.6k, tier A x A) is far larger: extrapolate with run time ~ n^1.6, as for the
 # seasonal models, and confirm with its first cluster run.
+#
+# results (2026-11-24, est_production_h at adapt_delta 0.95):
+#   silverstoneia_flotator   n 600    0.13 h   1 divergence
+#   rana_catesbeiana         n 1849   0.51 h   0
+#   rana_clamitans           n 2625   0.70 h   0
+# time grew ~n^1.2 across these, slower than the n^1.6 assumed; cluster time limits use n^1.2
+# (likely) to n^1.6 (upper bound): r. muscosa ~3.5-6.5 h and n. viridescens < 5 h at 0.99,
+# r. sierrae ~11-29 h at 0.95. resource groups: header of
+# r-brms-contained/hpc/run_size_bd_contrast_modeling.sbatch.
 timing_species = c("silverstoneia_flotator", "rana_catesbeiana", "rana_clamitans")
 
 timing_results = contrast_jobs %>%
