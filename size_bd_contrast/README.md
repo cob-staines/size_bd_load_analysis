@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 in development (tiers); stage 2 planned
+status: stage 1 in development (model defined, timing test next); stage 2 planned
 sibling_of: size_bd_unified (m11g)
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
@@ -172,7 +172,8 @@ work in `size_bd_unified/env_functions.R`). Seasonal (climatology) slopes are re
 |---|---|---|
 | `contrast_data_functions.R` | shared constants, grouping columns, co-sampling counts, tier rules | written |
 | `01_contrast_tiers.Rmd` | event definition screen (unit definitions x swab thresholds), counts, inclusion, tiers, flags; writes the event screen, species table and cluster job table | written |
-| `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | planned |
+| `contrast_model_functions.R` | data prep, formula and prior builders by tier (copied into the cluster script) | written |
+| `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | written |
 | `r-brms-contained/size_bd_contrast_modeling.R` + `hpc/` | cluster fits, one job per array index | planned |
 | `03_contrast_analysis.Rmd` | stage 1 results, consistency checks, stage 2 exports | planned |
 | `04_contrast_stage2.qmd` | cross-species contrast models | planned |

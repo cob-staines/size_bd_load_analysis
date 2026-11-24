@@ -1,0 +1,323 @@
+---
+title: "Stage 1 contrast models"
+format:
+  html:
+    toc: true
+df-print: kable
+---
+
+Purpose: one hurdle-lognormal model per species (and sensitivity variant) estimating the
+subadult - adult contrast in *Bd* infection and how much it varies across sites, years within
+sites, and 14-day sampling events. The questions, definitions, tiers and priors are in
+`README.md`; this script defines the model in code, validates it, estimates cluster run times,
+and checks the fitted models.
+
+Production fits run on the cluster with `r-brms-contained/size_bd_contrast_modeling.R` (one job
+per row of `intermediates/01_contrast_jobs.csv`, by `array_index`). The formula, priors and data
+prep live in `contrast_model_functions.R`, which the cluster script copies verbatim: keep the two
+in sync.
+
+Run order: `size_bd_unified/01_model_data.Rmd` (model data), `01_contrast_tiers.Rmd` (job table),
+then this script.
+
+# Setup
+
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here, brms, cmdstanr, posterior, patchwork)
+
+models_dir = here("size_bd_contrast", "models")
+dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
+
+# data file created by size_bd_unified/01_model_data.Rmd
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+
+# constants, grouping columns, tier rules
+source(here("size_bd_contrast", "contrast_data_functions.R"))
+# prep_contrast_data(), contrast_formula(), contrast_priors()
+source(here("size_bd_contrast", "contrast_model_functions.R"))
+# conv_check(), loo_check(), ppc_stage() (shared with the seasonal models)
+source(here("size_bd_season", "season_check_functions.R"))
+
+```
+
+# Jobs and data
+```{r}
+# one row per model fit: species, variant ("main" or a sensitivity fit), tiers for the
+# prevalence (hu) and load (mu) parts, flags, array_index for the cluster
+contrast_jobs = read_csv(here("size_bd_contrast", "intermediates", "01_contrast_jobs.csv"),
+                         show_col_types = FALSE)
+
+contrast_jobs
+
+# a short id per job, used for list names and file names
+job_id = function(taxon_capture, variant) paste(taxon_capture, variant, sep = "_")
+contrast_jobs = contrast_jobs %>% mutate(job = job_id(taxon_capture, variant))
+
+# per-species data with stage_c (-0.5 adult / +0.5 subadult), pop_year and pop_year_event
+contrast_data = map(set_names(unique(contrast_jobs$taxon_capture)),
+                    ~ prep_contrast_data(brms_data, .x))
+
+# group sizes per species: how many levels each random-effect term has
+map_dfr(contrast_data, ~ tibble(n = nrow(.x),
+                                n_population = n_distinct(.x$population),
+                                n_pop_year = n_distinct(.x$pop_year),
+                                n_pop_year_event = n_distinct(.x$pop_year_event)),
+        .id = "taxon_capture")
+
+```
+
+# Model structure
+```{r}
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+# the formula for one job, e.g. tier A for both parts (r. clamitans). see contrast_model_functions.R
+# for what each term does; in short:
+#   1 + stage_c                     midpoint of the two stages + the subadult - adult contrast
+#   (1 + stage_c | population)      site-level intercepts and contrasts (all tiers)
+#   (1 + stage_c | pop_year)        site-year contrasts (tiers A, B; intercept only in C)
+#   (1 + stage_c | pop_year_event)  event contrasts (tier A; intercept only in B, C)
+#   sigma ~ 1 + (1 | population)    residual spread of log load by site
+contrast_formula("A", "A")
+
+# priors for the same job: the contrast sds (class sd, coef stage_c) get exponential(2), the
+# intercept sds exponential(1)
+contrast_priors("A", "A")
+
+# validate_prior for every job: errors if a prior matches no parameter, and confirms each
+# species' data can build its terms. fast (no sampling)
+prior_check = contrast_jobs %>%
+  select(job, taxon_capture, tier_hu, tier_mu) %>%
+  pmap_dfr(function(job, taxon_capture, tier_hu, tier_mu) {
+    result = tryCatch({
+      validate_prior(contrast_priors(tier_hu, tier_mu),
+                     formula = contrast_formula(tier_hu, tier_mu),
+                     data = contrast_data[[taxon_capture]],
+                     family = hurdle_lognormal())
+      "ok"
+    }, error = function(e) conditionMessage(e))
+    tibble(job, result)
+  })
+
+prior_check %>% filter(result != "ok")   # empty = all jobs OK
+
+# the full prior set for one job (ours plus brms defaults, which apply to nothing here)
+validate_prior(contrast_priors("A", "A"), formula = contrast_formula("A", "A"),
+               data = contrast_data[["rana_clamitans"]], family = hurdle_lognormal())
+
+```
+
+# Local timing test
+```{r}
+#| eval: false
+
+# short runs to estimate cluster time (extrapolation as in the seasonal models: warmup x
+# 2000/300, sampling x 2000/100, slowest chain). three species spanning size and tier:
+#   silverstoneia_flotator   n ~600,  tier A (hu) x B (mu)
+#   rana_catesbeiana         n ~1.8k, tier A x B
+#   rana_clamitans           n ~2.6k, tier A x A (the full structure)
+# r. sierrae (n ~26.6k, tier A x A) is far larger: extrapolate with run time ~ n^1.6, as for the
+# seasonal models, and confirm with its first cluster run.
+timing_species = c("silverstoneia_flotator", "rana_catesbeiana", "rana_clamitans")
+
+timing_results = contrast_jobs %>%
+  filter(taxon_capture %in% timing_species, variant == "main") %>%
+  select(taxon_capture, tier_hu, tier_mu) %>%
+  pmap_dfr(function(taxon_capture, tier_hu, tier_mu) {
+    start = Sys.time()
+    fit = brm(
+      formula = contrast_formula(tier_hu, tier_mu),
+      data = contrast_data[[taxon_capture]],
+      family = hurdle_lognormal(),
+      prior = contrast_priors(tier_hu, tier_mu),
+      control = list(adapt_delta = 0.95, max_treedepth = 12),
+      chains = 4, iter = 400, warmup = 300,
+      seed = 128, cores = 4, backend = "cmdstanr",
+      refresh = 0
+    )
+    elapsed = as.numeric(difftime(Sys.time(), start, units = "mins"))
+    chain_times = rstan::get_elapsed_time(fit$fit)
+
+    tibble(taxon_capture, tier_hu, tier_mu,
+           n = nrow(contrast_data[[taxon_capture]]),
+           total_min = elapsed,                                 # includes compilation (~1 min)
+           max_chain_warmup_s = max(chain_times[, "warmup"]),
+           max_chain_sample_s = max(chain_times[, "sample"]),
+           est_production_h = (max(chain_times[, "warmup"]) * 2000 / 300 +
+                                 max(chain_times[, "sample"]) * 2000 / 100) / 3600,
+           divergences = sum(nuts_params(fit) %>% filter(Parameter == "divergent__") %>% pull(Value)))
+  })
+
+timing_results
+
+```
+
+# Model fitting
+```{r}
+#| eval: false
+#| code-fold: true
+#| code-summary: "Show model fitting code"
+
+# production fits run on the cluster (r-brms-contained/hpc/run_size_bd_contrast_modeling.sbatch).
+# this local version is for reference or a single small species.
+
+# sampler target acceptance rate per job, as used on the cluster (ADAPT_DELTA). 0.99 by default:
+# many small groups (events, site-years) make for tight posterior curvature, and the seasonal
+# models showed divergences in sparse species at 0.95. this changes how the posterior is explored,
+# not the model. r. sierrae: 0.95 (large and well informed; 0.99 roughly doubles run time).
+# revisit after the timing test, and record any resubmission at a different target here.
+contrast_adapt_delta = function(taxon_capture) {
+  if (taxon_capture == "rana_sierrae") 0.95 else 0.99
+}
+
+contrast_model_file = function(job) {
+  file.path(models_dir, paste0("size_bd_contrast_model_zln_c1_", job, ".rds"))
+}
+
+fit_contrast_model = function(job_row) {
+  fit = brm(
+    formula = contrast_formula(job_row$tier_hu, job_row$tier_mu),
+    data = contrast_data[[job_row$taxon_capture]],
+    family = hurdle_lognormal(),
+    prior = contrast_priors(job_row$tier_hu, job_row$tier_mu),
+    control = list(adapt_delta = contrast_adapt_delta(job_row$taxon_capture), max_treedepth = 12),
+    chains = 4, iter = 4000, warmup = 2000,
+    seed = 128, cores = 4, backend = "cmdstanr"
+  )
+
+  fit = add_criterion(fit, "loo")
+  saveRDS(fit, contrast_model_file(job_row$job))
+  fit
+}
+
+# e.g. fit_contrast_model(filter(contrast_jobs, job == "silverstoneia_flotator_main"))
+
+```
+
+# Load fitted models
+```{r}
+#| eval: false
+
+# cluster fits are copied into size_bd_contrast/models/ (named as in contrast_model_file).
+# jobs without a fit file yet are skipped with a message.
+model_files = set_names(file.path(models_dir, paste0("size_bd_contrast_model_zln_c1_", contrast_jobs$job, ".rds")),
+                        contrast_jobs$job)
+
+missing_fits = names(model_files)[!file.exists(model_files)]
+if (length(missing_fits) > 0) message("no fit yet: ", paste(missing_fits, collapse = ", "))
+
+contrast_models = purrr::map(model_files[file.exists(model_files)], readRDS)
+
+```
+
+# Model checks
+
+Order: sampler -> predictive fit -> priors. The smallest species (few populations, few swabs per
+site-year) are expected to be the most fragile.
+
+## Convergence
+```{r}
+#| eval: false
+
+convergence = map_dfr(contrast_models, conv_check, .id = "job") %>%
+  left_join(contrast_jobs %>% select(job, tier_hu, tier_mu), by = "job")
+
+convergence
+
+# jobs needing attention (thresholds as in the comments of conv_check)
+convergence %>%
+  filter(max_rhat > 1.01 | min_ess_bulk < 400 | min_ess_tail < 400 |
+           n_divergent > 0 | min_ebfmi < 0.3)
+
+```
+
+## LOO / Pareto k
+```{r}
+#| eval: false
+
+loo_table = map_dfr(contrast_models, loo_check, .id = "job")
+loo_table %>% arrange(desc(pct_k_gt_0.7))
+
+```
+
+## Posterior predictive checks by stage
+```{r}
+#| eval: false
+#| fig-height: 60
+#| fig-width: 10
+
+# proportion of zeros (hu part), mean and sd of log positive load (mu, sigma), per stage
+imap(contrast_models, ppc_stage) %>%
+  wrap_plots(ncol = 1)
+
+```
+
+## Contrast sds: posterior vs prior
+```{r}
+#| eval: false
+#| fig-height: 14
+#| fig-width: 12
+
+# the key quantities: how much the contrast varies at each level. a posterior pulled toward 0
+# (inside the prior's lower range) = consistent contrast, or data can't tell; a posterior away
+# from 0 and narrower than the prior = the data show real variation at that level. compare
+# across tiers: tier C species should mostly reflect the prior.
+contrast_sd_prior = tibble(prior_median = contrast_sd_prior_quantile(0.5),
+                           prior_upper_95 = contrast_sd_prior_quantile(0.95))
+
+contrast_sds = imap_dfr(contrast_models, function(fit, job) {
+  posterior_summary(fit, variable = "^sd_.*__(hu_)?stage_c$", regex = TRUE,
+                    probs = c(0.025, 0.5, 0.975)) %>%
+    as_tibble(rownames = "variable") %>%
+    mutate(job = job,
+           part = if_else(str_detect(variable, "__hu_stage_c$"), "prevalence (hu)", "load (mu)"),
+           level = str_match(variable, "^sd_(.*)__")[, 2])
+}) %>%
+  left_join(contrast_jobs %>% select(job, tier_hu, tier_mu), by = "job") %>%
+  mutate(tier = if_else(part == "prevalence (hu)", tier_hu, tier_mu),
+         level = factor(level, levels = c("population", "pop_year", "pop_year_event")))
+
+contrast_sds %>%
+  select(job, part, tier, level, Q2.5, Q50, Q97.5) %>%
+  arrange(part, level, desc(Q50))
+
+contrast_sds %>%
+  mutate(job = fct_rev(job)) %>%
+  ggplot(aes(x = Q50, xmin = Q2.5, xmax = Q97.5, y = job, color = tier)) +
+  annotate("rect", xmin = 0, xmax = contrast_sd_prior$prior_upper_95, ymin = -Inf, ymax = Inf,
+           fill = "grey92") +
+  geom_vline(xintercept = contrast_sd_prior$prior_median, linetype = "dashed", color = "grey50") +
+  geom_pointrange(size = 0.2) +
+  facet_grid(part ~ level, scales = "free_x") +
+  labs(x = "contrast sd (posterior median, 95% interval)", y = NULL, color = "tier",
+       subtitle = "grey band = prior 95% range; dashed = prior median") +
+  theme_classic()
+
+```
+
+## Prior sensitivity
+```{r}
+#| eval: false
+
+# power-scaling sensitivity for the contrast parameters: the mean contrasts and the contrast
+# sds. "prior" > ~0.05 flags a prior-dominated parameter. for contrast sds at levels with little
+# co-sampling this is EXPECTED (the shrinkage working); it matters for tier A levels and for the
+# mean contrasts.
+library(priorsense)
+
+contrast_sensitivity = imap(contrast_models, function(fit, job) {
+  vars = grep("^b_(hu_)?stage_c$|^sd_.*__(hu_)?stage_c$", variables(fit), value = TRUE)
+  powerscale_sensitivity(fit, variable = vars) %>%
+    as_tibble() %>%
+    mutate(job = job)
+}) %>%
+  list_rbind()
+
+contrast_sensitivity %>%
+  filter(diagnosis != "-")
+
+```
