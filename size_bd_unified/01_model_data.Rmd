@@ -142,7 +142,7 @@ brms_data = bd_env_kg
 save(brms_data, file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_", today(), ".RData")))
 write_csv(all_sites_kg, here("size_bd_unified", "intermediates", "size_bd_modeling_sites.csv"))
 
-load(file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_2026-11-12.RData")))
+# load(file = here("size_bd_unified", "intermediates", paste0("bd_model_env_unified_2026-11-12.RData")))
 
 ```
 
@@ -321,6 +321,26 @@ svl_binned = svl_data %>%
   geom_vline(data = svl_lines, aes(xintercept = svl_cutoff_mm), linetype = "dashed", color = "grey30") +
   facet_wrap(~ panel, scales = "free") +
   scale_fill_manual(values = stage_colors) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "SVL (mm); dashed = subadult / adult cutoff (svl_stage_cutoffs.R)",
+       y = "Samples", fill = "Life stage") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "italic")))
+
+svl_binned_orig = svl_data %>%
+  group_by(taxon_capture) %>%
+  mutate(svl_min = min(svl_mm),
+         binwidth = max((max(svl_mm) - svl_min) / n_svl_bins, 0.1),   # floor for constant svl
+         bin_mid = svl_min + (pmin(floor((svl_mm - svl_min) / binwidth), n_svl_bins - 1) + 0.5) * binwidth) %>%
+  group_by(taxon_capture, life_stage, bin_mid, binwidth) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  left_join(svl_panels, by = "taxon_capture")
+
+(svl_hist_unified_orig = ggplot(svl_binned_orig, aes(x = bin_mid, y = n, fill = life_stage)) +
+  geom_col(aes(width = binwidth), position = "stack") +
+  geom_vline(data = svl_lines, aes(xintercept = svl_cutoff_mm), linetype = "dashed", color = "grey30") +
+  facet_wrap(~ panel, scales = "free") +
   scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
   labs(x = "SVL (mm); dashed = subadult / adult cutoff (svl_stage_cutoffs.R)",
        y = "Samples", fill = "Life stage") +
