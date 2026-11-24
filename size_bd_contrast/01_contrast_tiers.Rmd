@@ -28,6 +28,7 @@ librarian::shelf(tidyverse, here)
 intermediates_dir = here("size_bd_contrast", "intermediates")
 dir.create(intermediates_dir, recursive = TRUE, showWarnings = FALSE)
 
+# Data file created by size_bd_unified/01_model_data.Rmd
 load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
 
 source(here("size_bd_contrast", "contrast_data_functions.R"))
