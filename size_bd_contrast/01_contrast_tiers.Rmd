@@ -14,6 +14,9 @@ In short:
 - **inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population
 - **tiers**, separately for prevalence (hu) and load (mu): A >= 10 co-sampled events; B >= 5
   co-sampled site-years; C otherwise; load "none" when a stage has no positives
+- **model structure rules** (added after the first cluster fits): R1 tier C with < 3 co-sampled
+  populations -> "fixed" (no contrast sd); R2 drop a site-year / event level that barely splits
+  its parent; R3 sigma varies by population only with >= 3 populations with >= 10 positives
 
 Run order: `size_bd_unified/01_model_data.Rmd` (model data), then this script.
 
@@ -146,13 +149,22 @@ species_table = stage_counts %>%
       n_adult < min_n_stage | n_subadult < min_n_stage ~ paste0("< ", min_n_stage, " swabs of a stage"),
       n_co_pop < min_co_pops ~ "no co-sampled population",
       .default = NA_character_),
-    tier_hu = tier_from_counts(n_co_event, n_co_popyear),
+    # tiers from the co-sampled counts alone (A / B / C)
+    tier_hu_counts = tier_from_counts(n_co_event, n_co_popyear),
     # load part: no stage term if a stage has no positive swabs (contrast not estimable)
-    tier_mu = if_else(n_pos_adult == 0 | n_pos_subadult == 0, "none",
-                      tier_from_counts(n_co_load_event, n_co_load_popyear)),
+    tier_mu_counts = if_else(n_pos_adult == 0 | n_pos_subadult == 0, "none",
+                             tier_from_counts(n_co_load_event, n_co_load_popyear)),
     flag_time_segregated = n_co_popyear >= 3 & n_co_event < n_co_popyear / 2,
     flag_between_population = pct_swabs_in_co_pop < 25) %>%
-  mutate(across(c(tier_hu, tier_mu), ~ if_else(include, .x, NA_character_))) %>%
+  # model structure rules (contrast_data_functions.R, README "Model structure rules"):
+  #   R2 which levels each part can separate (hu_has_pop_year, ..., from level_structure);
+  #   R1 + R2 final tiers (final_tier): a slope cannot sit on a dropped level, and tier C with
+  #     < 3 co-sampled populations -> "fixed";
+  #   R3 sigma_by_population
+  left_join(level_structure(contrast_data), by = "taxon_capture") %>%
+  mutate(tier_hu = final_tier(tier_hu_counts, n_co_pop, hu_has_pop_year, hu_has_event),
+         tier_mu = final_tier(tier_mu_counts, n_co_load_pop, mu_has_pop_year, mu_has_event)) %>%
+  mutate(across(c(tier_hu_counts, tier_mu_counts, tier_hu, tier_mu), ~ if_else(include, .x, NA_character_))) %>%
   arrange(desc(include), tier_hu, tier_mu, taxon_capture)
 
 # excluded species and why
@@ -171,22 +183,39 @@ species_table %>%
   filter(include) %>%
   count(tier_hu, tier_mu)
 
+# what the structure rules changed: counts-based vs final tiers, dropped levels, sigma
+species_table %>%
+  filter(include) %>%
+  select(taxon_capture, tier_hu_counts, tier_hu, tier_mu_counts, tier_mu, n_co_pop, n_co_load_pop,
+         hu_py_per_pop, hu_ev_per_py, mu_py_per_pop, mu_ev_per_py,
+         hu_has_pop_year, hu_has_event, mu_has_pop_year, mu_has_event,
+         n_pops_pos_sigma, sigma_by_population) %>%
+  mutate(across(where(is.double), ~ round(.x, 2))) %>%
+  filter(tier_hu != tier_hu_counts | tier_mu != tier_mu_counts |
+           !(hu_has_pop_year & hu_has_event & mu_has_pop_year & mu_has_event) | !sigma_by_population)
+
 ```
 
 # Cluster jobs
 ```{r}
-# one row per model fit. main fits use each species' tiers; sensitivity fits override them.
-# anaxyrus_canorus: tier C by the rules, but a focal species with 13 co-sampled events at >= 2
-# swabs, so also fit with the tier A structure for both parts.
+# one row per model fit. main fits use each species' tiers; sensitivity fits override them (the
+# level and sigma structure columns come from the species either way).
+# anaxyrus_canorus: tier C by the rules (load: "fixed"), but a focal species with 13 co-sampled
+# events at >= 2 swabs, so also fit with the tier A structure for both parts.
 sensitivity_jobs = tribble(
   ~taxon_capture,      ~variant,     ~tier_hu, ~tier_mu,
   "anaxyrus_canorus",  "sens_tierA", "A",      "A")
+
+# columns the model builders read (contrast_model_functions.R): tiers, levels present per part,
+# sigma structure
+structure_cols = c("hu_has_pop_year", "hu_has_event", "mu_has_pop_year", "mu_has_event",
+                   "sigma_by_population")
 
 contrast_jobs = species_table %>%
   filter(include) %>%
   transmute(taxon_capture, variant = "main", tier_hu, tier_mu) %>%
   bind_rows(sensitivity_jobs) %>%
-  left_join(species_table %>% select(taxon_capture, n_adult, n_subadult,
+  left_join(species_table %>% select(taxon_capture, all_of(structure_cols), n_adult, n_subadult,
                                      flag_time_segregated, flag_between_population),
             by = "taxon_capture") %>%
   mutate(n = n_adult + n_subadult) %>%

@@ -23,6 +23,10 @@ What each summary means:
   the full subadult - adult difference at a typical site, year and event.
 - **contrast sd** per level (Q2-Q4): how much the contrast varies between sites, site-years
   (within sites) or events (within site-years). Only levels allowed by the species' tier have one.
+  Tier **"fixed"** parts (fewer than 3 co-sampled sites, rule R1) have none: one mean contrast,
+  which mostly reflects those few sites, and consistency is "not estimable". Levels a part cannot
+  separate (R2) and sigma structure (R3) are recorded in the job table (README "Model structure
+  rules").
 - **contraction**: 1 - posterior variance / prior variance of a contrast sd. Near 1: the data
   pinned it down. Near 0: the posterior is still the prior (not informed; expected where few
   units are co-sampled). Used to fade out uninformed levels, not as a test.
@@ -99,6 +103,10 @@ species_levels = species_label(species_order)
 # level names as used in the model and as shown in tables / plots
 level_labels = c(population = "site", pop_year = "site-year", pop_year_event = "event", all = "all levels")
 
+# tier colors for all plots. "fixed" = one mean contrast, no contrast sd (R1: fewer than 3
+# co-sampled sites), so its mean mostly reflects those sites
+tier_colors = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3", fixed = "#666666")
+
 # the data each model saw, with grouping columns (to label group contrasts)
 contrast_data = add_contrast_groups(brms_data) %>%
   filter(taxon_capture %in% fit_species)
@@ -138,10 +146,13 @@ process_contrast_fit = function(fit, job_row) {
 
   # parts with a stage term: prefix of their parameter names, and the sign that turns the
   # coefficient into "subadult - adult, positive = subadults more infected"
+  # has_pop_year / has_event: levels present in that part (R2)
   parts = tibble(part = c("prevalence", "load"),
                  pre = c("hu_", ""),
                  sign = c(-1, 1),
-                 tier = c(job_row$tier_hu, job_row$tier_mu)) %>%
+                 tier = c(job_row$tier_hu, job_row$tier_mu),
+                 has_pop_year = c(job_row$hu_has_pop_year, job_row$mu_has_pop_year),
+                 has_event = c(job_row$hu_has_event, job_row$mu_has_event)) %>%
     filter(tier != "none")
 
   dr = as_draws_df(fit, variable = "^(b|sd|cor)_", regex = TRUE)
@@ -163,7 +174,7 @@ process_contrast_fit = function(fit, job_row) {
     m
   }
 
-  per_part = pmap(parts, function(part, pre, sign, tier) {
+  per_part = pmap(parts, function(part, pre, sign, tier, has_pop_year, has_event) {
     b = dr[[paste0("b_", pre, "stage_c")]]
     intercept = dr[[paste0("b_", pre, "Intercept")]]
 
@@ -179,8 +190,20 @@ process_contrast_fit = function(fit, job_row) {
     species_draws = tibble(job = job_row$job, part = part, .draw = seq_len(n_draws),
                            contrast = sign * b, typical_effect = typical_effect)
 
+    # mean-contrast draws for the stage 2 export (all tiers)
+    export_mean = species_draws %>%
+      filter(.draw %in% ids_export) %>%
+      transmute(job, part, quantity = "mean_contrast", level = NA_character_,
+                group_id = NA_character_, .draw, value = contrast)
+
+    # tier "fixed": one mean contrast, no contrast sds and no group contrasts
+    groups = contrast_slope_groups(tier, has_pop_year, has_event)
+    if (length(groups) == 0) {
+      return(list(species_draws = species_draws, level_draws = NULL,
+                  group_summary = NULL, export_draws = export_mean))
+    }
+
     # contrast sds, correlations and sign consistency per modeled level
-    groups = contrast_slope_groups(tier)
     level_draws = map_dfr(groups, function(g) {
       tibble(job = job_row$job, part = part, level = g, .draw = seq_len(n_draws),
              sd = dr[[paste0("sd_", g, "__", pre, "stage_c")]],
@@ -205,7 +228,8 @@ process_contrast_fit = function(fit, job_row) {
     # group contrasts (unsigned while building; sign applied at the end):
     #   site       = b + r_population
     #   site-year  = site + r_pop_year              (tiers A, B)
-    #   event      = site-year + r_pop_year_event   (tier A)
+    #   event      = site-year + r_pop_year_event   (tier A; site + r_pop_year_event if the
+    #                                                part has no site-year level, R2)
     b_g = b[ids_group]
     m_pop = b_g + re_contrast("population", pre)   # b_g recycles down each column (one per draw)
     group_mats = list(population = m_pop)
@@ -217,8 +241,12 @@ process_contrast_fit = function(fit, job_row) {
     }
     if ("pop_year_event" %in% groups) {
       r_ev = re_contrast("pop_year_event", pre)
-      py_of_ev = units$pop_year[match(colnames(r_ev), units$pop_year_event)]
-      group_mats$pop_year_event = group_mats$pop_year[, py_of_ev, drop = FALSE] + r_ev
+      parent = if ("pop_year" %in% groups) {
+        group_mats$pop_year[, units$pop_year[match(colnames(r_ev), units$pop_year_event)], drop = FALSE]
+      } else {
+        m_pop[, units$population[match(colnames(r_ev), units$pop_year_event)], drop = FALSE]
+      }
+      group_mats$pop_year_event = parent + r_ev
       colnames(group_mats$pop_year_event) = colnames(r_ev)
     }
     group_mats = map(group_mats, ~ sign * .x)
@@ -230,10 +258,7 @@ process_contrast_fit = function(fit, job_row) {
 
     # stage 2 draw export: mean contrast, contrast sds and population contrasts, 1000 draws
     export_draws = bind_rows(
-      species_draws %>%
-        filter(.draw %in% ids_export) %>%
-        transmute(job, part, quantity = "mean_contrast", level = NA_character_,
-                  group_id = NA_character_, .draw, value = contrast),
+      export_mean,
       level_draws %>%
         filter(.draw %in% ids_export, level != "all") %>%
         transmute(job, part, quantity = "contrast_sd", level, group_id = NA_character_,
@@ -393,7 +418,7 @@ p_mean = ggplot(plot_main, aes(y = species, color = tier, shape = flag)) +
   geom_point(aes(x = contrast_median, alpha = fit_ok), size = 2.2, fill = "white") +
   scale_shape_manual(values = c(none = 16, `between-population` = 21, `time-segregated` = 24)) +
   scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.35), guide = "none") +
-  scale_color_manual(values = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3")) +
+  scale_color_manual(values = tier_colors) +
   facet_wrap(~ part, scales = "free_x",
              labeller = labeller(part = c(prevalence = "prevalence (logit)", load = "load among positives (log)"))) +
   labs(x = "subadult - adult contrast (median, 50 / 95% intervals)", y = NULL,
@@ -446,7 +471,7 @@ p_sd = ggplot(plot_sd, aes(y = species, color = tier)) +
                   size = 0.25) +
   scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.35),
                      labels = c(`TRUE` = "informed", `FALSE` = "mostly prior"), name = NULL) +
-  scale_color_manual(values = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3")) +
+  scale_color_manual(values = tier_colors) +
   facet_grid(part ~ level) +
   labs(x = "contrast sd (posterior median, 95% interval)", y = NULL,
        subtitle = paste0("grey band = prior 95% range; dashed = prior median; informed = contraction >= ",
@@ -465,18 +490,22 @@ p_sd
 
 # one tile per species x level: fill = sign consistency (probability a new site / site-year /
 # event keeps the sign of the mean contrast); faded = contrast sd mostly prior at that level;
-# blank = level not modeled in this species' tier.
-plot_profile = level_summary %>%
-  inner_join(job_info %>% filter(variant == "main"), by = "job") %>%
-  select(job, taxon_capture, part, level, sign_consistency_median, contraction) %>%
-  complete(nesting(job, taxon_capture), part, level) %>%
+# blank = level not modeled in this species' tier; "fixed" = no contrast sd at any level.
+# built from every main job x part (so "fixed" parts, which have no levels, still get a row)
+plot_profile = species_summary %>%
+  filter(variant == "main") %>%
+  select(job, taxon_capture, part, tier) %>%
+  crossing(level = factor(names(level_labels), levels = names(level_labels))) %>%
+  left_join(level_summary %>% select(job, part, level, sign_consistency_median, contraction),
+            by = c("job", "part", "level")) %>%
   mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
          part = factor(part, levels = c("prevalence", "load")),
          level = factor(level_labels[as.character(level)], levels = level_labels),
          # "all levels" has no contraction of its own; show it solid
          tile_alpha = if_else(level == "all levels", 1, pmin(pmax(contraction, 0), 1)),
-         label = if_else(is.na(sign_consistency_median), "",
-                         sprintf("%.0f", 100 * sign_consistency_median)))
+         label = case_when(tier == "fixed" & level == "site" ~ "fixed",
+                           is.na(sign_consistency_median) ~ "",
+                           .default = sprintf("%.0f", 100 * sign_consistency_median)))
 
 p_profile = ggplot(plot_profile, aes(x = level, y = species)) +
   geom_tile(aes(fill = sign_consistency_median, alpha = tile_alpha), color = "white") +
@@ -532,7 +561,9 @@ interpretation = species_summary %>%
             contrast = fmt_ci(contrast_median, contrast_lower_95, contrast_upper_95),
             support = contrast_support,
             informed_levels, most_variable_level,
-            sign_consistency_all = round(all_sign_consistency_median, 2))
+            sign_consistency_all = round(all_sign_consistency_median, 2),
+            consistency = if_else(tier == "fixed",
+                                  "not estimable (fewer than 3 co-sampled sites)", NA_character_))
 
 interpretation
 
@@ -751,7 +782,7 @@ p_consistency_m11g = ggplot(consistency_m11g, aes(x = m11g_median, y = contrast_
   geom_errorbar(aes(xmin = m11g_lower_95, xmax = m11g_upper_95), width = 0, alpha = 0.5, orientation = "y") +
   geom_point(aes(alpha = fit_ok), size = 2) +
   scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.35), guide = "none") +
-  scale_color_manual(values = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3")) +
+  scale_color_manual(values = tier_colors) +
   facet_wrap(~ part, scales = "free") +
   labs(x = "m11g contrast (median, 95%)", y = "contrast model (median, 95%)",
        subtitle = "dashed = 1:1") +
@@ -819,7 +850,7 @@ if (file.exists(season_file)) {
     geom_errorbar(aes(ymin = contrast_lower_95, ymax = contrast_upper_95), width = 0, alpha = 0.5) +
     geom_errorbar(aes(xmin = season_lower_95, xmax = season_upper_95), width = 0, alpha = 0.5, orientation = "y") +
     geom_point(size = 2) +
-    scale_color_manual(values = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3")) +
+    scale_color_manual(values = tier_colors) +
     facet_wrap(~ part, scales = "free") +
     labs(x = "seasonal model window-mean contrast (median, 95%)", y = "contrast model (median, 95%)",
          subtitle = "species where both fits converged; dashed = 1:1") +

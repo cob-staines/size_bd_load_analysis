@@ -44,10 +44,12 @@ prop_zero = function(y) mean(y == 0)
 mean_log_pos = function(y) mean(log(y[y > 0]))
 sd_log_pos = function(y) sd(log(y[y > 0]))
 
-ppc_stage = function(fit, spp, ndraws = 500) {
+# group: the stage column stored in the fit's data ("life_stage_simple" in the seasonal models;
+# "stage_c" (-0.5 adult / 0.5 subadult) in the contrast models, whose data hold only model terms)
+ppc_stage = function(fit, spp, ndraws = 500, group = "life_stage_simple") {
   stats = list(prop_zero = prop_zero, mean_log_pos = mean_log_pos, sd_log_pos = sd_log_pos)
   plots = imap(stats, function(f, nm) {
-    pp_check(fit, type = "stat_grouped", stat = f, group = "life_stage_simple", ndraws = ndraws) +
+    pp_check(fit, type = "stat_grouped", stat = f, group = group, ndraws = ndraws) +
       labs(title = if (nm == "prop_zero") str_to_sentence(gsub("_", " ", spp)) else NULL,
            subtitle = nm) +
       theme(legend.position = "none")

@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 fitted, analysis drafted (03_contrast_analysis.Rmd); stage 2 planned
+status: stage 1 round 2 fits pending (model structure rules R1-R3); analysis drafted; stage 2 planned
 sibling_of: size_bd_unified (m11g)
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
@@ -21,7 +21,12 @@ tiers:  # assigned separately for hu (prevalence counts) and mu (load counts)
   A: ">= 10 co-sampled pop_year_event units"
   B: ">= 5 co-sampled pop_year units (not A)"
   C: "otherwise"
+  fixed: "R1: tier C with < 3 co-sampled populations; mean contrast only, no contrast sd"
   none: "mu only: a stage has no positive swabs; no stage term in mu"
+structure_rules:  # applied after the counts-based tiers (README "Model structure rules")
+  R1_min_co_pops_slope: 3
+  R2_min_children_per_parent: 1.1   # site-years per site, events per site-year; per part
+  R3_sigma_by_population: ">= 3 populations with >= 10 positive swabs"
 sensitivity_fits:
   - {taxon_capture: anaxyrus_canorus, variant: sens_tierA, tier_hu: A, tier_mu: A}
 priors:
@@ -33,7 +38,7 @@ priors:
   sd_stage_c: exponential(2)
   cor: lkj(2)
   sigma_intercept: normal(0, 1)
-  sigma_sd: exponential(1)
+  sigma_sd: exponential(1)   # only where sigma varies by population (R3)
 ---
 
 # size_bd_contrast
@@ -98,7 +103,10 @@ Stage 2 (across species, planned):
   - **A**: >= 10 co-sampled events -> contrast varies by population, site-year and event
   - **B**: >= 5 co-sampled site-years -> contrast varies by population and site-year
   - **C**: otherwise -> contrast varies by population only; flagged as weakly identified
+  - **fixed**: tier C with fewer than 3 co-sampled populations (rule R1) -> one mean contrast,
+    no contrast SD; the mean mostly reflects those few sites
   - **none** (load only): one stage has no positive swabs; the load part has no stage term
+  - tiers can be lowered by rule R2 (below): a contrast slope cannot sit on a dropped level
 - **Flags** (interpretation caveats, from `01_contrast_tiers.Rmd`):
   - *between-population*: few swabs fall in co-sampled populations (e.g. *N. viridescens*), so
     the contrast mostly compares different populations
@@ -116,10 +124,13 @@ One model per species (and per sensitivity variant), hurdle lognormal, no weathe
 ~ 1 + stage_c + (1 + stage_c | population) + (1 + stage_c | pop_year) + (1 | pop_year_event)
 # tier C
 ~ 1 + stage_c + (1 + stage_c | population) + (1 | pop_year) + (1 | pop_year_event)
+# fixed
+~ 1 + stage_c + (1 | population) + (1 | pop_year) + (1 | pop_year_event)
 # none (mu only)
 ~ 1 + (1 | population) + (1 | pop_year) + (1 | pop_year_event)
 
-sigma ~ 1 + (1 | population)
+sigma ~ 1 + (1 | population)   # or sigma ~ 1 (R3)
+# (1 | pop_year) and (1 | pop_year_event) are left out where a part cannot separate them (R2)
 ```
 
 - `stage_c` = -0.5 adult, +0.5 subadult. The intercept is the midpoint of the two stages and the
@@ -138,6 +149,32 @@ sigma ~ 1 + (1 | population)
   data (revisit after the prior vs posterior checks).
 - Sensitivity: *A. canorus* (tier C by the rules, but a focal species with 13 co-sampled events
   at >= 2 swabs) is also fit with the tier A structure.
+
+## Model structure rules
+
+Added after the first cluster fits (2026-11-24), where 13 of 32 jobs failed the convergence
+flag. The failures traced to terms the data could not identify, not to the sampler (small
+species already ran at adapt_delta 0.99). Details and evidence: `02_contrast_modeling.qmd`
+("Fit rounds"). Each rule adds a term only where the data can support it, like the tiers. Rules
+are applied per part, from the swabs that inform it: all swabs for prevalence, positive swabs
+for load. Code: `level_structure()` and `final_tier()` in `contrast_data_functions.R`; results in
+the species and job tables (`tier_*_counts` = before the rules).
+
+- **R1, "fixed" tier**: a tier C part with fewer than 3 co-sampled populations gets no contrast
+  SD. One or two sites cannot say how much the contrast varies between sites; in the first fits
+  this term produced funnels (divergences where the SD is near 0). The mean contrast is kept, and
+  reported with the caveat that it mostly reflects those sites.
+- **R2, separable levels**: the site-year (event) intercept is kept only if there are at least
+  1.1 site-years per site (events per site-year). Otherwise the two levels are nearly the same
+  groups and only their summed variance is identified (e.g. *N. viridescens*: 1.02 and 1.02,
+  Rhat 1.12). Dropping a level also drops any contrast slope on it, which can lower the tier.
+- **R3, sigma**: sigma varies by population only with at least 3 populations that have at
+  least 10 positive swabs; otherwise `sigma ~ 1`. Above that threshold the site-level SD of
+  log sigma was clearly informed in the first fits (small, 0.13-0.33); below it the posterior
+  was mostly the prior. `sigma ~ 1` is an assumption (same spread of log load at all sites), not
+  a finding. Sigma does not enter the load contrast (a difference in mean log load), but where
+  sites differ in spread (labs, protocols, outbreak phase), modeling it keeps that noise out of
+  the contrast SDs, which is why it is kept where the data support it.
 
 ## Stage 1 analyses (`03_contrast_analysis.Rmd`)
 
@@ -187,4 +224,6 @@ Upstream: `size_bd_unified/01_model_data.Rmd` (model data).
 - Load co-sampling uses >= 1 positive of each stage; a stricter positive count may better match
   how much a unit informs the load contrast.
 - Contrast SD prior scale (exponential(2)) to be checked against posteriors.
+- R3: whether species with a constant sigma combine data sources with different measurement
+  precision (`project`) has not been checked.
 - Stage 2 climate summaries and trait set to be defined.
