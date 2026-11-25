@@ -248,6 +248,48 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
 - Exports for stage 2: species, population, site-year and event contrasts (fixed + random parts)
   with posterior mean and sd, a thinned draw set, and the identifiers needed to join climate.
 
+## How to read the results
+
+Examples are from the round 2 fits; numbers will shift with round 3.
+
+**Mean contrast (Q1).** Report the posterior median with its 50% and 95% intervals and the
+support label from `f_draw_agg` (pd: the probability the contrast has the sign of its median).
+Tier D intervals describe the sampled sites only (Definitions).
+
+**Contrast SDs (Q2-Q4)**, read against the prior (exponential(2): median ~0.35, 95% range
+0-1.5). Each SD is variation *of the subadult - adult difference* between units at that level,
+beyond the level above (event SD = between events within a site-year). It is not variation in
+prevalence or load themselves; that is the intercept SD. Three patterns:
+
+1. **Looks like the prior** (median near 0.35, interval filling the prior range): the data cannot
+   answer at this level. Report "not informed", not "consistent". E.g. *R. boylii* prevalence
+   site-year, 0.43 [0.01, 1.62]. Expected where few units are co-sampled.
+2. **Upper bound well inside the prior range**: the data rule out large variation, i.e. evidence
+   the contrast is *consistent* at that level. E.g. *R. cascadae* prevalence site,
+   0.18 [0.01, 0.61].
+3. **Lower bound clearly above 0**: the contrast *varies* at that level. E.g. *R. sierrae* load
+   event, 1.93 [1.64, 2.21].
+
+The lower bound of a weakly informed SD always sits near 0 (an SD cannot be negative), so "does
+the interval include 0" is not a test. Look at where the upper bound sits and whether the lower
+bound is clearly above 0. "Informed" (fading in plots, contraction >= 0.5) is a reading aid; the
+power-scaling check in `02` ("Prior sensitivity") says whether a posterior follows its prior.
+
+**Size.** An SD is on the scale of the contrast: about 95% of units fall within +/- 2 SD of the
+mean contrast. Prevalence (logit): SD 0.5 = within +/- 1 logit (odds ratio x/÷ 2.7). Load (log):
+SD 1.9 = within +/- 3.8 log units. Sign consistency combines the SD with the mean: SD 0.5 around a
+mean of 2 rarely flips sign, around 0.2 it often does.
+
+**Wording**, e.g. "*R. sierrae* shows clear event-level variation in the load contrast: the
+subadult - adult difference in log load among positives varies between survey events within the
+same site-year (event SD 1.93, 95% interval 1.64-2.21)." Avoid "significant"; use the posterior
+interval and support labels.
+
+**Model changes vs lack of information.** A term is removed only for computational failure
+(divergences, poor mixing, terms the data cannot identify: the contrast levels rule, R2, R3). A
+prior-dominated SD is reported as not informed, not removed: removing it would assume zero
+variation and narrow the mean contrast's interval without new information.
+
 ## Stage 2 (planned; separate plan)
 
 Contrast-level (meta-analytic) models, with stage 1 uncertainty carried through
@@ -280,11 +322,78 @@ Outputs: `intermediates/` (tables), `models/` (fits, not tracked), `figures/`.
 
 Upstream: `size_bd_unified/01_model_data.Rmd` (model data).
 
+## Glossary
+
+- **Stage contrast**: subadult - adult difference; prevalence part on the logit scale, load part
+  in mean log load among positives. Positive = subadults higher.
+- **Mean contrast**: the `stage_c` coefficient; the contrast at a typical site, year and event.
+- **Contrast SD**: SD of the contrast's deviations at one level (site, site-year, event). How much
+  the contrast varies between units there. Not the same as the intercept SD (how much Bd varies).
+- **Intercept SD**: how much overall Bd levels (prevalence or load, both stages) vary between
+  units at a level.
+- **Co-sampled unit**: a site, site-year or event with >= 5 swabs of each stage (load: also >= 1
+  positive of each stage). Contrast SDs are informed mainly by these.
+- **Survey run (event)**: survey dates at a site with no gap over 5 days, split at 14 days.
+- **Tier**: number of levels at which the contrast varies (A 3, B 2, C 1, D 0), from the contrast
+  levels rule.
+- **Partial pooling / shrinkage**: group estimates are pulled toward their parent in proportion
+  to how little data they have. Non-co-sampled units sit near the mean by construction.
+- **Prior-dominated vs informed**: whether a posterior mostly reflects the prior or the data.
+  Judged from the posterior vs prior plot and power-scaling, not from whether 0 is in the
+  interval.
+- **Contraction**: 1 - posterior variance / prior variance. A rough reading aid; trimming the
+  prior's long tail alone can give ~0.5.
+- **Sign consistency**: probability a new unit's contrast has the sign of the mean,
+  Phi(|mean| / SD).
+- **Variance share**: SD^2 of a level / sum over modeled levels (Q5).
+- **pd / support**: probability of direction (share of draws with the sign of the median), and
+  the labels `f_draw_agg` derives from it.
+- **R-hat**: agreement between chains (rank-normalized bulk and folded tail versions; the larger
+  is reported). > 1.01 = chains disagree. Fixed by longer runs when chains explore slowly, by
+  more chains when one is stuck, and by changing the model when it is not identified.
+- **ESS (bulk / tail)**: effective number of independent draws for the center / tails of a
+  posterior. > 400 wanted.
+- **Divergence**: the sampler failed to follow the posterior's curvature (often a funnel where an
+  SD nears 0). Divergent regions are under-explored, which biases estimates; a few are tolerated.
+- **adapt_delta**: sampler target acceptance rate. Higher = smaller steps = fewer divergences,
+  slower; it changes how the posterior is explored, not the model.
+- **Power-scaling** (priorsense): reweight the draws as if the prior (or likelihood) were raised
+  to a power alpha, to see whether a posterior depends on it, without refitting. For the
+  exponential(2) contrast-SD prior, alpha 0.5 / 2 = exponential(1) / exponential(4).
+- **Funnel**: the geometry where a group SD near 0 squeezes its group deviations together; hard
+  to sample, the usual source of divergences in hierarchical models.
+
+## Decision log
+
+Dated one-liners; the reasoning is in the linked sections.
+
+- 2026-11-24: event = 14-day bins; co-sampled unit >= 5 swabs of each stage (`01` event
+  screen). Tiers A/B/C from co-sampled counts. Round 1: all 32 jobs; 13 failed the convergence
+  flag (`02` "Fit rounds").
+- 2026-11-25: round 2 structure rules R1 (< 3 co-sampled sites: no site contrast SD), R2
+  (separable levels), R3 (sigma by site); 19 jobs refit (Nuisance structure).
+- 2026-11-25: contrast levels rule replaces tiers + R1 + between-population flag; tier D
+  replaces "fixed"; *N. viridescens* C -> D, *L. chiricahuensis* prevalence A -> C (Contrast
+  levels).
+- 2026-11-25: event = survey run (gap <= 5 days, split at 14 days) (Definitions, `01` event
+  screen).
+- 2026-11-25: every job 2000 warmup + 4000 sampling (16000 draws); *R. sierrae* stays at
+  adapt_delta 0.95; *R. muscosa*'s borderline R-hat read as slow tail mixing, accepted if it
+  stays ~1.01 with tail ESS > 1000 (`02` "Fit rounds").
+- 2026-11-25: LOO off by default (not used); memory and time requests from sacct
+  (`r-brms-contained/hpc/run_size_bd_contrast_modeling.sbatch`).
+- 2026-11-25: contrast-SD priors tagged (`lprior_sdcontrast`) so their sensitivity can be
+  checked alone (`02` "Prior sensitivity"). Uninformed SDs are kept, not downgraded (How to read
+  the results).
+- 2026-11-25: round 3 (all 32 jobs) prepared: `hpc/submit_size_bd_contrast_round3.sh`.
+
 ## Open questions
 
 - Load co-sampling uses >= 1 positive of each stage; a stricter positive count may better match
   how much a unit informs the load contrast.
-- Contrast SD prior scale (exponential(2)) to be checked against posteriors.
+- Contrast SD prior scale (exponential(2)): check with the contrast-SD power-scaling in `02`
+  after round 3; refit a few species with exponential(1) / exponential(4) if it flags mean
+  contrasts.
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
 - Stage 2 climate summaries and trait set to be defined.

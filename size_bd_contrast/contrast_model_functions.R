@@ -76,10 +76,17 @@ contrast_formula = function(job, response = response_col) {
 # ---- priors ----------------------------------------------------------------------------------
 # contrast sd priors, one per group with a stage_c slope (brms needs the group named for a
 # coefficient-level sd prior). dpar = "" is the mu part.
+# tag: brms then keeps the log density of these priors as a separate term, lprior_sdcontrast. it
+# is still added to the target, so the model and posterior are unchanged; the tag only lets
+# priorsense power-scale this prior alone ("Prior sensitivity" in 02_contrast_modeling.qmd).
+# with a brms version that has no prior tags the priors are simply untagged (same model).
+contrast_sd_tag = "sdcontrast"
 contrast_sd_priors = function(groups, dpar = "") {
   if (length(groups) == 0) return(NULL)
   do.call(c, lapply(groups, function(g) {
-    set_prior("exponential(2)", class = "sd", coef = "stage_c", group = g, dpar = dpar)
+    p = set_prior("exponential(2)", class = "sd", coef = "stage_c", group = g, dpar = dpar)
+    if ("tag" %in% names(p)) p$tag = contrast_sd_tag
+    p
   }))
 }
 
