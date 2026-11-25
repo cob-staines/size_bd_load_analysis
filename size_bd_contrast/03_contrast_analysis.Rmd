@@ -124,7 +124,7 @@ contrast_data = add_contrast_groups(brms_data) %>%
 refresh = FALSE
 results_file = file.path(intermediates_dir, "03_contrast_processed.rds")
 
-# mean contrasts and contrast sds use all 8000 draws (cheap). group contrasts (one per site,
+# mean contrasts and contrast sds use all draws (16000 from round 3: 4 chains x 4000; cheap). group contrasts (one per site,
 # site-year, event) use 2000 evenly spaced draws, plenty for summaries; 1000 of those are kept
 # for the stage 2 draw export.
 ndraws_group = 2000
@@ -633,17 +633,19 @@ interpretation
 # Group contrasts
 ```{r}
 # labels for each group: swabs and positives per stage, co-sampled flags (for prevalence: co;
-# for load: co_load), and for events the 14-day bin dates
+# for load: co_load), and for events their survey dates (first, last, median)
 unit_flags = imap_dfr(c(population = "population", pop_year = "pop_year", pop_year_event = "pop_year_event"),
                       function(unit, level) co_unit_flags(contrast_data, unit) %>% mutate(level = level))
 
 event_info = contrast_data %>%
   group_by(taxon_capture, pop_year_event) %>%
-  summarise(population = first(population), year = first(year), event_bin = first(event_bin),
-            median_date = median(date), .groups = "drop") %>%
-  mutate(bin_start = make_date(year, 1, 1) + days(event_bin * event_days),
-         bin_end = bin_start + days(event_days - 1),
-         bin_mid_doy = event_bin * event_days + event_days / 2)
+  summarise(population = first(population), year = first(year),
+            event_start = min(date), event_end = max(date), median_date = median(date),
+            n_dates = n_distinct(date), .groups = "drop") %>%
+  # timing within the season: day of year of the median swab date (events are survey runs of
+  # up to 14 days, so this places them to within a week)
+  mutate(event_span = as.numeric(event_end - event_start) + 1,
+         event_doy = yday(median_date))
 
 popyear_info = contrast_data %>%
   distinct(taxon_capture, pop_year, population, year)
@@ -660,8 +662,8 @@ group_contrasts = group_summary %>%
                                 level == "pop_year" ~ py_population,
                                 level == "pop_year_event" ~ ev_population),
          year = coalesce(py_year, ev_year)) %>%
-  select(job, taxon_capture, variant, part, level, group_id, population, year, event_bin,
-         bin_start, bin_end, bin_mid_doy, median_date, n_adult, n_subadult, n_pos_adult,
+  select(job, taxon_capture, variant, part, level, group_id, population, year, event_start,
+         event_end, event_span, n_dates, median_date, event_doy, n_adult, n_subadult, n_pos_adult,
          n_pos_subadult, co_sampled, starts_with("contrast_"), p_gt_0)
 
 # how many group contrasts rest on co-sampled units
@@ -724,7 +726,7 @@ season_origins = read_csv(here("size_bd_season", "intermediates", "01_season_spe
 month_start_doy = yday(make_date(2001, 1:12, 1))
 
 plot_event_species = function(d, mean_row, origin) {
-  d = d %>% mutate(season_day = (bin_mid_doy - origin) %% 365)
+  d = d %>% mutate(season_day = (event_doy - origin) %% 365)
   ggplot(d, aes(x = season_day, y = contrast_median, color = factor(year))) +
     annotate("rect", xmin = -Inf, xmax = Inf, ymin = mean_row$contrast_lower_95,
              ymax = mean_row$contrast_upper_95, fill = "grey90") +

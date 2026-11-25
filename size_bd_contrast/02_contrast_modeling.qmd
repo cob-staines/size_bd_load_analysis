@@ -8,7 +8,7 @@ df-print: kable
 
 Purpose: one hurdle-lognormal model per species (and sensitivity variant) estimating the
 subadult - adult contrast in *Bd* infection and how much it varies across sites, years within
-sites, and 14-day sampling events. The questions, definitions, tiers and priors are in
+sites, and sampling events (survey runs). The questions, definitions, tiers and priors are in
 `README.md`; this script defines the model in code, validates it, estimates cluster run times,
 and checks the fitted models.
 
@@ -202,11 +202,11 @@ fit_contrast_model = function(job_row) {
     family = hurdle_lognormal(),
     prior = contrast_priors(job_row),
     control = list(adapt_delta = contrast_adapt_delta(job_row$taxon_capture), max_treedepth = 12),
-    chains = 4, iter = 4000, warmup = 2000,
+    chains = 4, iter = 6000, warmup = 2000,
     seed = 128, cores = 4, backend = "cmdstanr"
   )
 
-  fit = add_criterion(fit, "loo")
+  # no loo (as on the cluster from round 3): nothing in the analysis uses it
   saveRDS(fit, contrast_model_file(job_row$job))
   fit
 }
@@ -255,6 +255,25 @@ rules"), applied in `01_contrast_tiers.Rmd`. They change 19 jobs (array indices
 *R. muscosa* and *R. sierrae* are refit with the same model and `N_ITER=6000` (4000 draws per
 chain). The other 10 jobs keep their round 1 fits. Submission: `hpc/submit_size_bd_contrast_round2.sh`.
 
+Round 2 results: 30 of 32 passed. *N. viridescens* failed (Rhat 1.03, ESS 158, 34 divergences on
+`sd_population__stage_c`): about 276 of its 281 sites hold mostly one stage, where intercept and
+contrast deviations cannot be told apart. *R. muscosa* was borderline (Rhat 1.012 on
+`sd_pop_year_event__stage_c`, ESS 656, no divergences). *S. flotator* had 5 divergences, at the
+tolerance, on `sd_population__sigma_Intercept`.
+
+**Round 3 (2026-11-25)**: all 32 jobs refit, for two changes (README "Definitions", "Contrast
+levels"):
+
+- *Event = survey run* (dates with no gap > 5 days, runs > 14 days split at their longest gap)
+  instead of 14-day bins. Every model has an event-level intercept, so all jobs change. No tier
+  changes; 4167 vs 4155 events, 442 vs 447 co-sampled.
+- *Consolidated contrast levels rule*: tier D replaces "fixed", and between-population parts get
+  no contrast sd (*N. viridescens* C -> D). Nesting moves *L. chiricahuensis* prevalence A -> C.
+
+All jobs run 2000 warmup + 4000 sampling per chain (`N_ITER` 6000, the new default; round 2 used
+it only for *R. clamitans*, *R. muscosa* and *R. sierrae*), so every fit has 16000 draws.
+*R. sierrae* stays at adapt_delta 0.95. Submission: `hpc/submit_size_bd_contrast_round3.sh`.
+
 High Pareto k (up to 14% of swabs in *A. varius*) was not acted on: expected with many groups of
 1-3 swabs, and LOO is not used for any decision here.
 
@@ -283,6 +302,9 @@ convergence %>%
 ```{r}
 #| eval: false
 
+# from round 3 the fits carry no loo (RUN_LOO=FALSE on the cluster): loo_check() returns NA. to
+# look at Pareto k for one species, compute it on demand, e.g. loo(contrast_models[["<job>"]])
+# (memory: draws x swabs doubles; ~3.4 GB for the log-likelihood of r. sierrae)
 loo_table = map_dfr(contrast_models, loo_check, .id = "job")
 loo_table %>% arrange(desc(pct_k_gt_0.7))
 

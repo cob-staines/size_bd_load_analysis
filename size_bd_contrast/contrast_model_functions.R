@@ -13,7 +13,7 @@
 
 # ---- data ------------------------------------------------------------------------------------
 # one species' swabs with stage_c (-0.5 adult / +0.5 subadult), pop_year and pop_year_event
-# (14-day events). droplevels so random-effect terms have no empty levels.
+# (survey-run events). droplevels so random-effect terms have no empty levels.
 prep_contrast_data = function(brms_data, species_name) {
   brms_data %>%
     filter(taxon_capture == species_name) %>%

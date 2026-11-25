@@ -7,7 +7,10 @@
 # ---- constants -----------------------------------------------------------------------------
 response_col = "bd_load_co100_density"
 
-event_days = 14            # event = population x year x 14-day bin of day of year
+# event = a run of survey dates (of the species) at one site with no gap > event_max_gap days;
+# runs longer than event_max_span days are split at their longest gap until each piece fits
+event_max_gap = 5
+event_max_span = 14
 min_swabs_unit = 5         # co-sampled unit: >= 5 swabs of each stage ...
 min_pos_unit = 1           # ... and, for load, >= 1 positive swab of each stage
 min_n_stage = 20           # inclusion: >= 20 swabs of each stage ...
@@ -35,14 +38,53 @@ min_pops_sigma = 3         #     ... that have >= 10 positive swabs each
 # the stage_c coefficient the full subadult - adult contrast; a group's stage_c sd is how much
 # the contrast varies at that level.
 # pop_year / pop_year_event: explicit ids (rather than population:year:... in the formula) so
-# parameter names stay readable. 14-day bins are cut at the new year.
+# parameter names stay readable.
+#
+# events follow the survey design rather than the calendar: consecutive-day visits stay together,
+# weekly revisits (gaps of 7 days) are separate events, and an intensive resurvey period longer
+# than 2 weeks is split where the surveys paused longest. built per species x population from
+# the species' own swab dates (each model sees one species). the year is part of the id, so an
+# event stays inside its site-year (none crossed the new year in the 2026-11 data).
+
+# split one run of sorted dates (numeric) at its longest gap, recursively, until every piece
+# spans <= max_span days. returns piece numbers 1, 2, ...
+split_long_run = function(d, max_span) {
+  if (length(d) < 2 || max(d) - min(d) + 1 <= max_span) return(rep(1L, length(d)))
+  j = which.max(diff(d))
+  a = split_long_run(d[1:j], max_span)
+  b = split_long_run(d[(j + 1):length(d)], max_span)
+  c(a, b + max(a))
+}
+
+# event number of each date in a sorted vector of distinct dates (numeric) at one site: a new run
+# starts after a gap > max_gap days; long runs are then split by split_long_run
+event_ids = function(d, max_gap = event_max_gap, max_span = event_max_span) {
+  run = cumsum(c(TRUE, diff(d) > max_gap))
+  out = integer(length(d))
+  k = 0L
+  for (r in unique(run)) {
+    i = which(run == r)
+    piece = split_long_run(d[i], max_span)
+    out[i] = piece + k
+    k = k + max(piece)
+  }
+  out
+}
+
 add_contrast_groups = function(df) {
+  events = df %>%
+    distinct(taxon_capture, population, date) %>%
+    arrange(taxon_capture, population, date) %>%
+    group_by(taxon_capture, population) %>%
+    mutate(event_k = event_ids(as.numeric(date))) %>%
+    ungroup()
+
   df %>%
+    left_join(events, by = c("taxon_capture", "population", "date")) %>%
     mutate(life_stage_simple = factor(life_stage_simple, levels = c("adult", "subadult")),
            stage_c = if_else(life_stage_simple == "subadult", 0.5, -0.5),
-           event_bin = (yday(date) - 1) %/% event_days,
            pop_year = paste(population, year, sep = "_"),
-           pop_year_event = paste(population, year, event_bin, sep = "_"))
+           pop_year_event = paste(population, year, event_k, sep = "_"))
 }
 
 # ---- co-sampling counts ----------------------------------------------------------------------

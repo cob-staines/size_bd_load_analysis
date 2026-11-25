@@ -9,6 +9,8 @@ Definitions and rules are in `README.md`; constants are in `contrast_data_functi
 
 In short:
 
+- **event**: a run of survey dates at one site with no gap over 5 days; runs longer than 14 days
+  are split at their longest gap
 - **co-sampled unit** (event, site-year, population): >= 5 swabs of each stage (and, for load,
   >= 1 positive swab of each stage)
 - **inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population
@@ -45,7 +47,7 @@ source(here("size_bd_contrast", "contrast_data_functions.R"))
 
 # Data
 ```{r}
-# stage_c, pop_year and pop_year_event (14-day events) added; see contrast_data_functions.R
+# stage_c, pop_year and pop_year_event (survey-run events) added; see contrast_data_functions.R
 contrast_data = add_contrast_groups(brms_data)
 
 # swabs and positives per stage, per species
@@ -64,22 +66,31 @@ stage_counts = contrast_data %>%
 # the evidence behind the event definition and swab threshold used for the tiers. co-sampled
 # units per species under several unit definitions, finest to coarsest, at two swab thresholds:
 #   population:date        one site visit
+#   survey run             the event used: dates with no gap > 5 days, runs > 14 days split at
+#                          their longest gap (pop_year_event, contrast_data_functions.R)
 #   population:year:2wk / 3wk / 4wk
-#                          14 / 21 / 28-day bins of day of year (bins cut at the new year)
+#                          14 / 21 / 28-day bins of day of year (bins cut at the new year; 2wk
+#                          was the round 1-2 event)
 #   population:year:month  calendar month
 #   population:year        site-year (the tier B level; also m11g's population:year)
 #   population             both stages ever found at the site (inclusion; population-level contrast)
 # thresholds: >= 2 swabs of each stage is lenient (a very noisy unit-level contrast); >= 5 shows
 # how much of the information is solid.
 #
-# what this decided (2026-11-24):
-#   - event = 2-week bins (event_days = 14). counts barely change from single dates to 2-, 3- or
-#     4-week bins (merging nearby visits lowers the count, pooling their swabs lets more units
-#     reach the threshold; the two roughly cancel), and 2 weeks keeps the finest resolution.
-#     3 weeks would also drop l. chiricahuensis below tier A (10 -> 9 events).
-#   - threshold = 5 swabs of each stage (min_swabs_unit). at >= 2, several species reach tier A
-#     only through events with 2-4 swabs per stage (e.g. l. sphenocephalus: 24 events at >= 2,
-#     1 at >= 5), whose event-level contrasts would barely be informed.
+# what this decided:
+#   - 2026-11-24: threshold = 5 swabs of each stage (min_swabs_unit). at >= 2, several species
+#     reach tier A only through events with 2-4 swabs per stage (e.g. l. sphenocephalus: 24
+#     events at >= 2, 1 at >= 5), whose event-level contrasts would barely be informed. counts
+#     barely change between single dates and 2-, 3- or 4-week bins (merging nearby visits lowers
+#     the count, pooling their swabs lets more units reach the threshold; the two roughly cancel).
+#   - 2026-11-25: event = survey run instead of 2-week bins (round 3). bins cut 138 visit runs
+#     at an arbitrary calendar edge, leaving two near-duplicate events with fewer swabs each.
+#     gaps between survey dates peak at 1 day (consecutive-day designs) and again at 7 and 14
+#     (weekly / fortnightly programs), so a 5-day gap groups consecutive days without chaining
+#     weekly revisits (a 7-day gap chained a. canorus 2021 into a 76-day "event"). intensive
+#     resurvey periods (visits every 2-5 days for up to 24 days) are split at 14 days, the bins'
+#     resolution. a 3-day gap would drop c. panamansis below the event threshold (10 -> 9).
+#     no tier changes; see the run summary below.
 screen_data = contrast_data %>%
   mutate(pop_date = paste(population, date, sep = "_"),
          pop_year_2wk = paste(population, year, (yday(date) - 1) %/% 14, sep = "_"),
@@ -88,6 +99,7 @@ screen_data = contrast_data %>%
          pop_year_month = paste(population, year, month(date), sep = "_"))
 
 unit_defs = c(`population:date` = "pop_date",
+              `survey run` = "pop_year_event",
               `population:year:2wk` = "pop_year_2wk",
               `population:year:3wk` = "pop_year_3wk",
               `population:year:4wk` = "pop_year_4wk",
@@ -120,6 +132,34 @@ ggplot(event_screen, aes(x = n_co + 1, y = fct_rev(taxon_capture), color = unit_
        subtitle = paste0("prevalence definition; dashed = event-level contrast threshold (", min_co_events_slope, " units)")) +
   theme_minimal()
 
+# survey-run events: how long they are, and how they compare to the 2-week bins.
+# span = first to last survey date, inclusive (1 = a single day)
+event_spans = contrast_data %>%
+  group_by(taxon_capture, pop_year_event) %>%
+  summarise(span = as.numeric(max(date) - min(date)) + 1, n_dates = n_distinct(date),
+            n_bins = n_distinct((yday(date) - 1) %/% 14), .groups = "drop")
+
+event_spans %>%
+  count(span = cut(span, c(0, 1, 3, 5, 7, 10, 14), include.lowest = TRUE)) %>%
+  mutate(pct = round(100 * n / sum(n), 1))
+
+# runs that the 2-week bins would have split (a bin edge falls inside the run)
+event_spans %>%
+  summarise(events = n(), max_span = max(span), split_by_bins = sum(n_bins > 1))
+
+# the longest events (> 10 days), with swabs per survey date (adults / subadults): these are
+# intensive resurvey periods; most hold a single stage
+contrast_data %>%
+  semi_join(event_spans %>% filter(span > 10), by = c("taxon_capture", "pop_year_event")) %>%
+  group_by(taxon_capture, pop_year_event, date) %>%
+  summarise(n_ad = sum(life_stage_simple == "adult"), n_sub = sum(life_stage_simple == "subadult"),
+            .groups = "drop") %>%
+  group_by(taxon_capture, pop_year_event) %>%
+  summarise(span = as.numeric(max(date) - min(date)) + 1,
+            dates = paste0(format(date, "%m-%d"), " (", n_ad, "/", n_sub, ")", collapse = ", "),
+            .groups = "drop") %>%
+  arrange(desc(span))
+
 ```
 
 # Co-sampled units
@@ -143,7 +183,7 @@ co_counts
 # contrast levels rule (contrast_tier, contrast_data_functions.R; README "Contrast levels"):
 # prevalence uses the prevalence co-sampled counts, load the load counts. the between-population
 # share (pct_swabs_in_co_pop) is one species-level number used for both parts.
-# time-segregated flag: stages often meet in the same site-year but rarely in the same 14-day
+# time-segregated flag: stages often meet in the same site-year but rarely in the same survey
 # event (adults and subadults swabbed at different times of year), so part of the contrast
 # compares different times of year. a caveat only; it does not change the model.
 species_table = stage_counts %>%

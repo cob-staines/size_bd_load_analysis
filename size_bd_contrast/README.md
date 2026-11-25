@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 round 3 fits pending (consolidated contrast rule: n. viridescens, l. chiricahuensis); analysis drafted; stage 2 planned
+status: stage 1 round 3 fits pending (all jobs: survey-run events and consolidated contrast rule); analysis drafted; stage 2 planned
 sibling_of: size_bd_unified (m11g)
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
@@ -11,8 +11,10 @@ stage_coding: {variable: stage_c, adult: -0.5, subadult: 0.5}
 groups:
   population: population
   pop_year: population x year
-  pop_year_event: population x year x 14-day bin of day of year
-event_days: 14
+  pop_year_event: population x year x survey run
+event:  # survey run, per species x population (round 3; rounds 1-2: 14-day bins of day of year)
+  max_gap_days: 5     # a new event starts after a gap of more than 5 days between survey dates
+  max_span_days: 14   # longer runs are split at their longest gap until each piece fits
 co_sampled_unit:
   prevalence: ">= 5 swabs of each stage"
   load: ">= 5 swabs of each stage and >= 1 positive swab of each stage"
@@ -100,8 +102,18 @@ Stage 2 (across species, planned):
 - **Stage contrast**: subadult - adult. Prevalence part on the logit-prevalence scale
   (= -logit(hu)); load part as a difference in mu (mean log load density among positives).
   Positive = subadults higher. Contrasts are compared within species only (labs differ).
-- **Event**: population x year x 14-day bin of day of year (bins cut at the new year). 3- and
-  4-week bins were checked and change counts very little; 2 weeks keeps finer resolution.
+- **Event**: a survey run at one site: consecutive survey dates (of the species) with no gap
+  over **5 days**. Runs longer than **14 days** are split at their longest gap until each piece
+  is 14 days or less. Events follow the survey design rather than the calendar:
+  - gaps between survey dates peak at 1 day (consecutive-day designs) and again at 7 and 14
+    days (weekly and fortnightly programs). A 5-day gap keeps consecutive days together without
+    chaining weekly revisits (a 7-day gap made a 76-day *A. canorus* "event")
+  - the 14-day cap splits intensive resurvey periods (visits every 2-5 days for up to 24 days),
+    keeping the 2-week resolution of the earlier definition. Within such runs the stage mix can
+    shift (*A. canorus* 2021: adults first, then emerging metamorphs), which is why they are split
+  - compared with the earlier 14-day bins of day of year (rounds 1-2): 4167 vs 4155 events, 442
+    vs 447 co-sampled, no tier changes; the bins had cut 138 visit runs at an arbitrary edge.
+    79% of events are a single day. Evidence: `01_contrast_tiers.Rmd` (event screen)
 - **Co-sampled unit** (event, site-year or population): both stages swabbed, >= 5 swabs of each
   stage. For load, also >= 1 positive swab of each stage.
 - **Inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population. Species without a
@@ -126,7 +138,7 @@ Stage 2 (across species, planned):
 - **Flag** (an interpretation caveat; it does not change the model): *time-segregated* when
   there are **>= 3 co-sampled site-years and fewer co-sampled events than half the number of
   co-sampled site-years** (prevalence definition; e.g. *P. crucifer*). Stages are found in the
-  same site-years but rarely in the same 14-day event, so the contrast partly compares different
+  same site-years but rarely in the same survey event, so the contrast partly compares different
   times of year.
 
 ## Stage 1 model
@@ -181,7 +193,8 @@ answered the same question ("can the data say how much the contrast varies at th
   identified, so the site-level contrast SD and its correlation with the intercept sit on
   hundreds of ridges, informed by only 4-5 co-sampled sites.
 - **Nesting** (a level's contrast needs the level above) replaced "A: >= 10 events" regardless of
-  site-years. It changed one part: *L. chiricahuensis* prevalence (10 events, 4 site-years)
+  site-years. It changed one part: *L. chiricahuensis* prevalence (10 events as 14-day bins, 9 as survey
+  runs; 4 site-years)
   from A to C. Its round 2 site-year and event contrast SDs were both 0.33 [0.01, 1.59], the
   prior.
 
