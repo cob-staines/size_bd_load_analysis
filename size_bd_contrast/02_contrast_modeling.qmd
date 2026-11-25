@@ -380,8 +380,8 @@ contrast_sds %>%
 # work, and what "mostly prior" in 03 means); it matters for tier A levels and for the mean
 # contrasts.
 # memory: brms hands priorsense the pointwise log-likelihood of every fit (draws x swabs: ~3.4 GB
-# for r. sierrae at 16000 draws), for both checks below, so the largest fits may need a machine
-# with more memory; run them one at a time if needed.
+# for r. sierrae at 16000 draws), so the largest fits may need a machine with more memory; run
+# them one at a time if needed. the contrast-sd check below avoids this.
 library(priorsense)
 
 contrast_vars = function(fit) {
@@ -404,22 +404,33 @@ contrast_sensitivity %>%
 ```{r}
 #| eval: false
 
-# the question behind keeping prior-dominated contrast sds in tiers B and C (README "Contrast
-# levels"): those sds widen the mean contrast's interval for between-site variation, and where
-# the data say little, the exponential(2) prior sets how much. if the mean contrast barely moves
-# when that prior alone is loosened or tightened, the conclusions do not rest on it.
+# the question behind keeping prior-dominated contrast sds in tiers B and C (README "How to read
+# the results"): those sds widen the mean contrast's interval for between-site variation, and
+# where the data say little, the exponential(2) prior sets how much. if the mean contrast barely
+# moves when that prior alone is loosened or tightened, the conclusions do not rest on it.
 #
-# prior_selection = "sdcontrast" scales only the contrast-sd priors (tagged in
-# contrast_sd_priors(); brms keeps them as lprior_sdcontrast). fits from before round 3 have no
-# tag and are skipped. tier D parts have no contrast sd, so nothing to scale.
-# component = "prior": only the prior is scaled (the likelihood scaling in (1) already says
-# whether the data dominate).
-has_sd_tag = map_lgl(contrast_models, ~ "lprior_sdcontrast" %in% variables(.x))
-if (!all(has_sd_tag)) message("no contrast-sd prior tag (fit before round 3, or tier D in both ",
-                              "parts): ", paste(names(contrast_models)[!has_sd_tag], collapse = ", "))
+# how: power-scaling needs each draw's log density under the prior being scaled. for the
+# contrast-sd priors that is simply the sum of exponential(2) log densities of the contrast-sd
+# draws, so it is rebuilt here from the fit's draws (no refit, no log-likelihood, so cheap even
+# for r. sierrae; works for fits from any round). round 3 fits also carry it as
+# lprior_sdcontrast (prior tag), but it is not needed. constant terms do not matter: power-scaling
+# only uses differences between draws.
+sd_prior_rate = 2   # exponential(2), as in contrast_sd_priors() (contrast_model_functions.R)
 
-sd_prior_sensitivity = imap(contrast_models[has_sd_tag], function(fit, job) {
-  powerscale_sensitivity(fit, variable = contrast_vars(fit), component = "prior",
+# the contrast parameters of one fit, plus the rebuilt log prior of its contrast sds. NULL for a
+# fit with no contrast sd (tier D in both parts)
+sd_prior_draws = function(fit) {
+  dr = as_draws_df(fit, variable = contrast_vars(fit))
+  sd_cols = grep("^sd_", variables(dr), value = TRUE)
+  if (length(sd_cols) == 0) return(NULL)
+  dr$lprior_sdcontrast = rowSums(sapply(sd_cols, function(v) dexp(dr[[v]], sd_prior_rate, log = TRUE)))
+  dr
+}
+
+sd_prior_sensitivity = imap(contrast_models, function(fit, job) {
+  dr = sd_prior_draws(fit)
+  if (is.null(dr)) return(NULL)
+  powerscale_sensitivity(dr, variable = contrast_vars(fit), component = "prior",
                          prior_selection = "sdcontrast") %>%
     as_tibble() %>%
     mutate(job = job)
@@ -430,19 +441,20 @@ sd_prior_sensitivity = imap(contrast_models[has_sd_tag], function(fit, job) {
   left_join(contrast_jobs %>% select(job, tier_hu, tier_mu), by = "job") %>%
   mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu))
 
-# the mean contrasts: the rows that matter. expect small values (< 0.05) everywhere; a flagged
-# mean contrast is one whose interval depends on how much between-unit variation the prior allows
+# the mean contrasts: the rows that matter. expect small values (< 0.05); a flagged mean
+# contrast is one whose interval depends on how much between-unit variation the prior allows.
+# (a tier D part's mean contrast can still appear here when its other part has contrast sds)
 sd_prior_sensitivity %>%
   filter(quantity == "mean contrast") %>%
-  select(job, part, tier, prior, diagnosis) %>%
+  select(job, part, tier, prior) %>%
   arrange(desc(prior))
 
-# the contrast sds themselves: high values = mostly prior (expected for tiers B and C), low = the
-# data dominate (informed). a second view of "informed" in 03, less sensitive to the prior's tail
-# than contraction
+# the contrast sds themselves: high = mostly prior (expected for tiers B and C), low = the data
+# dominate (informed). a second view of "informed" in 03, less sensitive to the prior's tail than
+# contraction
 sd_prior_sensitivity %>%
   filter(quantity == "contrast sd") %>%
-  select(job, part, tier, variable, prior, diagnosis) %>%
+  select(job, part, tier, variable, prior) %>%
   arrange(tier, job, part)
 
 # what the scaling means for this prior: power-scaling exponential(rate 2) by alpha gives
@@ -452,7 +464,7 @@ sd_prior_sensitivity %>%
 # when it does, and those alphas should not be read
 sd_prior_sequence = function(job) {
   fit = contrast_models[[job]]
-  powerscale_sequence(fit, variable = contrast_vars(fit), component = "prior",
+  powerscale_sequence(sd_prior_draws(fit), variable = contrast_vars(fit), component = "prior",
                       prior_selection = "sdcontrast", lower_alpha = 0.5, upper_alpha = 2,
                       length = 5)
 }

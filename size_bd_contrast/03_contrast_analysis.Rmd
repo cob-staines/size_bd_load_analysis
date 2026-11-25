@@ -6,7 +6,7 @@ output: html_document
 Purpose: process the stage 1 contrast models (`02_contrast_modeling.qmd`, one model per species
 and variant) into per-species summaries of the subadult - adult contrast and how consistent it
 is across sites, years and events, check them against the unified model (m11g), and export the
-contrasts for stage 2. Questions Q1-Q5 and definitions: `README.md`.
+contrasts for stage 2. Questions Q1-Q6 and definitions: `README.md`.
 
 Scales used throughout:
 
@@ -38,8 +38,16 @@ What each summary means:
   scale of the mean: sd 0.4 around a mean of 1 is consistent, around a mean of 0.1 it is not.
 - **variance shares** (Q5): sd^2 of a level / the sum over modeled levels. Comparable only between
   species with the same tier.
-- **intercept-contrast correlation**: do sites (years, events) with more Bd overall have a larger
-  contrast? Context for stage 2.
+- **stage levels**: each stage's prevalence (%) or median load among positives at a typical site,
+  year and event: what the contrast is a difference of. Within-species context only (labs
+  differ).
+- **intercept**: a unit's overall infection, the midpoint of the two stages (prevalence on the
+  logit scale, signed so higher = more prevalent; load on log load among positives). Intercepts
+  vary at every level in every tier and are informed by every unit, not just co-sampled ones.
+- **intercept-contrast correlation** (Q6): do sites (years, events) with more Bd overall have a
+  larger contrast? Estimated by the model at each level with a contrast slope.
+- **sd ratio**: contrast sd / intercept sd at a level. < 1 = the gap varies less than overall
+  infection does there.
 - **group contrasts**: each population's (site-year's, event's) contrast = mean + its deviations
   down the hierarchy. Groups where both stages were not co-sampled are shrunk toward their parent
   and are marked, so they are not read as observed contrasts.
@@ -121,27 +129,31 @@ contrast_data = add_contrast_groups(brms_data) %>%
 # the fits are large (r. sierrae especially), so each is read, processed and dropped in turn:
 # only summaries and a few numbers per draw are kept. the result is cached in intermediates/;
 # set refresh = TRUE after replacing any fit (or when jobs change).
-refresh = FALSE
+refresh = TRUE
 results_file = file.path(intermediates_dir, "03_contrast_processed.rds")
 
-# mean contrasts and contrast sds use all draws (16000 from round 3: 4 chains x 4000; cheap). group contrasts (one per site,
-# site-year, event) use 2000 evenly spaced draws, plenty for summaries; 1000 of those are kept
-# for the stage 2 draw export.
+# mean contrasts, contrast and intercept sds use all draws (16000 from round 3: 4 chains x 4000;
+# cheap). group contrasts and intercepts (one per site, site-year, event) use 2000 evenly spaced
+# draws, plenty for summaries; 1000 of those are kept for the stage 2 draw export and the
+# per-draw season and year summaries.
 ndraws_group = 2000
 ndraws_export = 1000
 
-# column-wise summary of a draws x groups matrix of contrasts
-summarise_cols = function(m) {
+# column-wise summary of a draws x groups matrix (contrasts or intercepts); columns named
+# <prefix>_mean, <prefix>_median, ... and p_gt_0 for contrasts
+summarise_cols = function(m, prefix = "contrast") {
   q = apply(m, 2, quantile, probs = c(0.025, 0.25, 0.5, 0.75, 0.975))
-  tibble(group_id = colnames(m),
-         contrast_mean = colMeans(m),
-         contrast_sd = apply(m, 2, sd),
-         contrast_median = q[3, ],
-         contrast_lower_50 = q[2, ],
-         contrast_upper_50 = q[4, ],
-         contrast_lower_95 = q[1, ],
-         contrast_upper_95 = q[5, ],
-         p_gt_0 = colMeans(m > 0))
+  out = tibble(group_id = colnames(m),
+               mean = colMeans(m),
+               sd = apply(m, 2, sd),
+               median = q[3, ],
+               lower_50 = q[2, ],
+               upper_50 = q[4, ],
+               lower_95 = q[1, ],
+               upper_95 = q[5, ])
+  names(out)[-1] = paste0(prefix, "_", names(out)[-1])
+  if (prefix == "contrast") out$p_gt_0 = colMeans(m > 0)
+  out
 }
 
 process_contrast_fit = function(fit, job_row) {
@@ -150,6 +162,9 @@ process_contrast_fit = function(fit, job_row) {
   # parts with a stage term: prefix of their parameter names, and the sign that turns the
   # coefficient into "subadult - adult, positive = subadults more infected"
   # has_pop_year / has_event: levels present in that part (R2)
+  # the same sign is applied to the intercepts, so for prevalence they are -hu: higher = more
+  # prevalent (prevalence = 1 - plogis(hu) = plogis(-hu)). flipping both signs leaves the
+  # intercept-contrast correlation unchanged.
   parts = tibble(part = c("prevalence", "load"),
                  pre = c("hu_", ""),
                  sign = c(-1, 1),
@@ -162,38 +177,97 @@ process_contrast_fit = function(fit, job_row) {
   n_draws = nrow(dr)
   ids_group = round(seq(1, n_draws, length.out = ndraws_group))
   ids_export = ids_group[round(seq(1, ndraws_group, length.out = ndraws_export))]
+  rows_export = match(ids_export, ids_group)   # rows of a draws (ids_group) x units matrix
 
   # which population / site-year each event belongs to (ids are unique, so this is a lookup).
   # fit$data only keeps variables in the formula, so pop_year / pop_year_event are missing when
-  # both parts drop those levels (R2); they're only needed when a part has those slopes anyway
+  # both parts drop those levels (R2); they're only needed when a part has those levels anyway
   units = fit$data %>%
     distinct(across(any_of(c("population", "pop_year", "pop_year_event")))) %>%
     mutate(across(everything(), as.character))
 
-  # group-level deviations of the contrast for one group and part: draws x levels matrix. ranef()
-  # keeps the data's level names (some contain parentheses / apostrophes)
-  re_contrast = function(group, pre) {
+  # group-level deviations of one term (coef: "stage_c", "hu_stage_c", "Intercept",
+  # "hu_Intercept") for one grouping factor: draws (ids_group) x levels matrix. ranef() keeps the
+  # data's level names (some contain parentheses / apostrophes)
+  re_term = function(group, coef) {
     re = ranef(fit, summary = FALSE, groups = group)[[group]]
-    m = re[ids_group, , paste0(pre, "stage_c")]
+    m = re[ids_group, , coef]
     if (is.null(dim(m))) m = matrix(m, ncol = 1, dimnames = list(NULL, dimnames(re)[[2]]))
     m
+  }
+
+  # group values of one term down the hierarchy (unsigned):
+  #   site       = b + r_population
+  #   site-year  = site + r_pop_year
+  #   event      = site-year + r_pop_year_event   (site + r_pop_year_event without a site-year
+  #                                                level for this term)
+  # `levels` = the levels where this term varies: for the contrast the tier's slope levels, for
+  # the intercept every level present in the part
+  build_group_mats = function(b, levels, coef) {
+    m_pop = b[ids_group] + re_term("population", coef)   # b recycles down each column (one per draw)
+    mats = list(population = m_pop)
+    if ("pop_year" %in% levels) {
+      r = re_term("pop_year", coef)
+      mats$pop_year = m_pop[, units$population[match(colnames(r), units$pop_year)], drop = FALSE] + r
+      colnames(mats$pop_year) = colnames(r)
+    }
+    if ("pop_year_event" %in% levels) {
+      r = re_term("pop_year_event", coef)
+      parent = if ("pop_year" %in% levels) {
+        mats$pop_year[, units$pop_year[match(colnames(r), units$pop_year_event)], drop = FALSE]
+      } else {
+        m_pop[, units$population[match(colnames(r), units$pop_year_event)], drop = FALSE]
+      }
+      mats$pop_year_event = parent + r
+      colnames(mats$pop_year_event) = colnames(r)
+    }
+    mats
   }
 
   per_part = pmap(parts, function(part, pre, sign, tier, has_pop_year, has_event) {
     b = dr[[paste0("b_", pre, "stage_c")]]
     intercept = dr[[paste0("b_", pre, "Intercept")]]
 
-    # mean contrast, plus the same on a readable scale at a typical site / year / event:
-    #   prevalence: hu logit adult = intercept - 0.5 b, subadult = intercept + 0.5 b;
-    #     prevalence = 1 - plogis(hu), so the difference (percentage points) is
-    #     plogis(hu_adult) - plogis(hu_subadult)
-    #   load: fold difference in load density among positives = exp(b)
+    # mean contrast, plus readable versions at a typical site / year / event (all random effects
+    # at 0, the same reference as the contrast):
+    #   linear predictor of each stage: adult = intercept - 0.5 b, subadult = intercept + 0.5 b
+    #   prevalence part: prevalence of each stage (%) = 100 * (1 - plogis(hu)); typical_effect =
+    #     the difference in percentage points
+    #   load part: median load density among positives of each stage = exp(mu); typical_effect =
+    #     the fold difference exp(b)
     # computed before tibble(): inside tibble(), `part` would refer to the column just created
-    typical_effect = if (part == "prevalence") {
-      100 * (plogis(intercept - 0.5 * b) - plogis(intercept + 0.5 * b))
-    } else exp(b)
+    lin_adult = intercept - 0.5 * b
+    lin_subadult = intercept + 0.5 * b
+    if (part == "prevalence") {
+      level_adult = 100 * (1 - plogis(lin_adult))
+      level_subadult = 100 * (1 - plogis(lin_subadult))
+      typical_effect = level_subadult - level_adult
+    } else {
+      level_adult = exp(lin_adult)
+      level_subadult = exp(lin_subadult)
+      typical_effect = exp(b)
+    }
     species_draws = tibble(job = job_row$job, part = part, .draw = seq_len(n_draws),
-                           contrast = sign * b, typical_effect = typical_effect)
+                           contrast = sign * b, typical_effect = typical_effect,
+                           level_adult = level_adult, level_subadult = level_subadult)
+
+    # ---- intercepts (every tier, D included): overall infection at each level ----
+    # intercept sds per level present (R2) and their variance shares; group intercepts (the
+    # midpoint of the two stages; signed: -hu for prevalence, mu for load)
+    int_levels = contrast_levels(has_pop_year, has_event)
+    intercept_draws = map_dfr(int_levels, function(g) {
+      tibble(job = job_row$job, part = part, level = g, .draw = seq_len(n_draws),
+             sd_intercept = dr[[paste0("sd_", g, "__", pre, "Intercept")]])
+    }) %>%
+      group_by(.draw) %>%
+      mutate(share_intercept = sd_intercept^2 / sum(sd_intercept^2)) %>%
+      ungroup()
+    int_mats = map(build_group_mats(intercept, int_levels, paste0(pre, "Intercept")), ~ sign * .x)
+    intercept_summary = imap_dfr(int_mats, function(m, level) {
+      summarise_cols(m, "intercept") %>% mutate(level = level, .before = 1)
+    }) %>%
+      mutate(job = job_row$job, part = part, .before = 1)
+    int_unit_draws = map(int_mats, ~ .x[rows_export, , drop = FALSE])
 
     # mean-contrast draws for the stage 2 export (all tiers)
     export_mean = species_draws %>%
@@ -201,11 +275,14 @@ process_contrast_fit = function(fit, job_row) {
       transmute(job, part, quantity = "mean_contrast", level = NA_character_,
                 group_id = NA_character_, .draw, value = contrast)
 
+    intercept_parts = list(intercept_draws = intercept_draws, intercept_summary = intercept_summary,
+                           int_unit_draws = int_unit_draws)
+
     # tier D: one mean contrast, no contrast sds and no group contrasts
     groups = contrast_slope_groups(tier, has_pop_year, has_event)
     if (length(groups) == 0) {
-      return(list(species_draws = species_draws, level_draws = NULL,
-                  group_summary = NULL, export_draws = export_mean))
+      return(c(list(species_draws = species_draws, level_draws = NULL, group_summary = NULL,
+                    export_draws = export_mean, unit_draws = NULL), intercept_parts))
     }
 
     # contrast sds, correlations and sign consistency per modeled level
@@ -230,36 +307,18 @@ process_contrast_fit = function(fit, job_row) {
       mutate(sign_consistency = pnorm(abs(contrast) / sd)) %>%
       select(-contrast)
 
-    # group contrasts (unsigned while building; sign applied at the end):
-    #   site       = b + r_population
-    #   site-year  = site + r_pop_year              (tiers A, B)
-    #   event      = site-year + r_pop_year_event   (tier A; site + r_pop_year_event if the
-    #                                                part has no site-year level, R2)
-    b_g = b[ids_group]
-    m_pop = b_g + re_contrast("population", pre)   # b_g recycles down each column (one per draw)
-    group_mats = list(population = m_pop)
-    if ("pop_year" %in% groups) {
-      r_py = re_contrast("pop_year", pre)
-      pop_of_py = units$population[match(colnames(r_py), units$pop_year)]
-      group_mats$pop_year = m_pop[, pop_of_py, drop = FALSE] + r_py
-      colnames(group_mats$pop_year) = colnames(r_py)
-    }
-    if ("pop_year_event" %in% groups) {
-      r_ev = re_contrast("pop_year_event", pre)
-      parent = if ("pop_year" %in% groups) {
-        group_mats$pop_year[, units$pop_year[match(colnames(r_ev), units$pop_year_event)], drop = FALSE]
-      } else {
-        m_pop[, units$population[match(colnames(r_ev), units$pop_year_event)], drop = FALSE]
-      }
-      group_mats$pop_year_event = parent + r_ev
-      colnames(group_mats$pop_year_event) = colnames(r_ev)
-    }
-    group_mats = map(group_mats, ~ sign * .x)
+    # group contrasts (site, and site-year / event where the tier has those slopes), signed
+    group_mats = map(build_group_mats(b, groups, paste0(pre, "stage_c")), ~ sign * .x)
 
     group_summary = imap_dfr(group_mats, function(m, level) {
       summarise_cols(m) %>% mutate(level = level, .before = 1)
     }) %>%
       mutate(job = job_row$job, part = part, .before = 1)
+
+    # site-year and event contrast draws (signed, 1000 draws x units, as matrices to stay small),
+    # for the per-draw season and year summaries ("Patterns across the season and years")
+    unit_draws = map(group_mats[intersect(c("pop_year", "pop_year_event"), names(group_mats))],
+                     ~ .x[rows_export, , drop = FALSE])
 
     # stage 2 draw export: mean contrast, contrast sds and population contrasts, 1000 draws
     export_draws = bind_rows(
@@ -268,27 +327,38 @@ process_contrast_fit = function(fit, job_row) {
         filter(.draw %in% ids_export, level != "all") %>%
         transmute(job, part, quantity = "contrast_sd", level, group_id = NA_character_,
                   .draw, value = sd),
-      as_tibble(group_mats$population[match(ids_export, ids_group), , drop = FALSE]) %>%
+      as_tibble(group_mats$population[rows_export, , drop = FALSE]) %>%
         mutate(.draw = ids_export) %>%
         pivot_longer(-.draw, names_to = "group_id", values_to = "value") %>%
         transmute(job = job_row$job, part = part, quantity = "group_contrast",
                   level = "population", group_id, .draw, value))
 
-    list(species_draws = species_draws, level_draws = level_draws,
-         group_summary = group_summary, export_draws = export_draws)
+    c(list(species_draws = species_draws, level_draws = level_draws, group_summary = group_summary,
+           export_draws = export_draws, unit_draws = unit_draws), intercept_parts)
   })
+  names(per_part) = parts$part
 
   list(health = health,
        species_draws = map_dfr(per_part, "species_draws"),
        level_draws = map_dfr(per_part, "level_draws"),
        group_summary = map_dfr(per_part, "group_summary"),
-       export_draws = map_dfr(per_part, "export_draws"))
+       export_draws = map_dfr(per_part, "export_draws"),
+       # unit_draws[[part]][[level]]: draws x units matrix of contrasts (NULL for tier D parts)
+       unit_draws = map(per_part, "unit_draws"),
+       intercept_draws = map_dfr(per_part, "intercept_draws"),
+       intercept_summary = map_dfr(per_part, "intercept_summary"),
+       # int_unit_draws[[part]][[level]]: draws x units matrix of intercepts (every part)
+       int_unit_draws = map(per_part, "int_unit_draws"))
 }
 
 if (!refresh && file.exists(results_file)) {
   processed = readRDS(results_file)
   if (!setequal(names(processed), jobs_fit$job)) {
     message("cached jobs differ from the fits available: set refresh = TRUE to reprocess")
+  }
+  if (!all(map_lgl(processed, ~ all(c("unit_draws", "int_unit_draws") %in% names(.x))))) {
+    message("cache made before site-year / event and intercept draws were kept: set refresh = TRUE ",
+            "for the season / year summaries and the intercept sections")
   }
 } else {
   processed = map(seq_len(nrow(jobs_fit)), function(k) {
@@ -311,6 +381,20 @@ species_draws = stack_component("species_draws")
 level_draws = stack_component("level_draws")
 group_summary = stack_component("group_summary")
 export_draws = stack_component("export_draws")
+# intercepts (overall infection). an old cache has none: empty tables with the right columns
+# (and NA stage levels), so the intercept sections come out empty instead of failing
+intercept_draws = stack_component("intercept_draws")
+intercept_summary = stack_component("intercept_summary")
+if (nrow(intercept_draws) == 0) {
+  intercept_draws = tibble(job = character(), part = character(), level = character(),
+                           .draw = integer(), sd_intercept = double(), share_intercept = double())
+  intercept_summary = tibble(job = character(), part = character(), level = character(),
+                             group_id = character(), intercept_median = double(),
+                             intercept_lower_95 = double(), intercept_upper_95 = double())
+}
+for (v in c("level_adult", "level_subadult")) {
+  if (!v %in% names(species_draws)) species_draws[[v]] = NA_real_
+}
 
 ```
 
@@ -344,13 +428,20 @@ job_info = jobs_fit %>%
 # ---- mean contrast (Q1) ----
 contrast_agg = f_draw_agg(species_draws, c("job", "part"), "contrast")
 
+# readable versions at a typical site, year and event (random effects at 0): the difference
+# (percentage points or fold) and each stage's level (prevalence %, or median load density among
+# positives). levels are within-species context only: labs differ, so never compare them across
+# species. (item 1)
+q_med = function(x) median(x, na.rm = TRUE)
+q_lo = function(x) quantile(x, 0.025, na.rm = TRUE)
+q_hi = function(x) quantile(x, 0.975, na.rm = TRUE)
 typical_agg = species_draws %>%
   group_by(job, part) %>%
-  summarise(typical_effect_median = median(typical_effect),
-            typical_effect_lower_95 = quantile(typical_effect, 0.025),
-            typical_effect_upper_95 = quantile(typical_effect, 0.975),
+  summarise(across(c(typical_effect, level_adult, level_subadult),
+                   list(median = q_med, lower_95 = q_lo, upper_95 = q_hi), .names = "{.col}_{.fn}"),
             .groups = "drop") %>%
-  mutate(typical_effect_unit = if_else(part == "prevalence", "percentage points", "fold"))
+  mutate(typical_effect_unit = if_else(part == "prevalence", "percentage points", "fold"),
+         level_unit = if_else(part == "prevalence", "% prevalence", "median load among positives"))
 
 # ---- contrast sds, contraction, sign consistency, shares, correlations (Q2-Q5) ----
 # exponential(2) prior on each contrast sd: variance 1 / rate^2 = 0.25
@@ -358,6 +449,37 @@ prior_sd_var = 1 / 2^2
 # a level counts as "informed" when the data at least halve the prior variance of its sd.
 # a reading aid for tables and fading in plots, not a test.
 informed_contraction = 0.5
+
+# ---- intercepts: how much overall infection varies at each level (items 3, 5) ----
+# intercept sd and variance share per level present, every part (tier D included)
+intercept_level_summary = intercept_draws %>%
+  group_by(job, part, level) %>%
+  summarise(sd_intercept_median = median(sd_intercept),
+            sd_intercept_lower_95 = quantile(sd_intercept, 0.025),
+            sd_intercept_upper_95 = quantile(sd_intercept, 0.975),
+            share_intercept_median = median(share_intercept),
+            .groups = "drop")
+
+# ratio of contrast sd to intercept sd at each level with a contrast slope, per draw: < 1 = the
+# subadult - adult gap varies less than overall infection does at that level. intercept shares
+# recomputed over the same (slope) levels as the contrast shares, so the two profiles compare
+# like with like
+sd_ratio_draws = level_draws %>%
+  filter(level != "all") %>%
+  inner_join(intercept_draws %>% select(job, part, level, .draw, sd_intercept),
+             by = c("job", "part", "level", ".draw")) %>%
+  group_by(job, part, .draw) %>%
+  mutate(sd_ratio = sd / sd_intercept,
+         share_intercept_same_levels = sd_intercept^2 / sum(sd_intercept^2)) %>%
+  ungroup()
+
+sd_ratio_summary = sd_ratio_draws %>%
+  group_by(job, part, level) %>%
+  summarise(sd_ratio_median = median(sd_ratio),
+            sd_ratio_lower_95 = quantile(sd_ratio, 0.025),
+            sd_ratio_upper_95 = quantile(sd_ratio, 0.975),
+            share_intercept_same_levels_median = median(share_intercept_same_levels),
+            .groups = "drop")
 
 level_summary = level_draws %>%
   group_by(job, part, level) %>%
@@ -373,6 +495,11 @@ level_summary = level_draws %>%
             cor_lower_95 = quantile(cor, 0.025, na.rm = TRUE),
             cor_upper_95 = quantile(cor, 0.975, na.rm = TRUE),
             .groups = "drop") %>%
+  # intercept sd, sd ratio and same-level intercept share next to each contrast sd (empty
+  # columns for an old cache)
+  left_join(intercept_level_summary %>% select(job, part, level, starts_with("sd_intercept")),
+            by = c("job", "part", "level")) %>%
+  left_join(sd_ratio_summary, by = c("job", "part", "level")) %>%
   mutate(informed = contraction >= informed_contraction,
          level = factor(level, levels = names(level_labels)))
 
@@ -395,7 +522,9 @@ species_summary = job_info %>%
                                           sign_consistency_median, share_median, cor_median),
                           names_glue = "{level}_{.value}"),
             by = c("job", "part")) %>%
-  select(where(~ !all(is.na(.x))))   # drops the share / cor / contraction columns of "all levels"
+  # "all levels" has no share, correlation or contraction of its own. dropped by name: dropping
+  # every all-NA column would also drop d_reason when no job is tier D
+  select(-any_of(c("all_contraction", "all_share_median", "all_cor_median")))
 
 ```
 
@@ -441,12 +570,24 @@ fmt_ci = function(m, l, u, digits = 2) {
   sprintf(paste0("%.", digits, "f [%.", digits, "f, %.", digits, "f]"), m, l, u)
 }
 
+# stage levels: prevalence in %, loads with 2 significant digits (they span orders of magnitude)
+fmt_level = function(part, m, l, u) {
+  if_else(part == "prevalence", sprintf("%.0f%% [%.0f, %.0f]", m, l, u),
+          paste0(signif(m, 2), " [", signif(l, 2), ", ", signif(u, 2), "]"))
+}
+
 plot_main %>%
   arrange(part, species) %>%
   transmute(species, part, tier, flag, fit_ok,
             contrast = fmt_ci(contrast_median, contrast_lower_95, contrast_upper_95),
             typical_effect = paste(fmt_ci(typical_effect_median, typical_effect_lower_95,
                                           typical_effect_upper_95, 1), typical_effect_unit),
+            # each stage at a typical site / year / event: what the contrast is a difference of
+            # (within-species context; levels are not comparable across species)
+            adult = fmt_level(part, level_adult_median, level_adult_lower_95, level_adult_upper_95),
+            subadult = fmt_level(part, level_subadult_median, level_subadult_lower_95,
+                                 level_subadult_upper_95),
+            level_unit,
             pd = round(contrast_pd, 3), support = contrast_support)
 
 ```
@@ -549,54 +690,197 @@ p_sd
 #| fig-height: 9
 #| fig-width: 10
 
-# one tile per species x level: fill = sign consistency (probability a new site / site-year /
-# event keeps the sign of the mean contrast); faded = contrast sd mostly prior at that level;
+# one tile per species x level. two separate encodings:
+#   fill and number = sign consistency (probability a new site / site-year / event keeps the
+#     sign of the mean contrast)
+#   dashed outline + grey italic number = the contrast sd at that level is mostly prior
+#     (contraction < informed_contraction), so the consistency mostly reflects the prior: a large
+#     mean with a prior-sized sd reads as consistent whatever the data say
+# (the fill used to be faded for uninformed levels, which made an uninformed 98% look like an
+# informed 70%; the outline keeps the colour for consistency only.)
+# "all levels" combines the modeled levels; it is marked uninformed when none of them is informed.
 # blank = level not modeled in this species' tier; "D" = no contrast sd at any level.
 # built from every main job x part (so tier D parts, which have no levels, still get a row)
+any_informed = level_summary %>%
+  filter(level != "all") %>%
+  group_by(job, part) %>%
+  summarise(any_informed = any(informed), .groups = "drop")
+
 plot_profile = species_summary %>%
   filter(variant == "main") %>%
   select(job, taxon_capture, part, tier) %>%
   crossing(level = factor(names(level_labels), levels = names(level_labels))) %>%
-  left_join(level_summary %>% select(job, part, level, sign_consistency_median, contraction),
+  left_join(level_summary %>% select(job, part, level, sign_consistency_median, informed),
             by = c("job", "part", "level")) %>%
-  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+  left_join(any_informed, by = c("job", "part")) %>%
+  mutate(informed = if_else(level == "all", any_informed, informed),
+         uninformed = !is.na(sign_consistency_median) & !informed,
+         species = factor(species_label(taxon_capture), levels = rev(species_levels)),
          part = factor(part, levels = c("prevalence", "load")),
          level = factor(level_labels[as.character(level)], levels = level_labels),
-         # "all levels" has no contraction of its own; show it solid
-         tile_alpha = if_else(level == "all levels", 1, pmin(pmax(contraction, 0), 1)),
          label = case_when(tier == "D" & level == "site" ~ "D",
                            is.na(sign_consistency_median) ~ "",
-                           .default = sprintf("%.0f", 100 * sign_consistency_median)))
+                           .default = sprintf("%.0f", 100 * sign_consistency_median)),
+         # number and outline colour follow the fill so both stay readable: white on dark tiles
+         ink = if_else(coalesce(sign_consistency_median >= 0.85, FALSE), "white", "black"),
+         face = if_else(uninformed, "italic", "plain"))
 
 p_profile = ggplot(plot_profile, aes(x = level, y = species)) +
-  geom_tile(aes(fill = sign_consistency_median, alpha = tile_alpha), color = "white") +
-  geom_text(aes(label = label), size = 2.6) +
+  geom_tile(aes(fill = sign_consistency_median), color = "white") +
+  geom_tile(data = filter(plot_profile, uninformed), aes(color = ink), fill = NA,
+            linetype = "dashed", linewidth = 0.4, width = 0.86, height = 0.78) +
+  geom_text(aes(label = label, color = ink, fontface = face), size = 2.6) +
+  scale_color_identity() +
   scale_fill_gradient(low = "#F7F7F7", high = "#2166AC", limits = c(0.5, 1), na.value = "grey97",
                       name = "sign\nconsistency") +
-  scale_alpha_continuous(range = c(0.25, 1), limits = c(0, 1), guide = "none") +
   facet_wrap(~ part) +
   labs(x = NULL, y = NULL,
-       subtitle = "% of new units keeping the sign of the mean contrast; faded = contrast sd mostly prior") +
+       subtitle = paste0("% of new units keeping the sign of the mean contrast\n",
+                         "dashed outline + italic = contrast sd mostly prior (contraction < ",
+                         informed_contraction, "): the consistency then mostly reflects the prior")) +
   theme_minimal() +
   theme(axis.text.y = element_text(face = "italic"), panel.grid = element_blank())
 
 p_profile
 
 # variance shares among modeled levels (tier A species: where does the contrast vary most?)
-level_summary %>%
+(share_table = level_summary %>%
   inner_join(job_info %>% filter(variant == "main"), by = "job") %>%
   filter(level != "all", if_else(part == "prevalence", tier_hu, tier_mu) == "A") %>%
   transmute(species = species_label(taxon_capture), part, level = level_labels[as.character(level)],
             share = round(share_median, 2), informed) %>%
-  pivot_wider(names_from = level, values_from = c(share, informed))
+  pivot_wider(names_from = level, values_from = c(share, informed)) %>%
+    arrange(part,
+            species))
 
-# intercept-contrast correlations: positive = units with more Bd overall have a larger contrast
-level_summary %>%
+```
+
+# Does the gap change with overall infection? (Q6)
+```{r}
+#| fig-height: 9
+#| fig-width: 11
+
+# the model estimates, at each level with a contrast slope, the correlation between a unit's
+# intercept (overall infection: the midpoint of the two stages) and its contrast
+# (cor_<level>__Intercept__stage_c). positive = sites / site-years / events with more Bd overall
+# have a larger subadult - adult gap (e.g. subadults hit harder in outbreaks); negative = the
+# gap shrinks when infection is high (e.g. everyone infected). for prevalence both are on the
+# prevalence scale (-hu), for load on log load among positives.
+# correlations are unitless, so they can be compared across species. the correlation's prior is
+# lkj(2) (mildly toward 0); where the contrast sd is mostly prior, the correlation is weakly
+# informed too and reads as prior. read the parameter, not the scatter below: shrinkage pulls
+# group medians toward the mean, which distorts their apparent correlation.
+plot_cor = level_summary %>%
+  filter(level != "all") %>%
+  inner_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+         part = factor(part, levels = c("prevalence", "load")),
+         level = factor(level_labels[as.character(level)], levels = level_labels),
+         informed = if_else(informed, "contrast sd informed", "contrast sd mostly prior"))
+
+p_cor = ggplot(plot_cor, aes(x = cor_median, y = species, color = level, shape = informed)) +
+  geom_vline(xintercept = 0, color = "grey60") +
+  geom_pointrange(aes(xmin = cor_lower_95, xmax = cor_upper_95), size = 0.3,
+                  position = position_dodge(width = 0.6), fill = "white") +
+  scale_shape_manual(values = c(`contrast sd informed` = 16, `contrast sd mostly prior` = 21), name = NULL) +
+  scale_color_brewer(palette = "Dark2", name = "level") +
+  coord_cartesian(xlim = c(-1, 1)) +
+  facet_wrap(~ part) +
+  labs(x = "correlation of intercept (overall infection) and contrast (median, 95%)", y = NULL,
+       subtitle = "positive = more Bd overall goes with a larger subadult - adult gap") +
+  theme_classic() +
+  theme(axis.text.y = element_text(face = "italic"), legend.position = "bottom")
+
+p_cor
+
+# the same as a table, informed levels only
+(intercept_contrast_correlations = level_summary %>%
   filter(level != "all", informed) %>%
   inner_join(job_info %>% select(job, job_label), by = "job") %>%
   transmute(job_label, part, level = level_labels[as.character(level)],
             cor = fmt_ci(cor_median, cor_lower_95, cor_upper_95)) %>%
-  arrange(part, level, job_label)
+  arrange(part, level, job_label))
+
+```
+
+# Contrast variation against overall infection variation (items 3, 5)
+```{r}
+#| fig-height: 9
+#| fig-width: 11
+
+# ratio of contrast sd to intercept sd at each level (per draw): < 1 = the subadult - adult gap
+# varies less than overall infection at that level ("Bd swings a lot between events, the age gap
+# barely moves"); > 1 = the gap is the less stable of the two. intercept sds are informed by
+# every unit, contrast sds mainly by co-sampled ones; where the contrast sd is mostly prior the
+# ratio mostly reflects that prior. load ratios can be compared across species (lab offsets shift
+# log loads without changing their spread); prevalence ratios are read within species.
+plot_ratio = level_summary %>%
+  filter(level != "all", !is.na(sd_ratio_median)) %>%
+  inner_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+         part = factor(part, levels = c("prevalence", "load")),
+         level = factor(level_labels[as.character(level)], levels = level_labels),
+         informed = if_else(informed, "contrast sd informed", "contrast sd mostly prior"))
+
+p_sd_ratio = if (nrow(plot_ratio) > 0) {
+  ggplot(plot_ratio, aes(x = sd_ratio_median, y = species, color = level, shape = informed)) +
+    geom_vline(xintercept = 1, color = "grey60") +
+    geom_pointrange(aes(xmin = sd_ratio_lower_95, xmax = sd_ratio_upper_95), size = 0.3,
+                    position = position_dodge(width = 0.6), fill = "white") +
+    scale_x_log10() +
+    scale_shape_manual(values = c(`contrast sd informed` = 16, `contrast sd mostly prior` = 21), name = NULL) +
+    scale_color_brewer(palette = "Dark2", name = "level") +
+    facet_wrap(~ part) +
+    labs(x = "contrast sd / intercept sd (median, 95%; log scale)", y = NULL,
+         subtitle = "< 1 = the subadult - adult gap varies less than overall infection at that level") +
+    theme_classic() +
+    theme(axis.text.y = element_text(face = "italic"), legend.position = "bottom")
+} else NULL
+p_sd_ratio
+
+# where does overall infection vary, and where does the gap vary? variance shares of the
+# intercept and of the contrast over the same levels (species whose contrast varies at >= 2
+# levels: tiers A and B). contrast shares at prior-dominated levels are mostly the prior (about
+# equal shares by construction), marked with lighter bars.
+plot_shares = level_summary %>%
+  filter(level != "all", !is.na(share_intercept_same_levels_median)) %>%
+  inner_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  group_by(job, part) %>%
+  filter(n() >= 2) %>%
+  ungroup() %>%
+  transmute(taxon_capture, part, level, informed,
+            contrast = share_median, intercept = share_intercept_same_levels_median) %>%
+  pivot_longer(c(contrast, intercept), names_to = "term", values_to = "share") %>%
+  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+         part = factor(part, levels = c("prevalence", "load")),
+         level = factor(level_labels[as.character(level)], levels = level_labels),
+         term = factor(term, levels = c("intercept", "contrast"),
+                       labels = c("overall infection (intercept)", "subadult - adult gap (contrast)")),
+         bar_alpha = if_else(term == "subadult - adult gap (contrast)" & !informed, "mostly prior", "informed"))
+
+p_share_compare = if (nrow(plot_shares) > 0) {
+  ggplot(plot_shares, aes(x = share, y = species, fill = level, alpha = bar_alpha)) +
+    geom_col(position = position_stack(reverse = TRUE), width = 0.8) +
+    scale_fill_brewer(palette = "Dark2", name = "level") +
+    scale_alpha_manual(values = c(informed = 1, `mostly prior` = 0.4), name = "contrast sd") +
+    facet_grid(part ~ term) +
+    labs(x = "variance share (median)", y = NULL,
+         subtitle = paste0("same levels in both panels; shares of the contrast at prior-dominated levels are mostly the prior\n",
+                           "bars stack the median share of each level, so they need not sum to exactly 1")) +
+    theme_classic() +
+    theme(axis.text.y = element_text(face = "italic", size = 7), legend.position = "bottom")
+} else NULL
+p_share_compare
+
+# intercept variance shares over every level present, all species (supplement): where overall
+# infection varies most, including tier C and D species
+(intercept_share_table = intercept_level_summary %>%
+  inner_join(job_info %>% filter(variant == "main") %>% select(job, taxon_capture), by = "job") %>%
+  transmute(species = factor(species_label(taxon_capture), levels = species_levels), part,
+            level = level_labels[level],
+            sd = fmt_ci(sd_intercept_median, sd_intercept_lower_95, sd_intercept_upper_95),
+            share = round(share_intercept_median, 2)) %>%
+  arrange(part, species, factor(level, levels = level_labels)))
 
 ```
 
@@ -650,21 +934,40 @@ event_info = contrast_data %>%
 popyear_info = contrast_data %>%
   distinct(taxon_capture, pop_year, population, year)
 
+# adds to a per-unit table (job, part, level, group_id, ...) the species, swab and positive
+# counts per stage, the co-sampled flag of that part, population, year and event dates
+label_units = function(d) {
+  d %>%
+    left_join(jobs_fit %>% select(job, taxon_capture, variant), by = "job") %>%
+    left_join(unit_flags, by = c("taxon_capture", "level", "group_id" = "unit_id")) %>%
+    mutate(co_sampled = if_else(part == "prevalence", co, co_load)) %>%
+    left_join(popyear_info %>% rename(py_population = population, py_year = year),
+              by = c("taxon_capture", "group_id" = "pop_year")) %>%
+    left_join(event_info %>% rename(ev_population = population, ev_year = year),
+              by = c("taxon_capture", "group_id" = "pop_year_event")) %>%
+    mutate(population = case_when(level == "population" ~ group_id,
+                                  level == "pop_year" ~ py_population,
+                                  level == "pop_year_event" ~ ev_population),
+           year = coalesce(py_year, ev_year))
+}
+unit_label_cols = c("job", "taxon_capture", "variant", "part", "level", "group_id", "population",
+                    "year", "event_start", "event_end", "event_span", "n_dates", "median_date",
+                    "event_doy", "n_adult", "n_subadult", "n_pos_adult", "n_pos_subadult", "co_sampled")
+
+# group intercepts: overall infection of every site, site-year and event (midpoint of the two
+# stages; prevalence on the -hu logit scale, load on log load among positives), all parts and
+# tiers. for the intercept-contrast scatter and the absolute patterns
+group_intercepts = intercept_summary %>%
+  label_units() %>%
+  select(all_of(unit_label_cols), starts_with("intercept_"))
+
+# group contrasts, with the unit's intercept alongside
 group_contrasts = group_summary %>%
-  left_join(jobs_fit %>% select(job, taxon_capture, variant), by = "job") %>%
-  left_join(unit_flags, by = c("taxon_capture", "level", "group_id" = "unit_id")) %>%
-  mutate(co_sampled = if_else(part == "prevalence", co, co_load)) %>%
-  left_join(popyear_info %>% rename(py_population = population, py_year = year),
-            by = c("taxon_capture", "group_id" = "pop_year")) %>%
-  left_join(event_info %>% rename(ev_population = population, ev_year = year),
-            by = c("taxon_capture", "group_id" = "pop_year_event")) %>%
-  mutate(population = case_when(level == "population" ~ group_id,
-                                level == "pop_year" ~ py_population,
-                                level == "pop_year_event" ~ ev_population),
-         year = coalesce(py_year, ev_year)) %>%
-  select(job, taxon_capture, variant, part, level, group_id, population, year, event_start,
-         event_end, event_span, n_dates, median_date, event_doy, n_adult, n_subadult, n_pos_adult,
-         n_pos_subadult, co_sampled, starts_with("contrast_"), p_gt_0)
+  label_units() %>%
+  left_join(intercept_summary %>% select(job, part, level, group_id, intercept_median,
+                                         intercept_lower_95, intercept_upper_95),
+            by = c("job", "part", "level", "group_id")) %>%
+  select(all_of(unit_label_cols), starts_with("contrast_"), p_gt_0, starts_with("intercept_"))
 
 # how many group contrasts rest on co-sampled units
 group_contrasts %>%
@@ -682,15 +985,17 @@ group_contrasts %>%
 plot_population_contrasts = function(part_name) {
   d = group_contrasts %>%
     filter(variant == "main", part == part_name, level == "population") %>%
-    mutate(species = factor(species_label(taxon_capture), levels = species_levels)) %>%
-    group_by(species) %>%
-    mutate(population = fct_reorder(population, contrast_median)) %>%
-    ungroup()
+    mutate(species = factor(species_label(taxon_capture), levels = species_levels),
+           # sites ordered by median contrast within each species (lowest at the bottom). the key
+           # is species + site: some site names occur in several species (e.g. shared sierra or
+           # vermont ponds), and a factor holds each name once, so ordering on the site name alone
+           # would fix a shared site at its position in the first species. labels are hidden
+           site_key = fct_reorder(paste(species, population, sep = "__"), contrast_median))
   means = plot_main %>%
     filter(part == part_name) %>%
     transmute(species = factor(as.character(species), levels = species_levels), contrast_median)
 
-  ggplot(d, aes(x = contrast_median, y = population, alpha = co_sampled)) +
+  ggplot(d, aes(x = contrast_median, y = site_key, alpha = co_sampled)) +
     geom_vline(xintercept = 0, color = "grey70") +
     geom_vline(data = means, aes(xintercept = contrast_median), linetype = "dashed", color = "#2166AC") +
     geom_pointrange(aes(xmin = contrast_lower_95, xmax = contrast_upper_95), size = 0.15) +
@@ -706,6 +1011,47 @@ p_pop_prev = plot_population_contrasts("prevalence")
 p_pop_load = plot_population_contrasts("load")
 p_pop_prev
 p_pop_load
+
+```
+
+## Intercept against contrast by unit (Q6 illustration)
+```{r}
+#| fig-height: 12
+#| fig-width: 14
+
+# each co-sampled unit's contrast against its intercept (medians), one panel per species and
+# level with an estimated correlation. an illustration of p_cor only: shrinkage pulls both
+# medians toward their parents, so the cloud's apparent slope is not the estimate; the panel
+# label gives the model's correlation (median, 95%). species x levels with an informed contrast
+# sd only, where the correlation can carry information
+plot_int_contrast = function(part_name) {
+  keep = level_summary %>%
+    filter(level != "all", informed, part == part_name) %>%
+    transmute(job, level = as.character(level),
+              cor_label = paste0("r = ", fmt_ci(cor_median, cor_lower_95, cor_upper_95)))
+  d = group_contrasts %>%
+    filter(variant == "main", part == part_name, co_sampled) %>%
+    inner_join(keep, by = c("job", "level")) %>%
+    mutate(panel = paste0(species_label(taxon_capture), ", ", level_labels[level], "\n", cor_label))
+  if (nrow(d) == 0) return(NULL)
+  d = d %>%
+    mutate(panel = factor(panel, levels = unique(panel[order(match(taxon_capture, species_order),
+                                                             match(level, names(level_labels)))])))
+  ggplot(d, aes(x = intercept_median, y = contrast_median)) +
+    geom_hline(yintercept = 0, color = "grey70") +
+    geom_point(size = 0.9, alpha = 0.6) +
+    facet_wrap(~ panel, scales = "free", ncol = 5) +
+    labs(x = paste0("unit intercept (overall infection; ", if (part_name == "prevalence") "logit prevalence" else "log load among positives", ")"),
+         y = paste0(part_name, " contrast"),
+         subtitle = paste0(part_name, ": co-sampled units (medians); panel label = estimated intercept-contrast correlation")) +
+    theme_classic() +
+    theme(strip.text = element_text(size = 7))
+}
+
+p_int_contrast_prev = plot_int_contrast("prevalence")
+p_int_contrast_load = plot_int_contrast("load")
+p_int_contrast_prev
+p_int_contrast_load
 
 ```
 
@@ -788,11 +1134,13 @@ plot_year_contrasts = function(part_name) {
     geom_rect(data = means, aes(xmin = -Inf, xmax = Inf, ymin = contrast_lower_95, ymax = contrast_upper_95),
               inherit.aes = FALSE, fill = "grey90") +
     geom_hline(yintercept = 0, color = "grey60") +
-    geom_pointrange(aes(ymin = contrast_lower_95, ymax = contrast_upper_95), size = 0.15,
-                    position = position_dodge2(width = 0.5)) +
+    # faint line per site through its years: a drift shows as lines tilting the same way
+    geom_line(aes(group = population), color = "grey50", alpha = 0.4, linewidth = 0.3) +
+    geom_pointrange(aes(ymin = contrast_lower_95, ymax = contrast_upper_95), size = 0.15) +
+    scale_x_continuous(breaks = function(l) unique(round(scales::breaks_pretty()(l)))) +
     facet_wrap(~ species, scales = "free", ncol = 5) +
     labs(x = NULL, y = paste0(part_name, " contrast"),
-         subtitle = "co-sampled site-years (median, 95%); grey band = species mean (95%)") +
+         subtitle = "co-sampled site-years (median, 95%), lines join a site's years; grey band = species mean (95%)") +
     theme_classic() +
     theme(strip.text = element_text(face = "italic", size = 8))
 }
@@ -801,6 +1149,326 @@ p_year_prev = plot_year_contrasts("prevalence")
 p_year_load = plot_year_contrasts("load")
 p_year_prev
 p_year_load
+
+```
+
+## Patterns across the season and years (per draw)
+```{r}
+#| fig-height: 10
+#| fig-width: 14
+
+# single event and site-year contrasts are imprecise (few swabs each), so their intervals mostly
+# include 0. patterns are read instead from summaries ACROSS many units, computed within each
+# posterior draw and then summarized over draws: averaging over units cancels much of the noise,
+# and working draw by draw keeps the uncertainty honest (units in one draw share the species,
+# site and site-year terms, which separate medians and intervals hide).
+#
+# caveats:
+#   - the model has no seasonal or year term: units are exchangeable, so partial pooling pulls
+#     any trend toward 0. a pattern that shows despite that is convincing; its absence is not
+#     proof there is none. the formal test is stage 2 (unit contrasts against time / climate).
+#   - pooled comparisons (across site-years or sites) mix the trend with which units were
+#     sampled when. the within-unit slopes avoid this, using only differences inside a
+#     site-year (season) or a site (years).
+#   - where the event (site-year) contrast sd is mostly prior, units sit near their parent by
+#     construction and no pattern can show: the "informed" column says which levels to read.
+#   - exploratory: no thresholds, read the size and sign agreement (pd) of the summaries.
+#
+# the same helpers serve the contrasts here and the intercepts (absolute patterns) below.
+# needs the unit draws kept in processing (refresh = TRUE once after they were added)
+unit_draws = function(job, part, level) processed[[job]]$unit_draws[[part]][[level]]
+int_unit_draws = function(job, part, level) processed[[job]]$int_unit_draws[[part]][[level]]
+if (!any(map_lgl(processed, ~ length(.x$unit_draws) > 0))) {
+  message("no site-year / event draws in the processed results (cache made before they were ",
+          "kept): set refresh = TRUE in 'Process each fit'. season and year summaries skipped")
+}
+
+# summary table of per-draw columns (long, f_draw_agg). empty when no species produced draws
+# (group_modify then returns no summary columns), so the section skips instead of failing
+summarise_unit_draws = function(draws, cols) {
+  if (!all(cols %in% names(draws)) || nrow(draws) == 0) return(tibble())
+  draws %>%
+    pivot_longer(all_of(cols), names_to = "summary") %>%
+    filter(!is.na(value)) %>%
+    f_draw_agg(c("job", "taxon_capture", "part", "summary"), "value")
+}
+
+# per-draw least-squares slope of the units (columns of m) on x. with x centered within groups
+# (site-years, sites), this is the pooled within-group slope: sum(m * x) / sum(x^2) needs no
+# centering of m, because x sums to 0 within each group
+draw_slope = function(m, x) as.vector(m %*% x) / sum(x^2)
+center_within = function(x, g) x - ave(x, g)
+
+informed_of = function(level_name) {
+  level_summary %>%
+    filter(level == level_name) %>%
+    select(job, part, informed)
+}
+
+# events with their position in the species' season (season_day, on each species' seasonal
+# calendar as in the event plot) and site-year
+add_season_day = function(d) {
+  d %>%
+    left_join(season_origins, by = "taxon_capture") %>%
+    mutate(origin_doy = coalesce(origin_doy, 1),
+           season_day = (event_doy - origin_doy) %% 365,
+           pop_year = paste(population, year, sep = "_"))
+}
+
+# per draw, from events (units: job, taxon_capture, part, group_id, season_day, pop_year) and a
+# matrix getter get_m(job, part) (draws x events):
+#   slope_within      change per 30 days, within site-years (site-years with >= 2 events)
+#   slope_pooled      the same across all events (mixes in between-site-year timing)
+#   late_minus_early  mean of the last third of the season minus the first third (thirds of the
+#                     species' events by season_day; pooled)
+season_pattern_draws = function(units, get_m) {
+  units %>%
+    group_by(job, taxon_capture, part) %>%
+    group_modify(function(u, key) {
+      m = get_m(key$job, key$part)
+      if (is.null(m) || nrow(u) < 3) return(tibble())
+      m = m[, u$group_id, drop = FALSE]
+      multi = u$pop_year %in% names(which(table(u$pop_year) >= 2))
+      x_within = center_within(u$season_day[multi], u$pop_year[multi])
+      third = cut(rank(u$season_day, ties.method = "first"), 3, labels = c("early", "mid", "late"))
+      tibble(.draw = seq_len(nrow(m)),
+             slope_within = if (sum(multi) >= 2 && sum(x_within^2) > 0) {
+               30 * draw_slope(m[, multi, drop = FALSE], x_within)
+             } else NA_real_,
+             slope_pooled = 30 * draw_slope(m, u$season_day - mean(u$season_day)),
+             late_minus_early = rowMeans(m[, third == "late", drop = FALSE]) -
+               rowMeans(m[, third == "early", drop = FALSE]))
+    }) %>%
+    ungroup()
+}
+
+# per draw, from site-years (units: job, taxon_capture, part, group_id, year, population):
+#   slope_within  change per year within sites (sites with >= 2 site-years): a drift
+#   slope_pooled  the same across all site-years (mixes in which sites were sampled when)
+year_pattern_draws = function(units, get_m) {
+  units %>%
+    group_by(job, taxon_capture, part) %>%
+    group_modify(function(u, key) {
+      m = get_m(key$job, key$part)
+      if (is.null(m) || nrow(u) < 3) return(tibble())
+      m = m[, u$group_id, drop = FALSE]
+      multi = u$population %in% names(which(table(u$population) >= 2))
+      x_within = center_within(u$year[multi], u$population[multi])
+      tibble(.draw = seq_len(nrow(m)),
+             slope_within = if (sum(multi) >= 2 && sum(x_within^2) > 0) {
+               draw_slope(m[, multi, drop = FALSE], x_within)
+             } else NA_real_,
+             slope_pooled = if (var(u$year) > 0) draw_slope(m, u$year - mean(u$year)) else NA_real_)
+    }) %>%
+    ungroup()
+}
+
+# per-draw seasonal curves: for 100 draws, a smooth (natural spline, 3 df) through that draw's
+# event values against season_day. the spread of the curves is the uncertainty in the seasonal
+# pattern; a band of curves that rises or falls together is a pattern even when each event's
+# interval includes 0. pooled across site-years (see caveats). drawn only within 15 days of an
+# observed event and broken across sampling gaps (a spline across a gap invents a shape), and
+# only for species with >= 10 events. `transform` maps the fitted curve to the plotting scale
+season_curve_draws = function(units, get_m, transform = identity) {
+  units %>%
+    group_by(job, taxon_capture, part) %>%
+    group_modify(function(u, key) {
+      m = get_m(key$job, key$part)
+      if (is.null(m) || nrow(u) < 10) return(tibble())
+      m = m[seq_len(min(100, nrow(m))), u$group_id, drop = FALSE]
+      basis = splines::ns(u$season_day, df = 3)
+      grid = seq(min(u$season_day), max(u$season_day), by = 1)
+      near = vapply(grid, function(g) min(abs(g - u$season_day)) <= 15, logical(1))
+      grid = grid[near]
+      segment = cumsum(c(1, diff(grid) > 1))   # a new segment after each gap
+      b = cbind(1, basis)
+      coef = solve(crossprod(b), t(b) %*% t(m))   # (1 + 3) x draws
+      fit = cbind(1, predict(basis, grid)) %*% coef
+      tibble(season_day = rep(grid, ncol(fit)), segment = rep(segment, ncol(fit)),
+             .draw = rep(seq_len(ncol(fit)), each = length(grid)), value = transform(as.vector(fit)))
+    }) %>%
+    ungroup()
+}
+
+# plot of per-draw curves over unit medians (pts: job, taxon_capture, season_day, point_value);
+# facet_note: optional per-job suffix for the facet label (e.g. "event sd mostly prior")
+plot_curves = function(curves, pts, part_name, y_label, subtitle, facet_note = NULL,
+                       y_scale = NULL, zero_line = TRUE) {
+  if (!"part" %in% names(curves)) return(NULL)   # no draws
+  cu = curves %>% filter(part == part_name)
+  if (nrow(cu) == 0) return(NULL)
+  pts = pts %>% filter(part == part_name, job %in% cu$job)
+  facet_labels = cu %>%
+    distinct(job, taxon_capture) %>%
+    left_join(if (is.null(facet_note)) tibble(job = character(), note = character()) else facet_note,
+              by = "job") %>%
+    arrange(match(taxon_capture, species_order)) %>%
+    mutate(species = paste0(species_label(taxon_capture), coalesce(note, "")),
+           species = factor(species, levels = species)) %>%
+    select(job, species)
+  p = ggplot(left_join(cu, facet_labels, by = "job"), aes(x = season_day, y = value)) +
+    (if (zero_line) geom_hline(yintercept = 0, color = "grey60") else NULL) +
+    geom_line(aes(group = interaction(.draw, segment)), alpha = 0.08, color = "#2166AC") +
+    geom_point(data = left_join(pts, facet_labels, by = "job"), aes(y = point_value),
+               size = 0.8, alpha = 0.6) +
+    facet_wrap(~ species, scales = "free", ncol = 4) +
+    labs(x = "day of the species' season (from its seasonal origin)", y = y_label, subtitle = subtitle) +
+    theme_classic() +
+    theme(strip.text = element_text(face = "italic", size = 8))
+  if (!is.null(y_scale)) p = p + y_scale
+  p
+}
+
+# ---- the contrast through the season (tier A, co-sampled events) ----
+season_units = group_contrasts %>%
+  filter(variant == "main", level == "pop_year_event", co_sampled) %>%
+  add_season_day()
+get_event_contrasts = function(job, part) unit_draws(job, part, "pop_year_event")
+
+season_draws = season_pattern_draws(season_units, get_event_contrasts)
+season_summary = summarise_unit_draws(season_draws, c("slope_within", "slope_pooled", "late_minus_early"))
+if (nrow(season_summary) > 0) season_summary = season_summary %>%
+  left_join(season_units %>%
+              group_by(job, part) %>%
+              summarise(n_events = n(),
+                        n_site_years_multi = sum(table(pop_year) >= 2), .groups = "drop"),
+            by = c("job", "part")) %>%
+  left_join(informed_of("pop_year_event") %>% rename(event_sd_informed = informed),
+            by = c("job", "part"))
+
+if (nrow(season_summary) > 0) season_summary %>%
+  transmute(species = species_label(taxon_capture), part, summary, n_events, n_site_years_multi,
+            event_sd_informed,
+            value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            pd = round(value_pd, 3), support = value_support) %>%
+  arrange(part, species, summary)
+
+season_curves = season_curve_draws(season_units, get_event_contrasts)
+# facets marked when the event contrast sd is mostly prior (curves then flat by design)
+event_sd_note = informed_of("pop_year_event") %>%
+  filter(!informed) %>%
+  transmute(job, part, note = "\n(event sd mostly prior)")
+plot_season_curves = function(part_name) {
+  plot_curves(season_curves, season_units %>% mutate(point_value = contrast_median), part_name,
+              y_label = paste0(part_name, " contrast"),
+              subtitle = paste0(part_name, ": co-sampled event medians (points) and per-draw seasonal smooths ",
+                                "(100 draws, natural spline 3 df, pooled across site-years)"),
+              facet_note = event_sd_note %>% filter(part == part_name) %>% select(job, note))
+}
+
+p_season_prev = plot_season_curves("prevalence")
+p_season_load = plot_season_curves("load")
+p_season_prev
+p_season_load
+
+# ---- the contrast across years within sites (tiers A and B, co-sampled site-years) ----
+# swings between years without a drift are what the site-year contrast sd measures (Q3)
+year_units = group_contrasts %>%
+  filter(variant == "main", level == "pop_year", co_sampled)
+
+year_draws = year_pattern_draws(year_units, function(job, part) unit_draws(job, part, "pop_year"))
+year_summary = summarise_unit_draws(year_draws, c("slope_within", "slope_pooled"))
+if (nrow(year_summary) > 0) year_summary = year_summary %>%
+  left_join(year_units %>%
+              group_by(job, part) %>%
+              summarise(n_site_years = n(), n_years = n_distinct(year),
+                        n_sites_multi = sum(table(population) >= 2), .groups = "drop"),
+            by = c("job", "part")) %>%
+  left_join(informed_of("pop_year") %>% rename(site_year_sd_informed = informed),
+            by = c("job", "part"))
+
+if (nrow(year_summary) > 0) year_summary %>%
+  transmute(species = species_label(taxon_capture), part, summary, n_site_years, n_years,
+            n_sites_multi, site_year_sd_informed,
+            value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            pd = round(value_pd, 3), support = value_support) %>%
+  arrange(part, species, summary)
+
+```
+
+## Absolute patterns: overall infection through the season and years (item 4; supplement)
+```{r}
+#| fig-height: 10
+#| fig-width: 14
+
+# the same per-draw summaries for the event and site-year INTERCEPTS: overall infection (the
+# midpoint of the two stages), not the gap. intercepts are informed by every unit, so far more
+# events count than for the contrast, in every tier (D included).
+# units: "observed" events / site-years, >= 5 swabs (prevalence) or >= 3 positive swabs (load),
+# not co-sampled ones. the midpoint avoids predicting a stage where it was not swabbed.
+# scales: slopes and late - early on the model scale (logit prevalence, log load among
+# positives); curves and points back-transformed to prevalence and median load among positives.
+# caveats as above (no seasonal / year term, pooled comparisons mix in sampling timing), plus:
+# absolute levels are within-species only (labs differ in sensitivity), and the midpoint is not a
+# population average weighted by the stages present.
+min_swabs_abs = 5
+min_pos_abs = 3
+
+observed_units = function(level_name) {
+  group_intercepts %>%
+    filter(variant == "main", level == level_name) %>%
+    mutate(n_swabs = n_adult + n_subadult, n_pos = n_pos_adult + n_pos_subadult) %>%
+    filter(if_else(part == "prevalence", n_swabs >= min_swabs_abs, n_pos >= min_pos_abs))
+}
+
+# within the season
+abs_season_units = observed_units("pop_year_event") %>% add_season_day()
+get_event_intercepts = function(job, part) int_unit_draws(job, part, "pop_year_event")
+
+abs_season_draws = season_pattern_draws(abs_season_units, get_event_intercepts)
+abs_season_summary = summarise_unit_draws(abs_season_draws, c("slope_within", "slope_pooled", "late_minus_early"))
+if (nrow(abs_season_summary) > 0) abs_season_summary = abs_season_summary %>%
+  left_join(abs_season_units %>%
+              group_by(job, part) %>%
+              summarise(n_events = n(),
+                        n_site_years_multi = sum(table(pop_year) >= 2), .groups = "drop"),
+            by = c("job", "part"))
+
+if (nrow(abs_season_summary) > 0) abs_season_summary %>%
+  transmute(species = species_label(taxon_capture), part, summary, n_events, n_site_years_multi,
+            value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            pd = round(value_pd, 3), support = value_support) %>%
+  arrange(part, species, summary)
+
+# curves on readable scales: prevalence = plogis(-hu intercept); median load among positives =
+# exp(mu intercept), on a log axis
+abs_curves = bind_rows(
+  season_curve_draws(abs_season_units %>% filter(part == "prevalence"), get_event_intercepts,
+                     transform = plogis),
+  season_curve_draws(abs_season_units %>% filter(part == "load"), get_event_intercepts,
+                     transform = exp))
+abs_points = abs_season_units %>%
+  mutate(point_value = if_else(part == "prevalence", plogis(intercept_median), exp(intercept_median)))
+
+p_abs_season_prev = plot_curves(abs_curves, abs_points, "prevalence",
+                                y_label = "prevalence (midpoint of the two stages)",
+                                subtitle = paste0("prevalence: observed event intercepts (points, >= ", min_swabs_abs,
+                                                  " swabs) and per-draw seasonal smooths (100 draws)"),
+                                y_scale = scale_y_continuous(labels = scales::percent), zero_line = FALSE)
+p_abs_season_load = plot_curves(abs_curves, abs_points, "load",
+                                y_label = "median load density among positives (midpoint)",
+                                subtitle = paste0("load: observed event intercepts (points, >= ", min_pos_abs,
+                                                  " positives) and per-draw seasonal smooths (100 draws)"),
+                                y_scale = scale_y_log10(), zero_line = FALSE)
+p_abs_season_prev
+p_abs_season_load
+
+# across years within sites
+abs_year_units = observed_units("pop_year")
+abs_year_draws = year_pattern_draws(abs_year_units, function(job, part) int_unit_draws(job, part, "pop_year"))
+abs_year_summary = summarise_unit_draws(abs_year_draws, c("slope_within", "slope_pooled"))
+if (nrow(abs_year_summary) > 0) abs_year_summary = abs_year_summary %>%
+  left_join(abs_year_units %>%
+              group_by(job, part) %>%
+              summarise(n_site_years = n(), n_years = n_distinct(year),
+                        n_sites_multi = sum(table(population) >= 2), .groups = "drop"),
+            by = c("job", "part"))
+
+if (nrow(abs_year_summary) > 0) abs_year_summary %>%
+  transmute(species = species_label(taxon_capture), part, summary, n_site_years, n_years, n_sites_multi,
+            value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            pd = round(value_pd, 3), support = value_support) %>%
+  arrange(part, species, summary)
 
 ```
 
@@ -945,6 +1613,15 @@ save_plot(p_event_prev, "03_contrast_events_prevalence.png", 14, 10)
 save_plot(p_event_load, "03_contrast_events_load.png", 14, 10)
 save_plot(p_year_prev, "03_contrast_years_prevalence.png", 14, 10)
 save_plot(p_year_load, "03_contrast_years_load.png", 14, 10)
+save_plot(p_season_prev, "03_contrast_season_curves_prevalence.png", 14, 10)
+save_plot(p_season_load, "03_contrast_season_curves_load.png", 14, 10)
+save_plot(p_cor, "03_contrast_intercept_cor.png", 11, 9)
+save_plot(p_int_contrast_prev, "03_contrast_intercept_scatter_prevalence.png", 14, 12)
+save_plot(p_int_contrast_load, "03_contrast_intercept_scatter_load.png", 14, 12)
+save_plot(p_sd_ratio, "03_contrast_sd_ratio.png", 11, 9)
+save_plot(p_share_compare, "03_contrast_share_compare.png", 11, 9)
+save_plot(p_abs_season_prev, "03_absolute_season_prevalence.png", 14, 10)
+save_plot(p_abs_season_load, "03_absolute_season_load.png", 14, 10)
 save_plot(p_consistency_m11g, "03_contrast_consistency_m11g.png", 10, 5)
 save_plot(p_consistency_season, "03_contrast_consistency_season.png", 10, 5)
 
@@ -956,7 +1633,10 @@ save_plot(p_consistency_season, "03_contrast_consistency_season.png", 10, 5)
 #   species_summary  one row per job x part: mean contrast (f_draw_agg columns), typical-site
 #                    effect, per-level sd / contraction / sign consistency / share / correlation,
 #                    tier, flags, fit_ok (species-level models)
-#   level_summary    the same per level, long
+#                    and each stage's level at a typical site (within-species context)
+#   level_summary    the same per level, long, with the intercept sd, the contrast / intercept
+#                    sd ratio and same-level intercept share
+#   group_intercepts overall infection per site, site-year and event (all parts and tiers)
 #   group_contrasts  one row per job x part x group (site, site-year, event): contrast mean / sd /
 #                    quantiles, n per stage, co-sampled flag, population / year / event dates for
 #                    joining climate. mean + sd supports contrast | se(sd) in brms
@@ -973,6 +1653,15 @@ write_csv(group_contrasts, file.path(intermediates_dir, "03_contrast_group_contr
 write_parquet(export_draws, file.path(intermediates_dir, "03_contrast_draws.parquet"))
 write_csv(fit_health, file.path(intermediates_dir, "03_contrast_fit_health.csv"))
 write_csv(consistency_m11g, file.path(intermediates_dir, "03_contrast_consistency_m11g.csv"))
+# per-draw season and year summaries (exploratory; stage 2 tests these formally)
+write_csv(season_summary, file.path(intermediates_dir, "03_contrast_season_summary.csv"))
+write_csv(year_summary, file.path(intermediates_dir, "03_contrast_year_summary.csv"))
+# overall infection (intercepts): per-level sds and shares, per-unit intercepts, absolute season
+# and year summaries (within species only)
+write_csv(intercept_level_summary, file.path(intermediates_dir, "03_intercept_level_summary.csv"))
+write_csv(group_intercepts, file.path(intermediates_dir, "03_group_intercepts.csv"))
+write_csv(abs_season_summary, file.path(intermediates_dir, "03_absolute_season_summary.csv"))
+write_csv(abs_year_summary, file.path(intermediates_dir, "03_absolute_year_summary.csv"))
 
 # manuscript essential data
 repo_dir = gsub("size_bd_load_analysis", "", here())

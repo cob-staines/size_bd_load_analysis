@@ -3,7 +3,8 @@
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
 status: stage 1 round 3 fits pending (all jobs: survey-run events and consolidated contrast rule); analysis drafted; stage 2 planned
-sibling_of: size_bd_unified (m11g)
+replaces: size_bd_unified m11g (02/03/05; decided 2026-11-25, README "Relation to the unified model")
+uses_from_size_bd_unified: 01_model_data.Rmd, env_functions.R, contrast_functions.R, phylo_tree.nwk, naive cutoff bootstrap
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
 family: hurdle_lognormal
@@ -55,9 +56,9 @@ priors:
 
 Per-species models of the subadult - adult difference in *Bd* infection (the **stage
 contrast**) and how consistent it is across sites, years and sampling events within a season,
-followed by cross-species models of those contrasts. A sibling of the unified model pipeline
-(`size_bd_unified/`, m11g), not a replacement: m11g remains the reference model and a
-consistency check.
+followed by cross-species models of those contrasts. This is the primary analysis of the stage
+contrast; it replaces the unified model (`size_bd_unified/`, m11g). See "Relation to the unified
+model" for what moves, what is lost and what is still to do.
 
 ## Why this analysis
 
@@ -87,13 +88,16 @@ Stage 1 (per species, separately for prevalence and load):
 - **Q3.** Is it consistent across years within sites? (site-year-level contrast SD)
 - **Q4.** Is it consistent within a season? (event-level contrast SD; tier A only)
 - **Q5.** At which level does the contrast vary most? (variance shares; a per-species profile)
+- **Q6.** Does the contrast change with the overall level of infection? (correlation between a
+  unit's intercept and its contrast, by level: e.g. are subadults hit disproportionately in
+  high-Bd sites, years or events, or does the gap close when everyone is infected?)
 
 Stage 2 (across species, planned):
 
-- **Q6.** Is the contrast phylogenetically structured, or related to life-history traits or
+- **Q7.** Is the contrast phylogenetically structured, or related to life-history traits or
   species-typical climate? (species level)
-- **Q7.** Do sites in different climates show different contrasts? (population level)
-- **Q8.** Does the contrast move with conditions through time, and is that seasonal
+- **Q8.** Do sites in different climates show different contrasts? (population level)
+- **Q9.** Does the contrast move with conditions through time, and is that seasonal
   (climatology) or a response to unusual conditions (anomaly)? Does it differ between rising and
   falling temperatures? (event level)
 
@@ -239,11 +243,19 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
 ## Stage 1 analyses (`03_contrast_analysis.Rmd`)
 
 - Per species and part: mean contrast (median, 50 / 95% intervals, pd, support via
-  `f_draw_agg`), contrast SD per level against its prior, variance shares, tier (with the reason
-  for D) and the time-segregated flag.
+  `f_draw_agg`) with each stage's level at a typical site (prevalence %, median load among
+  positives; within-species context), contrast SD per level against its prior, variance shares,
+  tier (with the reason for D) and the time-segregated flag.
+- Q6: intercept-contrast correlation by level (forest plot; unit scatter as illustration).
+- Contrast SD / intercept SD ratio per level (does the gap vary less than overall infection?),
+  and intercept vs contrast variance shares over the same levels.
+- Per-draw season and year summaries (within-site-year / within-site slopes, late - early,
+  seasonal curves) for the contrast (co-sampled units) and, as a supplement, for overall
+  infection (intercepts of observed units, every tier).
 - Tier A: event contrasts against day of year (calendar axis from each species' seasonal
   origin), optionally with life-history windows.
-- Consistency: mean contrast vs m11g; *A. canorus* sensitivity vs main fit; optionally vs the
+- Consistency: mean contrast vs m11g (agreed in sign and rough size; kept until m11g is
+  retired from the manuscript inputs); *A. canorus* sensitivity vs main fit; optionally vs the
   seasonal models (`size_bd_season/`).
 - Exports for stage 2: species, population, site-year and event contrasts (fixed + random parts)
   with posterior mean and sd, a thinned draw set, and the identifiers needed to join climate.
@@ -290,6 +302,42 @@ interval and support labels.
 prior-dominated SD is reported as not informed, not removed: removing it would assume zero
 variation and narrow the mean contrast's interval without new information.
 
+## Relation to the unified model (m11g)
+
+Decided 2026-11-25: m11g is retired; the contrast models are the primary analysis. In m11g the
+weather and climate terms were there to control for distractions from the stage contrast, not
+as part of the question, and they are shared by both stages and confounded with season (Why
+this analysis). The contrast models drop them and let the contrast vary by site, year and
+event instead; environment returns only as a moderator of the contrast (stage 2).
+
+What replaces what:
+
+| m11g output | Replacement |
+|---|---|
+| species stage contrasts (`unified_03_c`) | per-species mean contrasts (`03`, `contrast_03_a`) |
+| between-population spread, variance components (`unified_03_j/k`) | contrast sds by level, variance shares (`03`) |
+| species meta-model with phylogeny and traits (`05`, `unified_05_*`) | stage 2a (species level, below), on `03` outputs |
+| environment -> infection (`unified_03_d/e/h/i`) | dropped. Stage 2 asks environment -> contrast instead |
+| cutoff sensitivity (m11g at co100 / co300 / co1000) | naive bootstrap cutoff check only (`size_bd_unified/th_sensitivity_analysis.Rmd`, naive part; independent of m11g) |
+| environment priors for the GAM (`size_bd_gam/02`, m11g new-taxon draws) | open: alternative to brainstorm (Open questions) |
+
+What is lost, accepted:
+
+- pooling of sparse species toward the across-species distribution (m11g taxon effects).
+  Stage 2a restores pooling as a second step (species random effect + phylogeny), with stage 1
+  uncertainty carried through.
+- six species in m11g without a within-site comparison or with < 20 swabs of a stage
+  (*C. crassidigitus*, *C. fitzingeri*, *R. marina*: no co-sampled population; *E. prosoblepon*,
+  *H. cinerea*, *L. palustris*: < 20 swabs of a stage). Stated as a limitation: their m11g
+  contrast rested on comparing different populations.
+- environment effects on overall infection levels; not a target question.
+
+Kept from `size_bd_unified/`: `01_model_data.Rmd` (model data), `env_functions.R`,
+`contrast_functions.R` (`f_draw_agg`), `svl_stage_cutoffs.R`, the phylogenetic tree, data
+summaries (species / lab stats, sex composition) and the naive cutoff bootstrap. To do when
+retiring: re-point manuscript inputs from `unified_03_*` / `unified_05_*` to the contrast
+exports, and drop the m11g consistency check from `03` (or keep it as a historical note).
+
 ## Stage 2 (planned; separate plan)
 
 Contrast-level (meta-analytic) models, with stage 1 uncertainty carried through
@@ -298,7 +346,7 @@ Contrast-level (meta-analytic) models, with stage 1 uncertainty carried through
 
 | Level | Response | Covariates |
 |---|---|---|
-| species | species mean contrast | traits, species-typical climate, phylogeny |
+| species (2a; replaces unified `05`) | species mean contrast | traits, species-typical climate, phylogeny |
 | population | population contrasts | site climate (mean, seasonality), Köppen-Geiger zone, species slopes, phylogeny |
 | event | event contrasts | site climatology for that time of year, anomaly from it, temperature trend, species slopes, phylogeny |
 
@@ -382,10 +430,20 @@ Dated one-liners; the reasoning is in the linked sections.
   stays ~1.01 with tail ESS > 1000 (`02` "Fit rounds").
 - 2026-11-25: LOO off by default (not used); memory and time requests from sacct
   (`r-brms-contained/hpc/run_size_bd_contrast_modeling.sbatch`).
-- 2026-11-25: contrast-SD priors tagged (`lprior_sdcontrast`) so their sensitivity can be
-  checked alone (`02` "Prior sensitivity"). Uninformed SDs are kept, not downgraded (How to read
-  the results).
+- 2026-11-25: contrast-SD prior sensitivity checked alone by power-scaling (`02` "Prior
+  sensitivity"), with the prior's log density rebuilt from the SD draws: works on any fit without
+  a refit or the log-likelihood (round 3 was submitted before the `lprior_sdcontrast` tag; the
+  tag stays, unused). First result, *H. phyllodes* (round 2, tier C): mean contrasts 0.02-0.03
+  (robust), site SDs 0.22-0.27 (prior-dominated). Uninformed SDs are kept, not downgraded (How
+  to read the results).
 - 2026-11-25: round 3 (all 32 jobs) prepared: `hpc/submit_size_bd_contrast_round3.sh`.
+- 2026-11-25: intercepts analysed alongside the contrast in `03` (stage levels at a typical
+  site, intercept-contrast correlation as new question Q6 with stage 2 renumbered Q7-Q9, SD
+  ratio and variance shares, absolute season / year patterns in the supplement).
+- 2026-11-25: m11g retired; contrast models primary (Relation to the unified model). Stage 2a
+  replaces unified `05`; cutoff sensitivity from the naive bootstrap only; environment enters as
+  a moderator of the contrast (stage 2), not of overall infection; GAM environment terms to be
+  re-planned.
 
 ## Open questions
 
@@ -397,3 +455,10 @@ Dated one-liners; the reasoning is in the linked sections.
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
 - Stage 2 climate summaries and trait set to be defined.
+- GAM (`size_bd_gam/`) environment terms without m11g priors. Options to brainstorm: drop the
+  environment terms (as here: control for site / year / event with random effects instead);
+  keep them with weakly informative priors; or replace weather with a seasonal term. The GAM's
+  purpose (finer age resolution for data-rich species) should decide which.
+- Retirement to-dos: manuscript inputs (`unified_03_*`, `unified_05_*`) re-pointed to contrast
+  exports; m11g consistency check in `03`; species-level mean contrasts for the six m11g-only
+  species reported as excluded.
