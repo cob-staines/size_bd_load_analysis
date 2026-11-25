@@ -23,10 +23,12 @@ What each summary means:
   the full subadult - adult difference at a typical site, year and event.
 - **contrast sd** per level (Q2-Q4): how much the contrast varies between sites, site-years
   (within sites) or events (within site-years). Only levels allowed by the species' tier have one.
-  Tier **"fixed"** parts (fewer than 3 co-sampled sites, rule R1) have none: one mean contrast,
-  which mostly reflects those few sites, and consistency is "not estimable". Levels a part cannot
-  separate (R2) and sigma structure (R3) are recorded in the job table (README "Model structure
-  rules").
+  Tier **D** parts have none: one mean contrast, and consistency is "not estimable". The reason
+  is recorded: *few co-sampled sites* (< 3; the mean mostly reflects those sites) or
+  *between-population* (< 25% of swabs in co-sampled sites; the mean mostly compares different
+  populations). A tier D interval covers the sampled sites only, so it is narrower than a
+  species-wide one. Levels a part cannot separate (R2) and sigma structure (R3) are recorded in
+  the job table (README "Contrast levels", "Nuisance structure").
 - **contraction**: 1 - posterior variance / prior variance of a contrast sd. Near 1: the data
   pinned it down. Near 0: the posterior is still the prior (not informed; expected where few
   units are co-sampled). Used to fade out uninformed levels, not as a test.
@@ -47,6 +49,7 @@ Run order: `01_contrast_tiers.Rmd` (job table), cluster fits copied into
 Optional comparisons read `size_bd_unified/intermediates/unified_03_b_spp_lss_draws.parquet`
 (m11g) and `size_bd_season/intermediates/03_all_contrast_summary.csv` (seasonal models).
 
+# Setup
 ```{r}
 #| eval: true
 #| output: false
@@ -54,7 +57,7 @@ Optional comparisons read `size_bd_unified/intermediates/unified_03_b_spp_lss_dr
 #| code-summary: "Show setup code"
 
 # setup
-librarian::shelf(tidyverse, here, brms, posterior, patchwork, arrow)
+librarian::shelf(tidyverse, here, brms, posterior, patchwork, arrow, ggrepel)
 
 models_dir = here("size_bd_contrast", "models")
 figures_dir = here("size_bd_contrast", "figures")
@@ -103,9 +106,9 @@ species_levels = species_label(species_order)
 # level names as used in the model and as shown in tables / plots
 level_labels = c(population = "site", pop_year = "site-year", pop_year_event = "event", all = "all levels")
 
-# tier colors for all plots. "fixed" = one mean contrast, no contrast sd (R1: fewer than 3
-# co-sampled sites), so its mean mostly reflects those sites
-tier_colors = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3", fixed = "#666666")
+# tier colors for all plots. tier = number of levels the contrast varies at (A 3 ... D 0);
+# D = one mean contrast, no contrast sd
+tier_colors = c(A = "#1B9E77", B = "#D95F02", C = "#7570B3", D = "#666666")
 
 # the data each model saw, with grouping columns (to label group contrasts)
 contrast_data = add_contrast_groups(brms_data) %>%
@@ -160,9 +163,11 @@ process_contrast_fit = function(fit, job_row) {
   ids_group = round(seq(1, n_draws, length.out = ndraws_group))
   ids_export = ids_group[round(seq(1, ndraws_group, length.out = ndraws_export))]
 
-  # which population / site-year each event belongs to (ids are unique, so this is a lookup)
+  # which population / site-year each event belongs to (ids are unique, so this is a lookup).
+  # fit$data only keeps variables in the formula, so pop_year / pop_year_event are missing when
+  # both parts drop those levels (R2); they're only needed when a part has those slopes anyway
   units = fit$data %>%
-    distinct(population, pop_year, pop_year_event) %>%
+    distinct(across(any_of(c("population", "pop_year", "pop_year_event")))) %>%
     mutate(across(everything(), as.character))
 
   # group-level deviations of the contrast for one group and part: draws x levels matrix. ranef()
@@ -196,7 +201,7 @@ process_contrast_fit = function(fit, job_row) {
       transmute(job, part, quantity = "mean_contrast", level = NA_character_,
                 group_id = NA_character_, .draw, value = contrast)
 
-    # tier "fixed": one mean contrast, no contrast sds and no group contrasts
+    # tier D: one mean contrast, no contrast sds and no group contrasts
     groups = contrast_slope_groups(tier, has_pop_year, has_event)
     if (length(groups) == 0) {
       return(list(species_draws = species_draws, level_draws = NULL,
@@ -330,14 +335,11 @@ fit_health %>%
 ```{r}
 # job-level attributes carried with every summary
 job_info = jobs_fit %>%
-  select(job, taxon_capture, variant, tier_hu, tier_mu, n_adult, n_subadult,
-         flag_time_segregated, flag_between_population) %>%
+  select(job, taxon_capture, variant, tier_hu, tier_mu, d_reason_hu, d_reason_mu, n_adult,
+         n_subadult, flag_time_segregated) %>%
   left_join(fit_health %>% select(job, fit_ok), by = "job") %>%
   mutate(job_label = if_else(variant == "main", species_label(taxon_capture),
-                             paste0(species_label(taxon_capture), " (", variant, ")")),
-         flag = case_when(flag_between_population ~ "between-population",
-                          flag_time_segregated ~ "time-segregated",
-                          .default = "none"))
+                             paste0(species_label(taxon_capture), " (", variant, ")")))
 
 # ---- mean contrast (Q1) ----
 contrast_agg = f_draw_agg(species_draws, c("job", "part"), "contrast")
@@ -378,7 +380,13 @@ level_summary = level_draws %>%
 species_summary = job_info %>%
   inner_join(contrast_agg, by = "job") %>%
   left_join(typical_agg, by = c("job", "part")) %>%
-  mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu)) %>%
+  # per part: tier, why it is D (if so), and one caveat label for plots and tables. a
+  # between-population part is always D; time-segregated is the one caveat flag
+  mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu),
+         d_reason = if_else(part == "prevalence", d_reason_hu, d_reason_mu),
+         flag = case_when(d_reason == "between-population" ~ "between-population",
+                          flag_time_segregated ~ "time-segregated",
+                          .default = "none")) %>%
   left_join(level_summary %>%
               select(job, part, level, sd_median, sd_lower_95, sd_upper_95, contraction,
                      sign_consistency_median, share_median, cor_median) %>%
@@ -443,6 +451,59 @@ plot_main %>%
 
 ```
 
+## Prevalence vs load contrasts: net and median effect
+```{r}
+#| fig-height: 8
+#| fig-width: 8
+
+# versions of the net effect and median effect scatters in
+# size_bd_unified/03_size_bd_unified_analysis.qmd, built from the main contrast fits, one point
+# per species. both parts are already signed "positive = subadults higher" here (the unified
+# script flips the hu contrast by hand with -hu_...), so no sign change is needed.
+#   net effect = 2 * P(contrast > 0) - 1 (from f_draw_agg): -1 = certainly lower in subadults,
+#                +1 = certainly higher, 0 = no idea. a certainty scale, not an effect size.
+#   median     = posterior median contrast (logit prevalence on x, log load among positives on y)
+# species with no load stage term (tier "none") have no load contrast and are dropped. faded =
+# convergence flag, as elsewhere.
+effect_wide = species_summary %>%
+  filter(variant == "main") %>%
+  select(taxon_capture, fit_ok, part, contrast_median, contrast_net_effect) %>%
+  pivot_wider(names_from = part, values_from = c(contrast_median, contrast_net_effect)) %>%
+  filter(!is.na(contrast_median_prevalence), !is.na(contrast_median_load)) %>%
+  mutate(species = species_label(taxon_capture))
+
+# net effect scatter
+p_net_effect_scatter = ggplot(effect_wide, aes(x = contrast_net_effect_prevalence,
+                                               y = contrast_net_effect_load)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") +
+  geom_point(aes(alpha = fit_ok)) +
+  geom_text_repel(aes(label = species), color = "#333", size = 3, fontface = "italic", max.overlaps = getOption("ggrepel.max.overlaps", default = Inf)) +
+  scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.35), guide = "none") +
+  coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) +
+  theme_minimal() +
+  labs(title = "Net Subadult Effect (Subadult - Adult), contrast models",
+       x = "Net contrast of log odds of Bd detection\n(subadult - adult) [-]",
+       y = "Net contrast of log Bd load density\n(subadult - adult) [-]")
+
+# median effect scatter
+p_median_effect_scatter = ggplot(effect_wide, aes(x = contrast_median_prevalence,
+                                                  y = contrast_median_load)) +
+  geom_vline(xintercept = 0, color = "#aaa") +
+  geom_hline(yintercept = 0, color = "#aaa") +
+  geom_point(aes(alpha = fit_ok)) +
+  geom_text_repel(aes(label = species), color = "#888", fontface = "italic") +
+  scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.35), guide = "none") +
+  theme_minimal() +
+  labs(title = "Median Subadult Effect (Subadult - Adult), contrast models",
+       x = "Median contrast of log odds of Bd detection\n(subadult - adult) [-]",
+       y = "Median contrast of log Bd load density\n(subadult - adult) [-]")
+
+p_net_effect_scatter
+p_median_effect_scatter
+
+```
+
 # Contrast sds against the prior (Q2-Q4)
 ```{r}
 #| fig-height: 10
@@ -490,8 +551,8 @@ p_sd
 
 # one tile per species x level: fill = sign consistency (probability a new site / site-year /
 # event keeps the sign of the mean contrast); faded = contrast sd mostly prior at that level;
-# blank = level not modeled in this species' tier; "fixed" = no contrast sd at any level.
-# built from every main job x part (so "fixed" parts, which have no levels, still get a row)
+# blank = level not modeled in this species' tier; "D" = no contrast sd at any level.
+# built from every main job x part (so tier D parts, which have no levels, still get a row)
 plot_profile = species_summary %>%
   filter(variant == "main") %>%
   select(job, taxon_capture, part, tier) %>%
@@ -503,7 +564,7 @@ plot_profile = species_summary %>%
          level = factor(level_labels[as.character(level)], levels = level_labels),
          # "all levels" has no contraction of its own; show it solid
          tile_alpha = if_else(level == "all levels", 1, pmin(pmax(contraction, 0), 1)),
-         label = case_when(tier == "fixed" & level == "site" ~ "fixed",
+         label = case_when(tier == "D" & level == "site" ~ "D",
                            is.na(sign_consistency_median) ~ "",
                            .default = sprintf("%.0f", 100 * sign_consistency_median)))
 
@@ -562,8 +623,8 @@ interpretation = species_summary %>%
             support = contrast_support,
             informed_levels, most_variable_level,
             sign_consistency_all = round(all_sign_consistency_median, 2),
-            consistency = if_else(tier == "fixed",
-                                  "not estimable (fewer than 3 co-sampled sites)", NA_character_))
+            consistency = if_else(tier == "D", paste0("not estimable (", d_reason, ")"),
+                                  NA_character_))
 
 interpretation
 
@@ -805,13 +866,13 @@ consistency_m11g %>%
 # variation? and are the extra (site-year, event) contrast sds informed at all?
 canorus_jobs = jobs_fit %>% filter(taxon_capture == "anaxyrus_canorus") %>% pull(job)
 
-species_summary %>%
+peace = species_summary %>%
   filter(job %in% canorus_jobs) %>%
   transmute(variant, part, tier, fit_ok,
             contrast = fmt_ci(contrast_median, contrast_lower_95, contrast_upper_95),
             support = contrast_support)
 
-level_summary %>%
+hope = level_summary %>%
   filter(job %in% canorus_jobs) %>%
   left_join(jobs_fit %>% select(job, variant), by = "job") %>%
   transmute(variant, part, level = level_labels[as.character(level)],
@@ -872,6 +933,8 @@ save_plot = function(p, name, width, height) {
 }
 
 save_plot(p_mean, "03_contrast_mean.png", 11, 9)
+save_plot(p_net_effect_scatter, "03_contrast_net_effect_scatter.png", 8, 8)
+save_plot(p_median_effect_scatter, "03_contrast_median_effect_scatter.png", 8, 8)
 save_plot(p_sd, "03_contrast_sds.png", 12, 10)
 save_plot(p_profile, "03_contrast_profile.png", 10, 9)
 save_plot(p_pop_prev, "03_contrast_population_prevalence.png", 14, 14)

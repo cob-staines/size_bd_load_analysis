@@ -12,11 +12,16 @@ In short:
 - **co-sampled unit** (event, site-year, population): >= 5 swabs of each stage (and, for load,
   >= 1 positive swab of each stage)
 - **inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population
-- **tiers**, separately for prevalence (hu) and load (mu): A >= 10 co-sampled events; B >= 5
-  co-sampled site-years; C otherwise; load "none" when a stage has no positives
-- **model structure rules** (added after the first cluster fits): R1 tier C with < 3 co-sampled
-  populations -> "fixed" (no contrast sd); R2 drop a site-year / event level that barely splits
-  its parent; R3 sigma varies by population only with >= 3 populations with >= 10 positives
+- **contrast levels**, separately for prevalence (hu) and load (mu): the contrast varies at a
+  level with >= 3 co-sampled sites / 5 site-years / 10 events, and only if it also varies at the
+  level above; none at all if < 25% of swabs are in co-sampled sites (between-population).
+  **tier** = the result: A (site, site-year, event), B (site, site-year), C (site), D (mean
+  contrast only); load "none" when a stage has no positives
+- **flag**: time-segregated (>= 3 co-sampled site-years, fewer than half as many co-sampled
+  events); a caveat only
+- **nuisance structure** (added after the first cluster fits): R2 drop a site-year / event
+  intercept level that barely splits its parent; R3 sigma varies by population only with >= 3
+  populations with >= 10 positives
 
 Run order: `size_bd_unified/01_model_data.Rmd` (model data), then this script.
 
@@ -107,12 +112,12 @@ event_screen %>%
   arrange(taxon_capture)
 
 ggplot(event_screen, aes(x = n_co + 1, y = fct_rev(taxon_capture), color = unit_def)) +
-  geom_vline(xintercept = tier_a_min_events + 1, linetype = "dashed", color = "grey60") +
+  geom_vline(xintercept = min_co_events_slope + 1, linetype = "dashed", color = "grey60") +
   geom_point() +
   scale_x_log10() +
   facet_wrap(~ min_swabs, labeller = labeller(min_swabs = function(x) paste0(">= ", x, " swabs of each stage"))) +
   labs(x = "co-sampled units + 1 (log scale)", y = NULL, color = "unit",
-       subtitle = paste0("prevalence definition; dashed = tier A threshold (", tier_a_min_events, " units)")) +
+       subtitle = paste0("prevalence definition; dashed = event-level contrast threshold (", min_co_events_slope, " units)")) +
   theme_minimal()
 
 ```
@@ -133,38 +138,38 @@ co_counts
 
 ```
 
-# Inclusion, tiers and flags
+# Inclusion, tiers and flag
 ```{r}
+# contrast levels rule (contrast_tier, contrast_data_functions.R; README "Contrast levels"):
+# prevalence uses the prevalence co-sampled counts, load the load counts. the between-population
+# share (pct_swabs_in_co_pop) is one species-level number used for both parts.
 # time-segregated flag: stages often meet in the same site-year but rarely in the same 14-day
 # event (adults and subadults swabbed at different times of year), so part of the contrast
-# compares different times of year. rule: >= 3 co-sampled site-years and fewer than half as many
-# co-sampled events.
-# between-population flag: < 25% of swabs fall in co-sampled populations, so the contrast mostly
-# compares different populations.
+# compares different times of year. a caveat only; it does not change the model.
 species_table = stage_counts %>%
   left_join(co_counts, by = "taxon_capture") %>%
+  # nuisance structure (README "Nuisance structure"): which levels each part can separate (R2:
+  # hu_has_pop_year, ...) and sigma_by_population (R3). needed first: a contrast slope cannot
+  # sit on a dropped level
+  left_join(level_structure(contrast_data), by = "taxon_capture") %>%
   mutate(
     include = n_adult >= min_n_stage & n_subadult >= min_n_stage & n_co_pop >= min_co_pops,
     exclude_reason = case_when(
       n_adult < min_n_stage | n_subadult < min_n_stage ~ paste0("< ", min_n_stage, " swabs of a stage"),
       n_co_pop < min_co_pops ~ "no co-sampled population",
       .default = NA_character_),
-    # tiers from the co-sampled counts alone (A / B / C)
-    tier_hu_counts = tier_from_counts(n_co_event, n_co_popyear),
+    between_population = pct_swabs_in_co_pop < min_pct_swabs_co_pop,
+    tier_hu = contrast_tier(n_co_pop, n_co_popyear, n_co_event, pct_swabs_in_co_pop,
+                            hu_has_pop_year, hu_has_event),
     # load part: no stage term if a stage has no positive swabs (contrast not estimable)
-    tier_mu_counts = if_else(n_pos_adult == 0 | n_pos_subadult == 0, "none",
-                             tier_from_counts(n_co_load_event, n_co_load_popyear)),
-    flag_time_segregated = n_co_popyear >= 3 & n_co_event < n_co_popyear / 2,
-    flag_between_population = pct_swabs_in_co_pop < 25) %>%
-  # model structure rules (contrast_data_functions.R, README "Model structure rules"):
-  #   R2 which levels each part can separate (hu_has_pop_year, ..., from level_structure);
-  #   R1 + R2 final tiers (final_tier): a slope cannot sit on a dropped level, and tier C with
-  #     < 3 co-sampled populations -> "fixed";
-  #   R3 sigma_by_population
-  left_join(level_structure(contrast_data), by = "taxon_capture") %>%
-  mutate(tier_hu = final_tier(tier_hu_counts, n_co_pop, hu_has_pop_year, hu_has_event),
-         tier_mu = final_tier(tier_mu_counts, n_co_load_pop, mu_has_pop_year, mu_has_event)) %>%
-  mutate(across(c(tier_hu_counts, tier_mu_counts, tier_hu, tier_mu), ~ if_else(include, .x, NA_character_))) %>%
+    tier_mu = contrast_tier(n_co_load_pop, n_co_load_popyear, n_co_load_event, pct_swabs_in_co_pop,
+                            mu_has_pop_year, mu_has_event,
+                            none = n_pos_adult == 0 | n_pos_subadult == 0),
+    d_reason_hu = d_reason(tier_hu, n_co_pop, pct_swabs_in_co_pop),
+    d_reason_mu = d_reason(tier_mu, n_co_load_pop, pct_swabs_in_co_pop),
+    flag_time_segregated = n_co_popyear >= time_seg_min_popyears &
+      n_co_event < n_co_popyear * time_seg_max_event_ratio) %>%
+  mutate(across(c(tier_hu, tier_mu, d_reason_hu, d_reason_mu), ~ if_else(include, .x, NA_character_))) %>%
   arrange(desc(include), tier_hu, tier_mu, taxon_capture)
 
 # excluded species and why
@@ -172,27 +177,26 @@ species_table %>%
   filter(!include) %>%
   select(taxon_capture, n_adult, n_subadult, n_co_pop, exclude_reason)
 
-# included species: tiers, key counts and flags
+# included species: tiers (with the reason for D), the counts behind them, and the flag
 species_table %>%
   filter(include) %>%
-  select(taxon_capture, tier_hu, tier_mu, n_co_event, n_co_load_event, n_co_popyear,
-         n_co_load_popyear, n_co_pop, flag_time_segregated, flag_between_population)
+  select(taxon_capture, tier_hu, d_reason_hu, tier_mu, d_reason_mu,
+         n_co_pop, n_co_popyear, n_co_event, n_co_load_pop, n_co_load_popyear, n_co_load_event,
+         pct_swabs_in_co_pop, flag_time_segregated)
 
 # tier cross-tab (prevalence x load)
 species_table %>%
   filter(include) %>%
   count(tier_hu, tier_mu)
 
-# what the structure rules changed: counts-based vs final tiers, dropped levels, sigma
+# nuisance structure: species with a dropped intercept level (R2) or a constant sigma (R3)
 species_table %>%
   filter(include) %>%
-  select(taxon_capture, tier_hu_counts, tier_hu, tier_mu_counts, tier_mu, n_co_pop, n_co_load_pop,
-         hu_py_per_pop, hu_ev_per_py, mu_py_per_pop, mu_ev_per_py,
+  select(taxon_capture, hu_py_per_pop, hu_ev_per_py, mu_py_per_pop, mu_ev_per_py,
          hu_has_pop_year, hu_has_event, mu_has_pop_year, mu_has_event,
          n_pops_pos_sigma, sigma_by_population) %>%
   mutate(across(where(is.double), ~ round(.x, 2))) %>%
-  filter(tier_hu != tier_hu_counts | tier_mu != tier_mu_counts |
-           !(hu_has_pop_year & hu_has_event & mu_has_pop_year & mu_has_event) | !sigma_by_population)
+  filter(!(hu_has_pop_year & hu_has_event & mu_has_pop_year & mu_has_event) | !sigma_by_population)
 
 ```
 
@@ -200,7 +204,7 @@ species_table %>%
 ```{r}
 # one row per model fit. main fits use each species' tiers; sensitivity fits override them (the
 # level and sigma structure columns come from the species either way).
-# anaxyrus_canorus: tier C by the rules (load: "fixed"), but a focal species with 13 co-sampled
+# anaxyrus_canorus: tier C by the rule (load: D), but a focal species with 13 co-sampled
 # events at >= 2 swabs, so also fit with the tier A structure for both parts.
 sensitivity_jobs = tribble(
   ~taxon_capture,      ~variant,     ~tier_hu, ~tier_mu,
@@ -216,9 +220,13 @@ contrast_jobs = species_table %>%
   transmute(taxon_capture, variant = "main", tier_hu, tier_mu) %>%
   bind_rows(sensitivity_jobs) %>%
   left_join(species_table %>% select(taxon_capture, all_of(structure_cols), n_adult, n_subadult,
-                                     flag_time_segregated, flag_between_population),
+                                     d_reason_hu, d_reason_mu, flag_time_segregated),
             by = "taxon_capture") %>%
-  mutate(n = n_adult + n_subadult) %>%
+  mutate(n = n_adult + n_subadult,
+         # the reason for D belongs to the species' own tier: clear it where a sensitivity fit
+         # overrides that tier
+         d_reason_hu = if_else(tier_hu == "D", d_reason_hu, NA_character_),
+         d_reason_mu = if_else(tier_mu == "D", d_reason_mu, NA_character_)) %>%
   arrange(taxon_capture, variant) %>%
   # 0-based, as SLURM_ARRAY_TASK_ID
   mutate(array_index = row_number() - 1)

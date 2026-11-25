@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 round 2 fits pending (model structure rules R1-R3); analysis drafted; stage 2 planned
+status: stage 1 round 3 fits pending (consolidated contrast rule: n. viridescens, l. chiricahuensis); analysis drafted; stage 2 planned
 sibling_of: size_bd_unified (m11g)
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
@@ -17,14 +17,22 @@ co_sampled_unit:
   prevalence: ">= 5 swabs of each stage"
   load: ">= 5 swabs of each stage and >= 1 positive swab of each stage"
 inclusion: ">= 20 swabs of each stage and >= 1 co-sampled population (prevalence definition)"
-tiers:  # assigned separately for hu (prevalence counts) and mu (load counts)
-  A: ">= 10 co-sampled pop_year_event units"
-  B: ">= 5 co-sampled pop_year units (not A)"
-  C: "otherwise"
-  fixed: "R1: tier C with < 3 co-sampled populations; mean contrast only, no contrast sd"
-  none: "mu only: a stage has no positive swabs; no stage term in mu"
-structure_rules:  # applied after the counts-based tiers (README "Model structure rules")
-  R1_min_co_pops_slope: 3
+contrast_rule:  # per part (hu: prevalence counts, mu: load counts); README "Contrast levels"
+  # the contrast varies at a level with at least this many co-sampled units there, and only if
+  # it also varies at the level above (nested)
+  min_co_units: {population: 3, pop_year: 5, pop_year_event: 10}
+  # no contrast sd at any level when fewer swabs than this sit in co-sampled populations
+  # (species-level, prevalence definition)
+  min_pct_swabs_in_co_pop: 25
+tiers:  # names for the result: number of levels at which the contrast varies
+  A: "population + pop_year + pop_year_event"
+  B: "population + pop_year"
+  C: "population"
+  D: "none: mean contrast only (reason: < 3 co-sampled populations, or between-population)"
+  none: "mu only, off the scale: a stage has no positive swabs; no stage term in mu"
+flags:  # interpretation caveat only; prevalence co-sampling counts
+  time_segregated: ">= 3 co-sampled pop_year units and n co-sampled events < n co-sampled pop_years / 2"
+nuisance_structure:  # intercept levels and sigma; README "Nuisance structure"
   R2_min_children_per_parent: 1.1   # site-years per site, events per site-year; per part
   R3_sigma_by_population: ">= 3 populations with >= 10 positive swabs"
 sensitivity_fits:
@@ -99,19 +107,27 @@ Stage 2 (across species, planned):
 - **Inclusion**: >= 20 swabs of each stage and >= 1 co-sampled population. Species without a
   co-sampled population have no within-site comparison; their contrast would rest entirely on
   comparing different populations.
-- **Tiers** (assigned separately for prevalence and load, from the co-sampled counts):
-  - **A**: >= 10 co-sampled events -> contrast varies by population, site-year and event
-  - **B**: >= 5 co-sampled site-years -> contrast varies by population and site-year
-  - **C**: otherwise -> contrast varies by population only; flagged as weakly identified
-  - **fixed**: tier C with fewer than 3 co-sampled populations (rule R1) -> one mean contrast,
-    no contrast SD; the mean mostly reflects those few sites
-  - **none** (load only): one stage has no positive swabs; the load part has no stage term
-  - tiers can be lowered by rule R2 (below): a contrast slope cannot sit on a dropped level
-- **Flags** (interpretation caveats, from `01_contrast_tiers.Rmd`):
-  - *between-population*: few swabs fall in co-sampled populations (e.g. *N. viridescens*), so
-    the contrast mostly compares different populations
-  - *time-segregated*: stages are found in the same site-years but rarely the same events (e.g.
-    *P. crucifer*), so the contrast partly compares different times of year
+- **Contrast levels** (one rule, applied separately to prevalence and load from their
+  co-sampled counts): the contrast varies at a level when there are at least **3 co-sampled
+  sites / 5 co-sampled site-years / 10 co-sampled events**, and only if it also varies at the
+  level above (an event-level contrast needs a site-year-level one). No level gets a contrast SD
+  when **fewer than 25% of the species' swabs fall in co-sampled sites**: the contrast then
+  mostly compares different populations.
+- **Tiers** name the result, by the number of levels at which the contrast varies:
+  - **A** (3): site, site-year and event
+  - **B** (2): site and site-year
+  - **C** (1): site
+  - **D** (0): one mean contrast, no contrast SD. Reported with its reason: *few co-sampled
+    sites* (< 3; the mean mostly reflects those sites) or *between-population* (e.g.
+    *N. viridescens*: 2.6% of swabs in co-sampled sites). Its interval covers uncertainty about
+    the sampled sites only, so it is narrower than it would be for a species-wide mean.
+  - **none** (load only, off the scale): one stage has no positive swabs, so there is no load
+    contrast and no stage term
+- **Flag** (an interpretation caveat; it does not change the model): *time-segregated* when
+  there are **>= 3 co-sampled site-years and fewer co-sampled events than half the number of
+  co-sampled site-years** (prevalence definition; e.g. *P. crucifer*). Stages are found in the
+  same site-years but rarely in the same 14-day event, so the contrast partly compares different
+  times of year.
 
 ## Stage 1 model
 
@@ -124,7 +140,7 @@ One model per species (and per sensitivity variant), hurdle lognormal, no weathe
 ~ 1 + stage_c + (1 + stage_c | population) + (1 + stage_c | pop_year) + (1 | pop_year_event)
 # tier C
 ~ 1 + stage_c + (1 + stage_c | population) + (1 | pop_year) + (1 | pop_year_event)
-# fixed
+# tier D
 ~ 1 + stage_c + (1 | population) + (1 | pop_year) + (1 | pop_year_event)
 # none (mu only)
 ~ 1 + (1 | population) + (1 | pop_year) + (1 | pop_year_event)
@@ -141,33 +157,64 @@ sigma ~ 1 + (1 | population)   # or sigma ~ 1 (R3)
 - Intercepts vary at every level in every tier: they absorb site, year and event-wide swings
   (outbreaks, seasonal peaks) whether or not both stages were swabbed, which also keeps
   differences in sampling timing between stages from being read as a stage contrast. Contrast
-  slopes are only added at levels the data can support (the tiers).
+  slopes are only added at levels the data can support (the contrast levels rule).
 - All data are used. Contrast SDs are informed mainly by co-sampled units; single-stage units
   inform the intercepts. The >= 5-swab rule chooses model terms, it does not filter data.
 - Priors: see the front matter. The contrast SD prior, exponential(2), is tighter than the
   intercept SDs so a consistent contrast is the default and variation must be earned from the
   data (revisit after the prior vs posterior checks).
-- Sensitivity: *A. canorus* (tier C by the rules, but a focal species with 13 co-sampled events
-  at >= 2 swabs) is also fit with the tier A structure.
+- Sensitivity: *A. canorus* (tier C prevalence / D load by the rule, but a focal species with
+  13 co-sampled events at >= 2 swabs) is also fit with the tier A structure.
 
-## Model structure rules
+## Contrast levels: why this rule
 
+The rule decides which contrast SDs are estimated; everything readers interpret follows from
+it. It replaced, in round 3 (2026-11-25), a counts-based tier table plus two exceptions that
+answered the same question ("can the data say how much the contrast varies at this level?"):
+
+- Round 2's **R1** (a tier C part with < 3 co-sampled sites gets no contrast SD) is the site
+  threshold. In the first fits a site-level contrast SD over one or two sites produced funnels
+  (divergences where the SD is near 0).
+- The **between-population** condition was a flag; it now removes the contrast SDs. In
+  *N. viridescens* (round 2: Rhat 1.03, 34 divergences on the site-level contrast SD) about 276
+  of 281 sites have mostly one stage. At such a site only `r_intercept - 0.5 r_contrast` is
+  identified, so the site-level contrast SD and its correlation with the intercept sit on
+  hundreds of ridges, informed by only 4-5 co-sampled sites.
+- **Nesting** (a level's contrast needs the level above) replaced "A: >= 10 events" regardless of
+  site-years. It changed one part: *L. chiricahuensis* prevalence (10 events, 4 site-years)
+  from A to C. Its round 2 site-year and event contrast SDs were both 0.33 [0.01, 1.59], the
+  prior.
+
+Every other species and part kept its round 2 tier. Code: `contrast_tier()` in
+`contrast_data_functions.R`.
+
+**Threshold sensitivity** (thresholds fixed a priori, not tuned): the 25% cutoff is robust
+(*N. viridescens* 2.6%; the next species not in D, *P. crucifer*, 58%). Species exactly at a
+threshold: 3 co-sampled sites (*H. phyllodes*, *A. canorus*, *B. faber*, prevalence), 5
+site-years (*L. warszewitschii*, *R. pipiens*, *A. fowleri*), 10 events (*C. panamansis*,
+*R. catesbeiana*).
+
+**What the data inform**: in round 2, contrast SDs clearly moved away from the prior only in the
+data-rich *Rana* (*R. cascadae*, *R. clamitans*, *R. muscosa*, *R. sierrae*; perhaps the
+*R. catesbeiana* event level). Tier B and C SDs mostly reflect the prior. They are kept because
+they widen the mean contrast's interval for between-site variation, which keeps tiers A-C
+comparable; tier D intervals lack this (see Definitions).
+
+## Nuisance structure
+
+Rules for terms that absorb variation but are not interpreted: intercept levels and sigma.
 Added after the first cluster fits (2026-11-24), where 13 of 32 jobs failed the convergence
 flag. The failures traced to terms the data could not identify, not to the sampler (small
 species already ran at adapt_delta 0.99). Details and evidence: `02_contrast_modeling.qmd`
-("Fit rounds"). Each rule adds a term only where the data can support it, like the tiers. Rules
-are applied per part, from the swabs that inform it: all swabs for prevalence, positive swabs
-for load. Code: `level_structure()` and `final_tier()` in `contrast_data_functions.R`; results in
-the species and job tables (`tier_*_counts` = before the rules).
+("Fit rounds"). Applied per part, from the swabs that inform it: all swabs for prevalence,
+positive swabs for load. Code: `level_structure()` in `contrast_data_functions.R`. (Labels R2
+and R3 are kept from round 2, where R1 was the site threshold, now part of the contrast rule.)
 
-- **R1, "fixed" tier**: a tier C part with fewer than 3 co-sampled populations gets no contrast
-  SD. One or two sites cannot say how much the contrast varies between sites; in the first fits
-  this term produced funnels (divergences where the SD is near 0). The mean contrast is kept, and
-  reported with the caveat that it mostly reflects those sites.
 - **R2, separable levels**: the site-year (event) intercept is kept only if there are at least
   1.1 site-years per site (events per site-year). Otherwise the two levels are nearly the same
   groups and only their summed variance is identified (e.g. *N. viridescens*: 1.02 and 1.02,
-  Rhat 1.12). Dropping a level also drops any contrast slope on it, which can lower the tier.
+  Rhat 1.12). A contrast slope cannot sit on a dropped level; under the current rule this
+  changes no tier.
 - **R3, sigma**: sigma varies by population only with at least 3 populations that have at
   least 10 positive swabs; otherwise `sigma ~ 1`. Above that threshold the site-level SD of
   log sigma was clearly informed in the first fits (small, 0.13-0.33); below it the posterior
@@ -179,7 +226,8 @@ the species and job tables (`tier_*_counts` = before the rules).
 ## Stage 1 analyses (`03_contrast_analysis.Rmd`)
 
 - Per species and part: mean contrast (median, 50 / 95% intervals, pd, support via
-  `f_draw_agg`), contrast SD per level against its prior, variance shares, tier and flags.
+  `f_draw_agg`), contrast SD per level against its prior, variance shares, tier (with the reason
+  for D) and the time-segregated flag.
 - Tier A: event contrasts against day of year (calendar axis from each species' seasonal
   origin), optionally with life-history windows.
 - Consistency: mean contrast vs m11g; *A. canorus* sensitivity vs main fit; optionally vs the
@@ -207,8 +255,8 @@ work in `size_bd_unified/env_functions.R`). Seasonal (climatology) slopes are re
 
 | File | Role | Status |
 |---|---|---|
-| `contrast_data_functions.R` | shared constants, grouping columns, co-sampling counts, tier rules | written |
-| `01_contrast_tiers.Rmd` | event definition screen (unit definitions x swab thresholds), counts, inclusion, tiers, flags; writes the event screen, species table and cluster job table | written |
+| `contrast_data_functions.R` | shared constants, grouping columns, co-sampling counts, contrast rule, nuisance structure | written |
+| `01_contrast_tiers.Rmd` | event definition screen (unit definitions x swab thresholds), counts, inclusion, tiers, flag; writes the event screen, species table and cluster job table | written |
 | `contrast_model_functions.R` | data prep, formula and prior builders by tier (copied into the cluster script) | written |
 | `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | written |
 | `r-brms-contained/size_bd_contrast_modeling.R` + `hpc/` | cluster fits, one job per array index (`hpc/submit_size_bd_contrast.sh` submits the four resource groups) | written |
