@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 in development (cluster scripts written, fits next); stage 2 planned
+status: stage 1 fitted, analysis drafted (03_contrast_analysis.Rmd); stage 2 planned
 sibling_of: size_bd_unified (m11g)
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
 response: bd_load_co100_density
@@ -139,7 +139,7 @@ sigma ~ 1 + (1 | population)
 - Sensitivity: *A. canorus* (tier C by the rules, but a focal species with 13 co-sampled events
   at >= 2 swabs) is also fit with the tier A structure.
 
-## Stage 1 analyses (`03_contrast_analysis.Rmd`, planned)
+## Stage 1 analyses (`03_contrast_analysis.Rmd`)
 
 - Per species and part: mean contrast (median, 50 / 95% intervals, pd, support via
   `f_draw_agg`), contrast SD per level against its prior, variance shares, tier and flags.
@@ -175,7 +175,7 @@ work in `size_bd_unified/env_functions.R`). Seasonal (climatology) slopes are re
 | `contrast_model_functions.R` | data prep, formula and prior builders by tier (copied into the cluster script) | written |
 | `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | written |
 | `r-brms-contained/size_bd_contrast_modeling.R` + `hpc/` | cluster fits, one job per array index (`hpc/submit_size_bd_contrast.sh` submits the four resource groups) | written |
-| `03_contrast_analysis.Rmd` | stage 1 results, consistency checks, stage 2 exports | planned |
+| `03_contrast_analysis.Rmd` | stage 1 results (mean contrasts, contrast sds, sign consistency, variance shares, group contrasts), consistency checks, stage 2 exports | written |
 | `04_contrast_stage2.qmd` | cross-species contrast models | planned |
 
 Outputs: `intermediates/` (tables), `models/` (fits, not tracked), `figures/`.

@@ -31,17 +31,26 @@ add_contrast_groups = function(df) {
 }
 
 # ---- co-sampling counts ----------------------------------------------------------------------
-# per species: number of units (of the column `unit`), co-sampled units for prevalence and load,
-# and the share of swabs that sit in co-sampled units
-count_co_units = function(df, unit, response = response_col,
-                          min_swabs = min_swabs_unit, min_pos = min_pos_unit) {
+# per unit (of the column `unit`, e.g. pop_year_event): swabs and positives per stage, and whether
+# the unit is co-sampled for prevalence (co) and load (co_load). the one definition of a
+# co-sampled unit, used for the tier counts below and to mark group contrasts in
+# 03_contrast_analysis.Rmd. expects both stages to occur somewhere in df.
+co_unit_flags = function(df, unit, response = response_col,
+                         min_swabs = min_swabs_unit, min_pos = min_pos_unit) {
   df %>%
     group_by(taxon_capture, unit_id = .data[[unit]], life_stage_simple) %>%
     summarise(n = n(), n_pos = sum(.data[[response]] > 0), .groups = "drop") %>%
     pivot_wider(names_from = life_stage_simple, values_from = c(n, n_pos), values_fill = 0) %>%
     mutate(co = n_adult >= min_swabs & n_subadult >= min_swabs,
-           co_load = co & n_pos_adult >= min_pos & n_pos_subadult >= min_pos,
-           n_unit = n_adult + n_subadult) %>%
+           co_load = co & n_pos_adult >= min_pos & n_pos_subadult >= min_pos)
+}
+
+# per species: number of units (of the column `unit`), co-sampled units for prevalence and load,
+# and the share of swabs that sit in co-sampled units
+count_co_units = function(df, unit, response = response_col,
+                          min_swabs = min_swabs_unit, min_pos = min_pos_unit) {
+  co_unit_flags(df, unit, response, min_swabs, min_pos) %>%
+    mutate(n_unit = n_adult + n_subadult) %>%
     group_by(taxon_capture) %>%
     summarise(n_units = n(),
               n_co = sum(co),
