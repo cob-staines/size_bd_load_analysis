@@ -19,8 +19,8 @@ In short:
   level above; none at all if < 25% of swabs are in co-sampled sites (between-population).
   **tier** = the result: A (site, site-year, event), B (site, site-year), C (site), D (mean
   contrast only); load "none" when a stage has no positives
-- **flag**: time-segregated (>= 3 co-sampled site-years, fewer than half as many co-sampled
-  events); a caveat only
+- **flag**: time-segregated (fewer co-sampled events than half the number of co-sampled
+  site-years); a caveat only
 - **nuisance structure** (added after the first cluster fits): R2 drop a site-year / event
   intercept level that barely splits its parent; R3 sigma varies by population only with >= 3
   populations with >= 20 positives (10 until round 3)
@@ -185,7 +185,9 @@ co_counts
 # share (pct_swabs_in_co_pop) is one species-level number used for both parts.
 # time-segregated flag: stages often meet in the same site-year but rarely in the same survey
 # event (adults and subadults swabbed at different times of year), so part of the contrast
-# compares different times of year. a caveat only; it does not change the model.
+# compares different times of year. a caveat only; it does not change the model. no minimum
+# number of co-sampled site-years (2026-11-26; was >= 3): with 0 site-years the condition is
+# false anyway, and the minimum had left out species with 1-2 site-years and 0 events.
 species_table = stage_counts %>%
   left_join(co_counts, by = "taxon_capture") %>%
   # nuisance structure (README "Nuisance structure"): which levels each part can separate (R2:
@@ -207,8 +209,7 @@ species_table = stage_counts %>%
                             none = n_pos_adult == 0 | n_pos_subadult == 0),
     d_reason_hu = d_reason(tier_hu, n_co_pop, pct_swabs_in_co_pop),
     d_reason_mu = d_reason(tier_mu, n_co_load_pop, pct_swabs_in_co_pop),
-    flag_time_segregated = n_co_popyear >= time_seg_min_popyears &
-      n_co_event < n_co_popyear * time_seg_max_event_ratio) %>%
+    flag_time_segregated = n_co_event < n_co_popyear * time_seg_max_event_ratio) %>%
   mutate(across(c(tier_hu, tier_mu, d_reason_hu, d_reason_mu), ~ if_else(include, .x, NA_character_))) %>%
   arrange(desc(include), tier_hu, tier_mu, taxon_capture)
 

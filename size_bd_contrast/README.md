@@ -34,7 +34,7 @@ tiers:  # names for the result: number of levels at which the contrast varies
   D: "none: mean contrast only (reason: < 3 co-sampled populations, or between-population)"
   none: "mu only, off the scale: a stage has no positive swabs; no stage term in mu"
 flags:  # interpretation caveat only; prevalence co-sampling counts
-  time_segregated: ">= 3 co-sampled pop_year units and n co-sampled events < n co-sampled pop_years / 2"
+  time_segregated: "n co-sampled events < n co-sampled pop_years / 2 (so >= 1 co-sampled pop_year)"   # >= 3 pop_years until 2026-11-26
 nuisance_structure:  # intercept levels and sigma; README "Nuisance structure"
   R2_min_children_per_parent: 1.1   # site-years per site, events per site-year; per part
   R3_sigma_by_population: ">= 3 populations with >= 20 positive swabs"   # 10 until round 3
@@ -140,10 +140,20 @@ Stage 2 (across species, planned):
   - **none** (load only, off the scale): one stage has no positive swabs, so there is no load
     contrast and no stage term
 - **Flag** (an interpretation caveat; it does not change the model): *time-segregated* when
-  there are **>= 3 co-sampled site-years and fewer co-sampled events than half the number of
-  co-sampled site-years** (prevalence definition; e.g. *P. crucifer*). Stages are found in the
+  there are **fewer co-sampled events than half the number of co-sampled site-years**
+  (prevalence definition; e.g. *P. crucifer*, 9 site-years, 1 event). Stages are found in the
   same site-years but rarely in the same survey event, so the contrast partly compares different
   times of year.
+  - No minimum number of site-years (until 2026-11-26: >= 3). With 1-2 site-years the ratio is
+    lumpy (one event moves it across 0.5), but the minimum left out the most segregated species:
+    *L. blairi* (2 site-years, 0 events), *R. sylvatica*, *S. albomaculata*, *S. holbrookii*
+    (1, 0). These are tier D (*few co-sampled sites*), a caveat about how many sites, not about
+    timing. Threshold sensitivity: *R. luteiventris* sits exactly at the cutoff (2 site-years,
+    1 event, ratio 0.5; not flagged).
+  - A co-sampled event needs >= 5 swabs of each stage, so a low ratio can also mean both stages
+    were swabbed in the same runs but in small numbers (e.g. weekly visits with 2-3 swabs per
+    stage), not at different times. Check the species' event counts before reading the flag as
+    seasonal separation.
 
 ## Stage 1 model
 
@@ -457,6 +467,14 @@ Dated one-liners; the reasoning is in the linked sections.
   >= 20 positive swabs in >= 3 sites, which drops `sigma ~ (1 | population)` from *P. regilla*,
   *S. albomaculata*, *S. flotator* and *S. sila* (none informed); no tier changes. Round 4 refits
   those four (Nuisance structure, `02` "Fit rounds").
+- 2026-11-26: time-segregated flag drops its >= 3 co-sampled site-years minimum; the minimum
+  had excluded the most segregated species. Flagged: 7 -> 11 species (adds *L. blairi*,
+  *R. sylvatica*, *S. albomaculata*, *S. holbrookii*; all tier D, few co-sampled sites). Caveat
+  only, no refit (Definitions).
+- 2026-11-26: full power-scaling check in `02` ("Prior sensitivity") computes the
+  log-likelihood summed per draw in blocks of draws instead of calling priorsense on the
+  brmsfit, which built the full draws x swabs matrices and was OOM-killed at 30 GB (*R. sierrae*).
+  Same result on *R. clamitans* by both routes.
 
 ## Open questions
 

@@ -22,9 +22,10 @@ min_co_popyears_slope = 5    # site-year-level contrast sd: >= 5 co-sampled site
 min_co_events_slope = 10     # event-level contrast sd: >= 10 co-sampled events
 min_pct_swabs_co_pop = 25    # no contrast sd at any level if < 25% of swabs are in co-sampled
                              # populations (between-population: tier D)
-# time-segregated flag (caveat only): >= 3 co-sampled site-years, and fewer co-sampled events
-# than half the number of co-sampled site-years
-time_seg_min_popyears = 3
+# time-segregated flag (caveat only): fewer co-sampled events than half the number of
+# co-sampled site-years (so >= 1 co-sampled site-year). no minimum number of site-years
+# (2026-11-26; was >= 3): the minimum left out the most segregated species (1-2 co-sampled
+# site-years, 0 co-sampled events, e.g. l. blairi)
 time_seg_max_event_ratio = 0.5
 # nuisance structure (2026-11-25, after the first cluster fits: divergences and poor mixing
 # traced to terms the data could not identify; see README "Nuisance structure")

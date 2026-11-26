@@ -51,6 +51,14 @@ What each summary means:
 - **group contrasts**: each population's (site-year's, event's) contrast = mean + its deviations
   down the hierarchy. Groups where both stages were not co-sampled are shrunk toward their parent
   and are marked, so they are not read as observed contrasts.
+- **flag** (a caveat label per species and part; it does not change the model):
+  *between-population* = a tier D part whose species has < 25% of swabs in co-sampled sites;
+  *time-segregated* = fewer co-sampled events than half the number of co-sampled site-years (no
+  minimum number of site-years since 2026-11-26), so the contrast partly compares different
+  times of year. Computed in `01_contrast_tiers.Rmd` and read from the job table. A
+  time-segregated species can also be tier D (*few co-sampled sites*, e.g. *L. blairi*); the
+  plots show the flag and the tier together. A low event count can also come from small events
+  (< 5 swabs of a stage per survey run) rather than different times: README "Definitions".
 
 Run order: `01_contrast_tiers.Rmd` (job table), cluster fits copied into
 `size_bd_contrast/models/`, `02_contrast_modeling.qmd` (full model checks), then this script.
@@ -508,7 +516,8 @@ species_summary = job_info %>%
   inner_join(contrast_agg, by = "job") %>%
   left_join(typical_agg, by = c("job", "part")) %>%
   # per part: tier, why it is D (if so), and one caveat label for plots and tables. a
-  # between-population part is always D; time-segregated is the one caveat flag
+  # between-population part is always D; time-segregated is the one caveat flag (any tier,
+  # including D for few co-sampled sites; flag_time_segregated comes from 01's job table)
   mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu),
          d_reason = if_else(part == "prevalence", d_reason_hu, d_reason_mu),
          flag = case_when(d_reason == "between-population" ~ "between-population",
@@ -549,9 +558,10 @@ structure_table = jobs_fit %>%
   transmute(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
             `hu tier` = tier_hu,
             `mu tier` = tier_mu,
-            sigma_by_population = if_else(sigma_by_population, "yes", "no")) %>%
+            sigma_by_population = if_else(sigma_by_population, "yes", "no"),
+            flag_time_segregated = if_else(flag_time_segregated, "yes", "no")) %>%
   pivot_longer(-species, names_to = "column", values_to = "value") %>%
-  mutate(column = factor(column, levels = c("hu tier", "mu tier", "sigma_by_population")))
+  mutate(column = factor(column, levels = c("hu tier", "mu tier", "sigma_by_population", "flag_time_segregated")))
 
 structure_colors = c(tier_colors, none = "grey90", yes = "#E6AB02", no = "grey80")
 
