@@ -23,7 +23,7 @@ In short:
   events); a caveat only
 - **nuisance structure** (added after the first cluster fits): R2 drop a site-year / event
   intercept level that barely splits its parent; R3 sigma varies by population only with >= 3
-  populations with >= 10 positives
+  populations with >= 20 positives (10 until round 3)
 
 Run order: `size_bd_unified/01_model_data.Rmd` (model data), then this script.
 

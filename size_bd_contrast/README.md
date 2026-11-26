@@ -37,7 +37,7 @@ flags:  # interpretation caveat only; prevalence co-sampling counts
   time_segregated: ">= 3 co-sampled pop_year units and n co-sampled events < n co-sampled pop_years / 2"
 nuisance_structure:  # intercept levels and sigma; README "Nuisance structure"
   R2_min_children_per_parent: 1.1   # site-years per site, events per site-year; per part
-  R3_sigma_by_population: ">= 3 populations with >= 10 positive swabs"
+  R3_sigma_by_population: ">= 3 populations with >= 20 positive swabs"   # 10 until round 3
 sensitivity_fits:
   - {taxon_capture: anaxyrus_canorus, variant: sens_tierA, tier_hu: A, tier_mu: A}
 priors:
@@ -233,9 +233,17 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
   Rhat 1.12). A contrast slope cannot sit on a dropped level; under the current rule this
   changes no tier.
 - **R3, sigma**: sigma varies by population only with at least 3 populations that have at
-  least 10 positive swabs; otherwise `sigma ~ 1`. Above that threshold the site-level SD of
-  log sigma was clearly informed in the first fits (small, 0.13-0.33); below it the posterior
-  was mostly the prior. `sigma ~ 1` is an assumption (same spread of log load at all sites), not
+  least 20 positive swabs; otherwise `sigma ~ 1`. A site's sigma (spread of log load among its
+  positives) is learned only from that site's positive swabs, so the count of positives per
+  site, not the size of the loads, is what informs it. The threshold was 10 from the first fits
+  and was raised to 20 after round 3: the four species with at least 3 sites at 10 but not at
+  20 positives (*P. regilla*, *S. albomaculata*, *S. flotator*, *S. sila*) all had a site-level
+  SD of log sigma consistent with zero (5% quantile 0.01-0.02), and *S. flotator* had 25
+  divergences in that SD's funnel. Every species whose SD was clearly informed (*R. cascadae*,
+  *R. catesbeiana*, *R. clamitans*, *R. muscosa*, *R. sierrae*, *N. viridescens*, *R. pipiens*,
+  *L. sphenocephalus*; 0.13-0.34) has at least 3 sites with at least 20 positives. The change
+  is calibrated on fits (as the first threshold was), applied to every species alike;
+  *R. luteiventris* keeps an uninformed SD at exactly 3 such sites and samples cleanly. `sigma ~ 1` is an assumption (same spread of log load at all sites), not
   a finding. Sigma does not enter the load contrast (a difference in mean log load), but where
   sites differ in spread (labs, protocols, outbreak phase), modeling it keeps that noise out of
   the contrast SDs, which is why it is kept where the data support it.
@@ -444,6 +452,11 @@ Dated one-liners; the reasoning is in the linked sections.
   replaces unified `05`; cutoff sensitivity from the naive bootstrap only; environment enters as
   a moderator of the contrast (stage 2), not of overall infection; GAM environment terms to be
   re-planned.
+- 2026-11-26: round 3 results: 31 of 32 pass; *S. flotator* fails with 25 divergences on
+  `sd_population__sigma_Intercept` (5 at the tolerance in round 2). R3 raised from >= 10 to
+  >= 20 positive swabs in >= 3 sites, which drops `sigma ~ (1 | population)` from *P. regilla*,
+  *S. albomaculata*, *S. flotator* and *S. sila* (none informed); no tier changes. Round 4 refits
+  those four (Nuisance structure, `02` "Fit rounds").
 
 ## Open questions
 

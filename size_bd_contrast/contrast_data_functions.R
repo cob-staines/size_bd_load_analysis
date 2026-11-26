@@ -30,8 +30,8 @@ time_seg_max_event_ratio = 0.5
 # traced to terms the data could not identify; see README "Nuisance structure")
 min_children_per_parent = 1.1  # R2: keep the site-year (event) intercept only if there are >= 1.1
                                #     site-years per site (events per site-year)
-min_pos_sigma_pop = 10     # R3: sigma varies by population only with >= 3 populations ...
-min_pops_sigma = 3         #     ... that have >= 10 positive swabs each
+min_pos_sigma_pop = 20     # R3: sigma varies by population only with >= 3 populations ...
+min_pops_sigma = 3         #     ... that have >= 20 positive swabs each (10 until round 3)
 
 # ---- grouping columns ------------------------------------------------------------------------
 # stage_c: -0.5 adult, +0.5 subadult. the intercept is then the midpoint of the two stages and
@@ -154,9 +154,12 @@ d_reason = function(tier, n_co_pops, pct_swabs_in_co_pop) {
 #       their summed variance is identified, and the sampler wanders along the split (e.g.
 #       n. viridescens: 1.02 site-years per site, 1.02 events per site-year).
 #   R3: sigma ~ (1 | population) only with >= min_pops_sigma populations that have
-#       >= min_pos_sigma_pop positive swabs; otherwise sigma ~ 1. in the first fits, the site-level
-#       sd of sigma was clearly informed above this threshold (small, 0.1-0.3 on the log scale)
-#       and mostly prior below it.
+#       >= min_pos_sigma_pop positive swabs; otherwise sigma ~ 1. a site's sigma (spread of log
+#       load among positives) is learned only from that site's positive swabs. set at 10 from the
+#       first fits; raised to 20 after round 3, where all four species with >= 3 sites at 10 but
+#       not at 20 positives had an uninformed site-level sd of sigma (5% quantile ~0.01) and
+#       s. flotator had 25 divergences in its funnel. every species whose sd was clearly
+#       informed has >= 3 sites with >= 20 positives.
 level_structure = function(df, response = response_col) {
   separable = function(x, prefix) {
     x %>%

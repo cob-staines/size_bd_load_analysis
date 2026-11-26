@@ -277,6 +277,19 @@ it only for *R. clamitans*, *R. muscosa* and *R. sierrae*), so every fit has 160
 High Pareto k (up to 14% of swabs in *A. varius*) was not acted on: expected with many groups of
 1-3 swabs, and LOO is not used for any decision here.
 
+Round 3 results (2026-11-26): 31 of 32 passed. *S. flotator* failed with 25 divergences
+(16000 draws; 5 of 8000 in round 2) on `sd_population__sigma_Intercept`: the divergent draws sit
+where that sd is large (median 0.77 vs 0.28 overall), a funnel. Only 4 of its sites have >= 10
+positives (59, 13, 13, 13), so the site-level spread of log load is barely identified. Survey-run
+events (78 vs 86) shifted intercept variance from events to site-years, which changed the
+geometry; the larger draw count accounts for part of the increase. Other divergences: *S. sila*
+and *A. varius* 3, four jobs 1. *R. muscosa*: Rhat 1.010 on `sd_pop_year__stage_c`, tail ESS 597.
+
+**Round 4 (2026-11-26)**: R3 raised to >= 20 positives in >= 3 sites (README "Nuisance
+structure"). Refits the four species that lose `sigma ~ (1 | population)`, all small and at the
+job script defaults: *P. regilla* (17), *S. albomaculata* (28), *S. flotator* (30), *S. sila* (31).
+No tier changes. Submission: `hpc/submit_size_bd_contrast_round4.sh`.
+
 # Model checks
 
 Order: sampler -> predictive fit -> priors. The smallest species (few populations, few swabs per
@@ -369,7 +382,7 @@ contrast_sds %>%
 
 ## Prior sensitivity
 ```{r}
-#| eval: false
+#| eval: true
 
 # power-scaling (priorsense): reweight the existing draws as if a prior were raised to a power
 # alpha, and measure how much each posterior changes (cjs distance; > 0.05 = sensitive). no

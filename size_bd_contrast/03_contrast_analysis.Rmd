@@ -129,7 +129,7 @@ contrast_data = add_contrast_groups(brms_data) %>%
 # the fits are large (r. sierrae especially), so each is read, processed and dropped in turn:
 # only summaries and a few numbers per draw are kept. the result is cached in intermediates/;
 # set refresh = TRUE after replacing any fit (or when jobs change).
-refresh = TRUE
+refresh = FALSE
 results_file = file.path(intermediates_dir, "03_contrast_processed.rds")
 
 # mean contrasts, contrast and intercept sds use all draws (16000 from round 3: 4 chains x 4000;
@@ -408,10 +408,10 @@ fit_health = fit_convergence %>%
            n_divergent <= 5 & min_ebfmi > 0.3) %>%
   left_join(jobs_fit %>% select(job, taxon_capture, variant, tier_hu, tier_mu), by = "job")
 
-fit_health %>%
+(fit_health_check = fit_health %>%
   select(job, tier_hu, tier_mu, n_obs, max_rhat, worst_rhat_par, min_ess_bulk, min_ess_tail,
          n_divergent, min_ebfmi, fit_ok) %>%
-  arrange(fit_ok, desc(n_divergent))
+  arrange(fit_ok, desc(n_divergent)))
 
 ```
 
@@ -530,8 +530,42 @@ species_summary = job_info %>%
 
 # Fit health and tiers at a glance
 ```{r}
-species_summary %>%
-  count(part, tier, fit_ok)
+(species_summary_count = species_summary %>%
+  count(part, tier, fit_ok))
+
+```
+
+## Model structure by species
+```{r}
+#| fig-height: 9
+#| fig-width: 6
+
+# one row per species (main fits), in phylogenetic order: the contrast tier of each part and
+# whether the load sigma varies by population. drawn as a tile "table" so the categories are
+# coloured, reusing tier_colors from the plots (plus "none" = no load stage term, e.g. too few
+# positives). from jobs_fit, so species without a fit yet are not shown.
+structure_table = jobs_fit %>%
+  filter(variant == "main") %>%
+  transmute(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+            `hu tier` = tier_hu,
+            `mu tier` = tier_mu,
+            sigma_by_population = if_else(sigma_by_population, "yes", "no")) %>%
+  pivot_longer(-species, names_to = "column", values_to = "value") %>%
+  mutate(column = factor(column, levels = c("hu tier", "mu tier", "sigma_by_population")))
+
+structure_colors = c(tier_colors, none = "grey90", yes = "#E6AB02", no = "grey80")
+
+p_structure = ggplot(structure_table, aes(x = column, y = species, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = value), size = 3.2) +
+  scale_fill_manual(values = structure_colors, breaks = names(structure_colors), drop = TRUE) +
+  scale_x_discrete(position = "top") +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic"), panel.grid = element_blank(),
+        legend.position = "none")
+
+p_structure
 
 ```
 
@@ -1536,20 +1570,20 @@ consistency_m11g %>%
 # variation? and are the extra (site-year, event) contrast sds informed at all?
 canorus_jobs = jobs_fit %>% filter(taxon_capture == "anaxyrus_canorus") %>% pull(job)
 
-peace = species_summary %>%
+(peace = species_summary %>%
   filter(job %in% canorus_jobs) %>%
   transmute(variant, part, tier, fit_ok,
             contrast = fmt_ci(contrast_median, contrast_lower_95, contrast_upper_95),
-            support = contrast_support)
+            support = contrast_support))
 
-hope = level_summary %>%
+(hope = level_summary %>%
   filter(job %in% canorus_jobs) %>%
   left_join(jobs_fit %>% select(job, variant), by = "job") %>%
   transmute(variant, part, level = level_labels[as.character(level)],
             sd = fmt_ci(sd_median, sd_lower_95, sd_upper_95),
             contraction = round(contraction, 2),
             sign_consistency = round(sign_consistency_median, 2)) %>%
-  arrange(part, level, variant)
+  arrange(part, level, variant))
 
 ```
 
