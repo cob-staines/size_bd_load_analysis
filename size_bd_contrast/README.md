@@ -269,7 +269,11 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
   and intercept vs contrast variance shares over the same levels.
 - Per-draw season and year summaries (within-site-year / within-site slopes, late - early,
   seasonal curves) for the contrast (co-sampled units) and, as a supplement, for overall
-  infection (intercepts of observed units, every tier).
+  infection (intercepts of observed units, every tier). Overall infection is shown relative to
+  each species' average sampled event, never as absolute prevalence or load (labs differ):
+  prevalence as an odds ratio of a Bd-positive swab (y axis per species, read within species),
+  load as a ratio of median load among positives (one y axis for all species; lab offsets
+  cancel in a ratio).
 - Tier A: event contrasts against day of year (calendar axis from each species' seasonal
   origin), optionally with life-history windows.
 - Consistency: mean contrast vs m11g (agreed in sign and rough size; kept until m11g is
@@ -475,6 +479,11 @@ Dated one-liners; the reasoning is in the linked sections.
   log-likelihood summed per draw in blocks of draws instead of calling priorsense on the
   brmsfit, which built the full draws x swabs matrices and was OOM-killed at 30 GB (*R. sierrae*).
   Same result on *R. clamitans* by both routes.
+- 2026-11-26: overall-infection season patterns in `03` shown relative to each species' average
+  sampled event (per draw), not as absolute prevalence / load, to keep levels from being
+  compared between species. Prevalence as odds ratios (free y per species), load as ratios of
+  median load among positives (shared y); season / year tables gain ratio columns. Figures and
+  tables renamed `03_absolute_*` -> `03_relative_*` (Stage 1 analyses).
 
 ## Open questions
 
