@@ -44,7 +44,7 @@ and cached with `file =`.
 #| code-fold: true
 #| code-summary: "Show setup code"
 
-librarian::shelf(tidyverse, here, brms, cmdstanr, posterior, tidybayes, ape, priorsense)
+librarian::shelf(tidyverse, here, brms, cmdstanr, posterior, tidybayes, ape, priorsense, ggrepel)
 
 intermediates_dir = here("size_bd_contrast", "intermediates")
 models_dir = here("size_bd_contrast", "models", "predictive")
@@ -211,8 +211,16 @@ map(c("prevalence", "load"), ~ pp_check(predictive_fits$main, resp = .x, ndraws 
 
 # prior sensitivity (power-scaling; small model, so the full check is cheap): "prior" > 0.05 on
 # a slope = it follows its prior more than the data (expected for weakly informed traits)
-ps_vars = grep("^(b|sd|sigma)_", variables(predictive_fits$main), value = TRUE)
-powerscale_sensitivity(predictive_fits$main, variable = ps_vars) %>%
+# brms computes the log-likelihood of a multivariate model with subset() one response at a time
+# (passing the brmsfit to priorsense fails), so the draws are built here as in
+# 02_contrast_modeling.qmd: the parameters, the log prior terms (lprior*), and the log-likelihood
+# summed over species and both responses. power-scaling only needs that per-draw sum
+fit_ps = predictive_fits$main
+ps_vars = grep("^(b|sd|sigma)_", variables(fit_ps), value = TRUE)
+ps_draws = as_draws_df(fit_ps, variable = c(ps_vars, grep("^lprior", variables(fit_ps), value = TRUE)))
+ps_draws$log_lik = rowSums(log_lik(fit_ps, resp = "prevalence")) +
+  rowSums(log_lik(fit_ps, resp = "load"))
+powerscale_sensitivity(ps_draws, variable = ps_vars) %>%
   filter(diagnosis != "-")
 
 ```
@@ -290,10 +298,172 @@ signal_summary
 
 ```
 
+# Robustness of the main result
+The same-condition fit shrinks the extended-larval and (prevalence) habitat-breadth slopes. Three
+explanations, separated here (added 2026-11-26):
+
+1. **species set**: the same-condition fit lacks 9 species with no co-sampled events (all
+   non-extended). -> the main model refit on exactly the same-condition species.
+2. **estimand**: part of the effect is timing (realized, not same-condition contrasts). -> the
+   species-level comparison of the two contrasts.
+3. **noisier, compressed response**: empirical event contrasts and the Haldane correction pull
+   large prevalence contrasts toward 0. -> also visible in the species comparison.
+
+Plus influence: with 8 extended species, one or two can carry the slope. -> Pareto k per species
+and leave-one-out refits of each extended species (all 8, so the choice is not made after
+looking at the results).
+
+## Main model on the same-condition species
+```{r}
+#| fig-height: 6
+#| fig-width: 11
+
+# trait slopes of one fit, long (helper for this section)
+get_slopes = function(fit, name) {
+  as_draws_df(fit, variable = "^(b|bsp)_(prevalence|load)_", regex = TRUE) %>%
+    as_tibble() %>%
+    select(starts_with("b"), -contains("Intercept")) %>%
+    pivot_longer(everything(), names_to = "parameter", values_to = "value") %>%
+    mutate(fit = name,
+           part = str_match(parameter, "_(prevalence|load)_")[, 2],
+           term = sub("^(b|bsp)_(prevalence|load)_", "", parameter))
+}
+summarise_slopes = function(draws, ...) {
+  draws %>%
+    group_by(..., part, term) %>%
+    summarise(median = median(value),
+              lower_50 = quantile(value, 0.25), upper_50 = quantile(value, 0.75),
+              lower_95 = quantile(value, 0.025), upper_95 = quantile(value, 0.975),
+              pd = max(mean(value > 0), mean(value < 0)), .groups = "drop") %>%
+    mutate(across(where(is.double), ~ round(.x, 3)))
+}
+
+# stage 1 responses, restricted per part to the species of the same-condition fit
+data_matched = data_main %>%
+  mutate(has_prevalence = has_prevalence & taxon_capture %in% data_sc$taxon_capture[data_sc$has_prevalence],
+         has_load = has_load & taxon_capture %in% data_sc$taxon_capture[data_sc$has_load]) %>%
+  filter(has_prevalence | has_load)
+
+data_matched %>% summarise(n_species = n(), n_prevalence = sum(has_prevalence), n_load = sum(has_load))
+
+fit_matched = fit_predictive(formula_main, data_matched, "predictive_main_matched")
+conv_check(fit_matched)
+
+# reading: main_matched close to main -> the species set is not the reason (estimand or noise);
+# main_matched close to same_condition -> the species set is the reason
+matched_draws = bind_rows(get_slopes(predictive_fits$main, "main"),
+                          get_slopes(fit_matched, "main_matched"),
+                          get_slopes(predictive_fits$same_condition, "same_condition"))
+
+(matched_summary = summarise_slopes(matched_draws, fit) %>% arrange(part, term, fit))
+
+matched_draws %>%
+  mutate(fit = factor(fit, levels = c("same_condition", "main_matched", "main"))) %>%
+  ggplot(aes(x = value, y = term, color = fit)) +
+  stat_pointinterval(.width = c(0.5, 0.95), position = position_dodge(width = 0.6)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ part, scales = "free_x") +
+  labs(x = "change in the mean contrast (median, 50 / 95%)", y = NULL, color = "fit",
+       subtitle = "main = all species; main_matched = stage 1 contrasts of the same-condition species") +
+  theme_classic()
+
+```
+
+## Stage 1 vs same-condition contrast, per species
+```{r}
+#| fig-height: 6
+#| fig-width: 12
+
+# each species' stage 1 mean contrast (realized + same-condition mix) against its same-condition
+# contrast (co-sampled events only), with 95% bars (mean +/- 1.96 sd). points on the 1:1 line:
+# the two agree. extended species far below the line -> the extended effect is partly timing;
+# large stage 1 prevalence contrasts pulled toward 0 -> compression (Haldane, empirical noise)
+species_compare = responses_main %>%
+  select(taxon_capture, part, tier, main_mean = contrast_mean, main_sd = contrast_sd) %>%
+  inner_join(responses_sc %>% select(taxon_capture, part, sc_mean = contrast_mean, sc_sd = contrast_sd,
+                                     n_events),
+             by = c("taxon_capture", "part")) %>%
+  left_join(traits %>% select(taxon_capture, age_metamorphosis), by = "taxon_capture") %>%
+  mutate(larval_period = if_else(age_metamorphosis == "E", "extended", "other"),
+         part = factor(part, levels = c("prevalence", "load")))
+
+species_compare %>%
+  ggplot(aes(x = main_mean, y = sc_mean, color = larval_period)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey85") +
+  geom_vline(xintercept = 0, color = "grey85") +
+  geom_errorbar(aes(ymin = sc_mean - 1.96 * sc_sd, ymax = sc_mean + 1.96 * sc_sd), width = 0, alpha = 0.4) +
+  geom_errorbarh(aes(xmin = main_mean - 1.96 * main_sd, xmax = main_mean + 1.96 * main_sd), height = 0, alpha = 0.4) +
+  geom_point(size = 2) +
+  geom_text_repel(aes(label = taxon_capture), size = 2.5, max.overlaps = 20, show.legend = FALSE) +
+  facet_wrap(~ part, scales = "free") +
+  labs(x = "stage 1 mean contrast", y = "same-condition contrast (co-sampled events)",
+       color = "larval period", subtitle = "95% bars; dashed = 1:1") +
+  theme_classic()
+
+# the extended - other difference in mean contrasts by source, among the species in both
+# (unweighted means: a rough view, the models weight by se)
+species_compare %>%
+  group_by(part, larval_period) %>%
+  summarise(n = n(), main = round(mean(main_mean), 2), same_condition = round(mean(sc_mean), 2),
+            .groups = "drop")
+
+```
+
+## Influence
+```{r}
+#| fig-height: 6
+#| fig-width: 10
+
+# pareto k per species and part (main fit; loo one response at a time, as brms requires with
+# subset()). k > 0.7: that species' contrast is poorly predicted from the others and influences
+# the fit strongly
+pareto_k = map_dfr(c("prevalence", "load"), function(part) {
+  rows = data_main[[paste0("has_", part)]]
+  lo = loo(predictive_fits$main, resp = part)
+  tibble(taxon_capture = data_main$taxon_capture[rows], part = part,
+         pareto_k = lo$diagnostics$pareto_k)
+}) %>%
+  left_join(traits %>% select(taxon_capture, age_metamorphosis), by = "taxon_capture")
+
+pareto_k %>% arrange(desc(pareto_k)) %>% head(10)
+
+# leave one extended species out (all 8): the extended-larval slope with each one dropped. a slope
+# that stays away from 0 whichever species is dropped does not rest on a single species
+extended_species = traits %>% filter(age_metamorphosis == "E") %>% pull(taxon_capture)
+
+loso_draws = map_dfr(extended_species, function(sp) {
+  fit = fit_predictive(formula_main, data_main %>% filter(taxon_capture != sp),
+                       paste0("predictive_main_drop_", sp))
+  get_slopes(fit, paste0("drop ", sp))
+}) %>%
+  bind_rows(get_slopes(predictive_fits$main, "main (all)")) %>%
+  filter(term == "extended_larval")
+
+(loso_summary = summarise_slopes(loso_draws, fit) %>% arrange(part, median))
+
+loso_draws %>%
+  mutate(fit = fct_relevel(fit, "main (all)", after = Inf)) %>%
+  ggplot(aes(x = value, y = fit)) +
+  stat_pointinterval(.width = c(0.5, 0.95)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ part, scales = "free_x") +
+  labs(x = "extended larval period slope (median, 50 / 95%)", y = NULL,
+       subtitle = "main model with one extended species left out") +
+  theme_classic()
+
+```
+
 # Export
 ```{r}
 write_csv(slope_summary, file.path(intermediates_dir, "05_predictive_slopes.csv"))
 write_csv(signal_summary, file.path(intermediates_dir, "05_predictive_signal.csv"))
+# robustness: main vs main on the same-condition species vs same-condition; species comparison;
+# pareto k; leave-one-extended-species-out slopes
+write_csv(matched_summary, file.path(intermediates_dir, "05_predictive_matched.csv"))
+write_csv(species_compare, file.path(intermediates_dir, "05_predictive_species_compare.csv"))
+write_csv(pareto_k, file.path(intermediates_dir, "05_predictive_pareto_k.csv"))
+write_csv(loso_summary, file.path(intermediates_dir, "05_predictive_loso.csv"))
 
 # manuscript inputs (replacing unified_05_a / unified_05_b) once the results are reviewed:
 # repo_dir = gsub("size_bd_load_analysis", "", here())
