@@ -59,6 +59,17 @@ What each summary means:
   time-segregated species can also be tier D (*few co-sampled sites*, e.g. *L. blairi*); the
   plots show the flag and the tier together. A low event count can also come from small events
   (< 5 swabs of a stage per survey run) rather than different times: README "Definitions".
+- **"as sampled" contrasts** (stage sampling conditions): a mean contrast blends the
+  *same-condition* contrast (co-sampled events, where the event intercepts remove shared
+  weather) with a *realized* contrast (each stage in the conditions it is found in: timing,
+  weather, habitat use), in proportion to how much of the species' information comes from
+  co-sampled events and how differently the stages are sampled. Shown per species: `smd_temp`,
+  `smd_precip` (standardized difference in 30-day temperature / 10-day precipitation, subadult -
+  adult, within population) and `pct_swabs_co_event` (share of swabs in co-sampled events). The
+  data-rich *Rana* are balanced (|smd| <= 0.15): close to the same-condition contrast. Many
+  sparse species have subadults swabbed in warmer conditions (|smd| > 1 in several): closer to the
+  realized contrast. Event-level contrast sds and correlations are within-event comparisons and
+  unaffected. README "How to read the results".
 
 Run order: `01_contrast_tiers.Rmd` (job table), cluster fits copied into
 `size_bd_contrast/models/`, `02_contrast_modeling.qmd` (full model checks), then this script.
@@ -428,7 +439,9 @@ fit_health = fit_convergence %>%
 # job-level attributes carried with every summary
 job_info = jobs_fit %>%
   select(job, taxon_capture, variant, tier_hu, tier_mu, d_reason_hu, d_reason_mu, n_adult,
-         n_subadult, flag_time_segregated) %>%
+         n_subadult, flag_time_segregated,
+         # stage sampling conditions (descriptor; absent in job tables made before 2026-11-26)
+         any_of(c("smd_temp_pop", "smd_precip_pop", "pct_swabs_in_co_event"))) %>%
   left_join(fit_health %>% select(job, fit_ok), by = "job") %>%
   mutate(job_label = if_else(variant == "main", species_label(taxon_capture),
                              paste0(species_label(taxon_capture), " (", variant, ")")))
@@ -632,7 +645,11 @@ plot_main %>%
             subadult = fmt_level(part, level_subadult_median, level_subadult_lower_95,
                                  level_subadult_upper_95),
             level_unit,
-            pd = round(contrast_pd, 3), support = contrast_support)
+            pd = round(contrast_pd, 3), support = contrast_support,
+            # stage sampling conditions: how far this mean contrast leans toward a "realized"
+            # contrast (large |smd| and few swabs in co-sampled events; see the top of the script)
+            across(any_of(c(smd_temp = "smd_temp_pop", smd_precip = "smd_precip_pop")), ~ round(.x, 2)),
+            across(any_of(c(pct_swabs_co_event = "pct_swabs_in_co_event"))))
 
 ```
 

@@ -19,8 +19,11 @@ In short:
   level above; none at all if < 25% of swabs are in co-sampled sites (between-population).
   **tier** = the result: A (site, site-year, event), B (site, site-year), C (site), D (mean
   contrast only); load "none" when a stage has no positives
-- **flag**: time-segregated (fewer co-sampled events than half the number of co-sampled
-  site-years); a caveat only
+- **flag** (a caveat only): *time-segregated* (fewer co-sampled events than half the number of
+  co-sampled site-years)
+- **stage sampling conditions** (a descriptor): standardized difference in 30-day temperature
+  and 10-day precipitation between subadult and adult swabs, within population. Not a flag:
+  imbalance is common in these data (life-stage timing), see README "How to read the results"
 - **nuisance structure** (added after the first cluster fits): R2 drop a site-year / event
   intercept level that barely splits its parent; R3 sigma varies by population only with >= 3
   populations with >= 20 positives (10 until round 3)
@@ -194,6 +197,9 @@ species_table = stage_counts %>%
   # hu_has_pop_year, ...) and sigma_by_population (R3). needed first: a contrast slope cannot
   # sit on a dropped level
   left_join(level_structure(contrast_data), by = "taxon_capture") %>%
+  # stage sampling conditions: smd of weather between stages (stage_climate_balance(),
+  # contrast_data_functions.R). a descriptor carried into the job table, not a flag
+  left_join(stage_climate_balance(contrast_data), by = "taxon_capture") %>%
   mutate(
     include = n_adult >= min_n_stage & n_subadult >= min_n_stage & n_co_pop >= min_co_pops,
     exclude_reason = case_when(
@@ -224,6 +230,26 @@ species_table %>%
   select(taxon_capture, tier_hu, d_reason_hu, tier_mu, d_reason_mu,
          n_co_pop, n_co_popyear, n_co_event, n_co_load_pop, n_co_load_popyear, n_co_load_event,
          pct_swabs_in_co_pop, flag_time_segregated)
+
+# stage sampling conditions (included species): standardized differences, subadult - adult, in
+# pooled sds of the two stages. overall includes site differences (absorbed by the site
+# intercepts); within population is the main column; within site-year is within-season timing
+# only. positive = subadults swabbed in warmer / wetter conditions. large values: the species'
+# mean contrast leans toward a "realized" contrast (README "How to read the results")
+species_table %>%
+  filter(include) %>%
+  select(taxon_capture, starts_with("smd_"), pct_swabs_in_co_event, flag_time_segregated) %>%
+  mutate(across(starts_with("smd_"), ~ round(.x, 2))) %>%
+  arrange(desc(pmax(abs(smd_temp_pop), abs(smd_precip_pop), na.rm = TRUE)))
+
+# how common imbalance is: species with |smd| (within population, either variable) at or above
+# 0.1 / 0.25 (the usual covariate-balance cutoff) / 0.5. a description, not a rule
+map_dfr(c(0.1, 0.25, 0.5), function(th) {
+  species_table %>%
+    filter(include) %>%
+    summarise(abs_smd_at_least = th,
+              n_species = sum(coalesce(abs(smd_temp_pop) >= th | abs(smd_precip_pop) >= th, FALSE)))
+})
 
 # tier cross-tab (prevalence x load)
 species_table %>%
@@ -261,7 +287,8 @@ contrast_jobs = species_table %>%
   transmute(taxon_capture, variant = "main", tier_hu, tier_mu) %>%
   bind_rows(sensitivity_jobs) %>%
   left_join(species_table %>% select(taxon_capture, all_of(structure_cols), n_adult, n_subadult,
-                                     d_reason_hu, d_reason_mu, flag_time_segregated),
+                                     d_reason_hu, d_reason_mu, flag_time_segregated,
+                                     smd_temp_pop, smd_precip_pop, pct_swabs_in_co_event),
             by = "taxon_capture") %>%
   mutate(n = n_adult + n_subadult,
          # the reason for D belongs to the species' own tier: clear it where a sensitivity fit

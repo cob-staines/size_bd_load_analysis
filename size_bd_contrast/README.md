@@ -2,7 +2,7 @@
 # machine-readable summary. contrast_data_functions.R is the source of truth for the values
 # used in code; keep this block in sync with it.
 analysis: size_bd_contrast
-status: stage 1 round 3 fits pending (all jobs: survey-run events and consolidated contrast rule); analysis drafted; stage 2 planned
+status: stage 1 fits (round 4 refits for the R3 change); analysis drafted; environment screen run; predictive model being planned
 replaces: size_bd_unified m11g (02/03/05; decided 2026-11-25, README "Relation to the unified model")
 uses_from_size_bd_unified: 01_model_data.Rmd, env_functions.R, contrast_functions.R, phylo_tree.nwk, naive cutoff bootstrap
 data: size_bd_unified/intermediates/bd_model_env_unified_2026-11-12.RData
@@ -35,6 +35,8 @@ tiers:  # names for the result: number of levels at which the contrast varies
   none: "mu only, off the scale: a stage has no positive swabs; no stage term in mu"
 flags:  # interpretation caveat only; prevalence co-sampling counts
   time_segregated: "n co-sampled events < n co-sampled pop_years / 2 (so >= 1 co-sampled pop_year)"   # >= 3 pop_years until 2026-11-26
+descriptors:  # species-level, reported with results; not flags, change no model
+  stage_sampling_conditions: "smd of 30-day temperature and log1p 10-day precipitation, subadult - adult, within population, in pooled sds of the two stages"
 nuisance_structure:  # intercept levels and sigma; README "Nuisance structure"
   R2_min_children_per_parent: 1.1   # site-years per site, events per site-year; per part
   R3_sigma_by_population: ">= 3 populations with >= 20 positive swabs"   # 10 until round 3
@@ -73,7 +75,8 @@ model" for what moves, what is lost and what is still to do.
 
 This analysis drops weather and climate from the per-species models and instead lets the stage
 contrast itself vary at each level, so the data say how consistent it is. Environmental
-conditions return in stage 2, as moderators of the contrast.
+conditions return in the downstream models, as possible moderators of the contrast (Downstream
+models).
 
 The aim is comparable per-species profiles that can inform what drives susceptibility or
 resilience (e.g. *R. muscosa* vs *R. sierrae*; *A. canorus* vs *A. americanus* /
@@ -92,14 +95,15 @@ Stage 1 (per species, separately for prevalence and load):
   unit's intercept and its contrast, by level: e.g. are subadults hit disproportionately in
   high-Bd sites, years or events, or does the gap close when everyone is infected?)
 
-Stage 2 (across species, planned):
+Downstream (Downstream models):
 
-- **Q7.** Is the contrast phylogenetically structured, or related to life-history traits or
-  species-typical climate? (species level)
-- **Q8.** Do sites in different climates show different contrasts? (population level)
-- **Q9.** Does the contrast move with conditions through time, and is that seasonal
-  (climatology) or a response to unusual conditions (anomaly)? Does it differ between rising and
-  falling temperatures? (event level)
+- **Q7.** Is the species mean contrast phylogenetically structured, or related to habitat, life
+  history, body size or species-typical climate? (predictive model, across species)
+- **Q8.** Do sites in different climates show different contrasts? (within species; needs
+  long-term site climate)
+- **Q9.** Does the contrast move with conditions through time (within season, between years)?
+  Seasonal-environmental with raw lags; a weather interpretation needs a climatology / anomaly
+  split. (environment screen, then per-species moderation fits if warranted)
 
 ## Definitions
 
@@ -154,6 +158,19 @@ Stage 2 (across species, planned):
     were swabbed in the same runs but in small numbers (e.g. weekly visits with 2-3 swabs per
     stage), not at different times. Check the species' event counts before reading the flag as
     seasonal separation.
+- **Stage sampling conditions** (a descriptor, not a flag; 2026-11-26): standardized mean
+  difference (SMD) in 30-day temperature and log1p 10-day precipitation between subadult and
+  adult swabs, subadult - adult, in pooled SDs of the two stages. Computed overall, within
+  population (the main column: the difference among swabs of the same site) and within site-year
+  (within-season timing). Positive = subadults swabbed in warmer / wetter conditions.
+  - Drafted as a flag at |SMD| >= 0.25 (the usual covariate-balance cutoff), it would mark 19 of
+    31 species (22 with the first, within-population SD): imbalance is a feature of these data,
+    tied to life-stage timing (e.g. metamorph emergence) and habitat use, not an exception. The
+    data-rich *Rana* are balanced (*R. sierrae*, *R. muscosa*, *R. cascadae*, *R. clamitans*,
+    *R. catesbeiana*: |SMD| <= 0.15); several sparse species have subadults swabbed in much warmer
+    conditions (*P. crucifer* 2.8, *R. sylvatica* 1.9, *L. blairi* 1.6, *R. pipiens* 1.5,
+    *H. versicolor* 1.4, *A. americanus* 1.4). Reading: How to read the results ("As-sampled
+    contrasts").
 
 ## Stage 1 model
 
@@ -263,7 +280,8 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
 - Per species and part: mean contrast (median, 50 / 95% intervals, pd, support via
   `f_draw_agg`) with each stage's level at a typical site (prevalence %, median load among
   positives; within-species context), contrast SD per level against its prior, variance shares,
-  tier (with the reason for D) and the time-segregated flag.
+  tier (with the reason for D), the time-segregated flag, and the stage sampling conditions
+  (SMDs, share of swabs in co-sampled events).
 - Q6: intercept-contrast correlation by level (forest plot; unit scatter as illustration).
 - Contrast SD / intercept SD ratio per level (does the gap vary less than overall infection?),
   and intercept vs contrast variance shares over the same levels.
@@ -279,7 +297,7 @@ and R3 are kept from round 2, where R1 was the site threshold, now part of the c
 - Consistency: mean contrast vs m11g (agreed in sign and rough size; kept until m11g is
   retired from the manuscript inputs); *A. canorus* sensitivity vs main fit; optionally vs the
   seasonal models (`size_bd_season/`).
-- Exports for stage 2: species, population, site-year and event contrasts (fixed + random parts)
+- Exports for the downstream models: species, population, site-year and event contrasts (fixed + random parts)
   with posterior mean and sd, a thinned draw set, and the identifiers needed to join climate.
 
 ## How to read the results
@@ -319,6 +337,26 @@ subadult - adult difference in log load among positives varies between survey ev
 same site-year (event SD 1.93, 95% interval 1.64-2.21)." Avoid "significant"; use the posterior
 interval and support labels.
 
+**As-sampled contrasts.** A mean contrast is the subadult - adult difference as the two stages
+were sampled. It blends two things:
+
+- a *same-condition* contrast, from co-sampled events, where the event intercepts remove weather
+  and anything else shared by both stages. Relevant to resistance and tolerance mechanisms.
+- a *realized* contrast, from single-stage units: each stage in the conditions it is found in
+  (season, weather, habitat use). Relevant to exposure and population dynamics. Being found at a
+  different time is part of being a subadult (metamorph emergence), so this is not simply a bias.
+
+The mix depends on how much of a species' information comes from co-sampled events and how
+differently the stages are sampled (stage sampling conditions, Definitions). Balanced, data-rich
+species (*R. sierrae*, *R. muscosa*, *R. cascadae*, *R. clamitans*, *R. catesbeiana*) are close
+to same-condition contrasts; imbalanced, sparse species (*P. crucifer*, *R. sylvatica*,
+*L. blairi*, *A. americanus*, *R. pipiens*, ...) lean toward realized ones. Neither is wrong, but
+they are not quite the same quantity: say which when comparing species, and carry the
+descriptor into any cross-species model. A contrast is also specific to the conditions a species
+was sampled in: the environment screen suggests the load gap widens in warmer years, at least in
+*R. sierrae* (Downstream models). Event-level contrast SDs, event-level correlations (Q6) and
+group contrasts of co-sampled units are within-event comparisons and not affected.
+
 **Model changes vs lack of information.** A term is removed only for computational failure
 (divergences, poor mixing, terms the data cannot identify: the contrast levels rule, R2, R3). A
 prior-dominated SD is reported as not informed, not removed: removing it would assume zero
@@ -330,7 +368,7 @@ Decided 2026-11-25: m11g is retired; the contrast models are the primary analysi
 weather and climate terms were there to control for distractions from the stage contrast, not
 as part of the question, and they are shared by both stages and confounded with season (Why
 this analysis). The contrast models drop them and let the contrast vary by site, year and
-event instead; environment returns only as a moderator of the contrast (stage 2).
+event instead; environment returns only as a moderator of the contrast (Downstream models).
 
 What replaces what:
 
@@ -338,16 +376,16 @@ What replaces what:
 |---|---|
 | species stage contrasts (`unified_03_c`) | per-species mean contrasts (`03`, `contrast_03_a`) |
 | between-population spread, variance components (`unified_03_j/k`) | contrast sds by level, variance shares (`03`) |
-| species meta-model with phylogeny and traits (`05`, `unified_05_*`) | stage 2a (species level, below), on `03` outputs |
-| environment -> infection (`unified_03_d/e/h/i`) | dropped. Stage 2 asks environment -> contrast instead |
+| species meta-model with phylogeny and traits (`05`, `unified_05_*`) | predictive model (Downstream models), on `03` outputs |
+| environment -> infection (`unified_03_d/e/h/i`) | dropped. The downstream models ask environment -> contrast instead |
 | cutoff sensitivity (m11g at co100 / co300 / co1000) | naive bootstrap cutoff check only (`size_bd_unified/th_sensitivity_analysis.Rmd`, naive part; independent of m11g) |
-| environment priors for the GAM (`size_bd_gam/02`, m11g new-taxon draws) | open: alternative to brainstorm (Open questions) |
+| environment priors for the GAM (`size_bd_gam/02`, m11g new-taxon draws) | not needed: the GAM takes stage 1's nuisance structure (event intercepts) and drops climate terms (Downstream models) |
 
 What is lost, accepted:
 
 - pooling of sparse species toward the across-species distribution (m11g taxon effects).
-  Stage 2a restores pooling as a second step (species random effect + phylogeny), with stage 1
-  uncertainty carried through.
+  The predictive model restores pooling as a second step (species random effect + phylogeny),
+  with stage 1 uncertainty carried through.
 - six species in m11g without a within-site comparison or with < 20 swabs of a stage
   (*C. crassidigitus*, *C. fitzingeri*, *R. marina*: no co-sampled population; *E. prosoblepon*,
   *H. cinerea*, *L. palustris*: < 20 swabs of a stage). Stated as a limitation: their m11g
@@ -360,33 +398,109 @@ summaries (species / lab stats, sex composition) and the naive cutoff bootstrap.
 retiring: re-point manuscript inputs from `unified_03_*` / `unified_05_*` to the contrast
 exports, and drop the m11g consistency check from `03` (or keep it as a historical note).
 
-## Stage 2 (planned; separate plan)
+## Downstream models
 
-Contrast-level (meta-analytic) models, with stage 1 uncertainty carried through
-(`contrast | se(sd)` or repeated fits over posterior draws), phylogeny from
-`size_bd_unified/intermediates/phylo_tree.nwk`:
+Decided 2026-11-26. Stage 1 feeds two downstream analyses; the GAM runs separately:
 
-| Level | Response | Covariates |
-|---|---|---|
-| species (2a; replaces unified `05`) | species mean contrast | traits, species-typical climate, phylogeny |
-| population | population contrasts | site climate (mean, seasonality), Köppen-Geiger zone, species slopes, phylogeny |
-| event | event contrasts | site climatology for that time of year, anomaly from it, temperature trend, species slopes, phylogeny |
+```
+stage 1 contrast models (per species)
+   |-> predictive model           species mean contrasts ~ phylogeny + traits (+ species-typical climate)
+   |-> environment and contrast   within species: does the contrast move with conditions?
+                                  environment screen (04) -> per-species moderation fits if warranted
+GAM (size_bd_gam/)                finer age resolution; stage 1 nuisance structure, no climate terms
+```
 
-Climatology / anomaly decomposition needs multi-year site x day-of-year climate normals (new
-work in `size_bd_unified/env_functions.R`). Seasonal (climatology) slopes are reported as
-"seasonal-environmental"; only anomaly slopes support a direct weather interpretation.
+**Predictive model** (replaces `size_bd_unified/05_species_regression.qmd`). Response: species
+mean contrasts (prevalence and load), stage 1 uncertainty carried through (`contrast | se(sd)` or
+fits over posterior draws), phylogenetic covariance from
+`size_bd_unified/intermediates/phylo_tree.nwk`. Candidate predictors: habitat breadth, aquatic
+index, body size (adult median SVL) and stage gap (subadult / adult median SVL), species-typical
+climate (pending long-term site climate). Development mode dropped: only 2 of 31 species are
+coded direct (*I. henselii*, and *C. panamansis*, which is probably larval: males carry tadpoles
+to streams), so its effect would rest on one species. With 31 species, predictors are few per
+model (small hypothesis-specific models with regularizing priors).
+
+The mix of same-condition and realized contrasts across species (How to read the results) is
+handled in three parts (decided 2026-11-26):
+
+- *main*: the stage 1 mean contrasts of all species (31 for prevalence, 30 for load), with the
+  stage sampling conditions (SMDs, share of swabs in co-sampled events) reported next to every
+  species-level result.
+- *sensitivity, same-condition response*: the same model on species mean contrasts from
+  co-sampled events only, from the environment screen's null model (22 species for prevalence,
+  15 for load). Every species then contributes the same kind of contrast. Agreement with the
+  main fit = trait conclusions do not rest on the mix; disagreement is itself a result about
+  timing.
+- *check, descriptor as covariate*: one fit adding a stage sampling conditions term; its slope
+  near 0 = the mix does not shift contrasts systematically. Read cautiously: it uses a predictor
+  slot, may track data sparsity or lineage, and may absorb real biology (timing is part of being
+  a subadult).
+
+Not pursued: a balanced-species subset (about 12 species, mostly *Rana*: too few, and
+phylogenetically clustered); a potential-bias adjustment (brings back a weather model with m11g's
+assumptions); a "timing component" (realized - same-condition) as a stated question: the species
+with both estimates are not a representative set, so it is discussed species by species rather
+than tested as a general result.
+
+How m11g handled the same issue (for comparison): its stage-shared weather slopes made every
+contrast a weather-adjusted one by assumption; timing not captured by weather stayed in the
+contrast unreported (no event level, stage-specific site-year intercepts); and where stage and
+temperature were nearly collinear within a species (e.g. *P. crucifer*), partial pooling settled
+the trade-off by pulling that species' weather slope toward the across-species mean, dominated
+by *R. sierrae*. The unified `05` model then treated all contrasts as the same quantity.
+
+**Environment and the contrast** (Q8, Q9). No separate pooled climate model: the event intercepts
+already absorb weather shared by both stages (weather is near-constant within an event), the GAM
+no longer needs climate priors, and environment effects on overall infection are not a target
+question. What remains is whether the *contrast* changes with conditions, asked within species:
+
+- *Environment screen* (`04_contrast_environment_screen.qmd`, run 2026-11-26): empirical
+  contrasts of co-sampled events (442 events in 22 species for prevalence; 229 in 15 for load,
+  >= 2 positives per stage) with their sampling se, meta-regressed on within-season and
+  between-year deviations of 30-day temperature and log2 10-day precipitation (species-varying
+  within-season slopes, site random effect). Uses no stage 1 output. Results:
+  - load: larger subadult - adult gap in warmer site-years, +0.28 log units per degree C
+    [0.08, 0.48], pd 0.998; within-season warmth the same direction, weaker (+0.14 [-0.06,
+    0.35], pd 0.93). Environment lowers the event-level SD from 1.74 to 1.63 (~12% of the
+    variance). The year slopes are shared across species, so in effect event-weighted:
+    *R. sierrae* holds 134 of 229 load events.
+  - prevalence: smaller gap in wetter site-years, -0.12 per doubling of precipitation
+    [-0.24, 0.00], pd 0.97; other terms near 0. The event-level SD is barely identified (the
+    sampling se dominates), so variance explained cannot be read.
+  - all seasonal-environmental (raw lags; site-year means also shift with when in the season a
+    year was sampled), not weather effects.
+- *Per-species moderation fits* (option B), if pursued: stage 1 refits adding `stage_c x`
+  within-site-year weather deviations (main effects absorbed by the event intercepts), only for
+  parts whose contrast varies at that level (tier A for weather; tiers A-C for site climate), so
+  the moderator does not take credit for all unit-to-unit variation. "How much" = the reduction
+  in the event (site) contrast SD. Kept as new job variants; the main fits stay the source for
+  Q1-Q6.
+- *Site climate* (Q8) needs long-term normals (e.g. WorldClim / CHELSA bioclim at site
+  coordinates): the site mean of swab-date weather is "climate at sampling time". A weather
+  interpretation (Q9) needs a climatology / anomaly split (multi-year site x day-of-year normals).
+
+**GAM** (`size_bd_gam/`, option 1): add the event intercept `(1 | pop_year_event)` and drop the
+climate terms and their m11g prior. The SVL curve is then estimated from size differences within
+events, with nothing used twice. Cost: the between-event size comparisons, which are exactly the
+ones confounded with timing. Share of SVL variance within events vs within site-years (the
+current structure): little change for the data-rich *Rana* (*R. sierrae* 0.56 vs 0.59,
+*R. muscosa* 0.58 vs 0.61), large where size and timing go together (*P. crucifer* 0.16 vs 0.60,
+*R. pipiens* 0.27 vs 0.57, *R. catesbeiana* 0.42 vs 0.75). If climate terms are ever needed:
+per species, not one global slope (*Bd* has a thermal optimum, so a global slope can have the
+wrong sign for a species).
 
 ## Files and run order
 
 | File | Role | Status |
 |---|---|---|
 | `contrast_data_functions.R` | shared constants, grouping columns, co-sampling counts, contrast rule, nuisance structure | written |
-| `01_contrast_tiers.Rmd` | event definition screen (unit definitions x swab thresholds), counts, inclusion, tiers, flag; writes the event screen, species table and cluster job table | written |
+| `01_contrast_tiers.Rmd` | event definition screen (unit definitions x swab thresholds), counts, inclusion, tiers, time-segregated flag, stage sampling conditions; writes the event screen, species table and cluster job table | written |
 | `contrast_model_functions.R` | data prep, formula and prior builders by tier (copied into the cluster script) | written |
 | `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | written |
 | `r-brms-contained/size_bd_contrast_modeling.R` + `hpc/` | cluster fits, one job per array index (`hpc/submit_size_bd_contrast.sh` submits the four resource groups) | written |
-| `03_contrast_analysis.Rmd` | stage 1 results (mean contrasts, contrast sds, sign consistency, variance shares, group contrasts), consistency checks, stage 2 exports | written |
-| `04_contrast_stage2.qmd` | cross-species contrast models | planned |
+| `03_contrast_analysis.Rmd` | stage 1 results (mean contrasts, contrast sds, sign consistency, variance shares, group contrasts), consistency checks, exports for the downstream models | written |
+| `04_contrast_environment_screen.qmd` | environment screen: empirical contrasts of co-sampled events vs within-season and between-year weather (Downstream models) | written, run |
+| predictive model (file to be named) | species mean contrasts ~ phylogeny and traits | planned |
 
 Outputs: `intermediates/` (tables), `models/` (fits, not tracked), `figures/`.
 
@@ -403,6 +517,11 @@ Upstream: `size_bd_unified/01_model_data.Rmd` (model data).
   units at a level.
 - **Co-sampled unit**: a site, site-year or event with >= 5 swabs of each stage (load: also >= 1
   positive of each stage). Contrast SDs are informed mainly by these.
+- **Same-condition vs realized contrast**: the subadult - adult difference under the same
+  conditions (co-sampled events) vs as each stage experiences them (timing, weather, habitat
+  use). A mean contrast blends the two (How to read the results).
+- **SMD (standardized mean difference)**: a difference between two groups in units of their
+  pooled SD; here, how differently the stages are sampled (stage sampling conditions).
 - **Survey run (event)**: survey dates at a site with no gap over 5 days, split at 14 days.
 - **Tier**: number of levels at which the contrast varies (A 3, B 2, C 1, D 0), from the contrast
   levels rule.
@@ -484,6 +603,22 @@ Dated one-liners; the reasoning is in the linked sections.
   compared between species. Prevalence as odds ratios (free y per species), load as ratios of
   median load among positives (shared y); season / year tables gain ratio columns. Figures and
   tables renamed `03_absolute_*` -> `03_relative_*` (Stage 1 analyses).
+- 2026-11-26: downstream structure (Downstream models): stage 1 feeds a predictive model
+  (replaces unified `05`) and within-species environment analyses; no separate pooled climate
+  model; GAM option 1 (event intercepts, no climate terms; no m11g prior). Predictive model:
+  development mode dropped (2 direct developers), body size and stage gap added.
+- 2026-11-26: stage sampling conditions (SMD of weather between stages) added to `01` and the
+  job table as a descriptor. Drafted as a flag at |SMD| >= 0.25, it marked most species (19-22
+  of 31): imbalance is a feature of the data, so it is reported, not flagged. Mean contrasts read
+  as "as sampled" (same-condition vs realized; How to read the results). No refit.
+- 2026-11-26: environment screen (option D, `04`): load gap larger in warmer site-years (+0.28
+  per degree C, pd 0.998; mostly *R. sierrae*), prevalence gap smaller in wetter site-years
+  (-0.12 per doubling, pd 0.97); seasonal-environmental, not weather.
+- 2026-11-26: predictive model handles the same-condition / realized mix as main (stage 1 mean
+  contrasts, all species, descriptor reported) + sensitivity (same-condition species contrasts
+  from the environment screen's null model, 22 / 15 species) + one check fit with the descriptor
+  as a covariate. Timing component (realized - same-condition) not a stated question: discussed
+  per species (Downstream models).
 
 ## Open questions
 
@@ -494,11 +629,19 @@ Dated one-liners; the reasoning is in the linked sections.
   contrasts.
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
-- Stage 2 climate summaries and trait set to be defined.
-- GAM (`size_bd_gam/`) environment terms without m11g priors. Options to brainstorm: drop the
-  environment terms (as here: control for site / year / event with random effects instead);
-  keep them with weakly informative priors; or replace weather with a seasonal term. The GAM's
-  purpose (finer age resolution for data-rich species) should decide which.
+- Predictive model: final predictor set and model grouping; which descriptor term for the check
+  fit (abs SMD of temperature, or share of swabs in co-sampled events); export of the
+  same-condition species contrasts from `04` (null models); species-typical climate.
+- Long-term site climate (bioclim at site coordinates) for Q8 and species-typical climate; then
+  the between-site terms in `04`.
+- Per-species moderation fits (option B): worth the refits given the screen's year-level load
+  signal? Which parts (tier A weather only, or also site climate)?
+- Potential-bias measure (imbalance x the species' climate slope for overall infection), if any
+  imbalanced species becomes central to the paper.
+- Climatology / anomaly split, needed only for a weather interpretation.
+- GAM option 1 to implement in `size_bd_gam/02_size_bd_GAM_modeling.qmd`.
+- Check *C. panamansis* development mode in `iucn_habitat_metrics.csv` (probably larval; moot
+  for the predictive model, which drops development mode).
 - Retirement to-dos: manuscript inputs (`unified_03_*`, `unified_05_*`) re-pointed to contrast
   exports; m11g consistency check in `03`; species-level mean contrasts for the six m11g-only
   species reported as excluded.

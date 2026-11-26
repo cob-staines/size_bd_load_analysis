@@ -185,3 +185,48 @@ level_structure = function(df, response = response_col) {
            mu_has_event = coalesce(mu_ev_per_py >= min_children_per_parent, FALSE),
            sigma_by_population = n_pops_pos_sigma >= min_pops_sigma)
 }
+
+# ---- stage sampling conditions (descriptor, 2026-11-26) -------------------------------------
+# not part of the block copied into r-brms-contained (the cluster does not use it).
+# are subadults and adults swabbed under different weather? event intercepts absorb weather
+# shared by both stages within an event, but where the stages are sampled under different
+# conditions, single-stage units bring those differences into the mean contrast: it is then
+# partly a "realized" contrast (each stage in the conditions it is found in) rather than a
+# "same-condition" one (README "How to read the results").
+# measure: standardized mean difference (smd), subadult - adult, in units of the pooled sd of the
+# two stages (sqrt((var_subadult + var_adult) / 2), the covariate-balance convention). computed
+# overall, within population (the stage difference among swabs of the same site: what the site
+# intercepts do not remove; the main column) and within site-year (within-season timing only).
+# within-group differences are fixed-effects estimates (the variable and the stage indicator both
+# centered within group), so only groups holding both stages contribute.
+# a descriptor, not a flag: first drafted as a flag at |smd| >= 0.25 (the usual balance cutoff),
+# it marked 22 of 31 species (19 with the pooled sd used here). imbalance is a feature of these
+# data (life-stage timing, habitat use), concentrated in the sparse species; the data-rich rana
+# are balanced (|smd| <= 0.15).
+stage_climate_vars = c(temp = "temp_c_30_day_mean", precip = "precip_mm_10_day_sum")
+
+# within-group difference between stages (s = 1 subadult, 0 adult); NA if no group holds both
+within_diff = function(x, s, g) {
+  s_c = s - ave(s, g)
+  if (sum(s_c^2) == 0) return(NA_real_)
+  sum((x - ave(x, g)) * s_c) / sum(s_c^2)
+}
+
+stage_climate_balance = function(df, vars = stage_climate_vars) {
+  df %>%
+    filter(if_all(all_of(unname(vars)), ~ !is.na(.x))) %>%
+    group_by(taxon_capture) %>%
+    group_modify(function(d, key) {
+      s = as.numeric(d$life_stage_simple == "subadult")
+      imap_dfc(vars, function(col, name) {
+        # precipitation is right-skewed (many dry spells): compared on log1p
+        x = if (name == "precip") log1p(d[[col]]) else d[[col]]
+        sd_pooled = sqrt((var(x[s == 1]) + var(x[s == 0])) / 2)
+        smd = function(diff) if (is.na(sd_pooled) || sd_pooled == 0) NA_real_ else diff / sd_pooled
+        tibble(!!paste0("smd_", name, "_overall") := smd(mean(x[s == 1]) - mean(x[s == 0])),
+               !!paste0("smd_", name, "_pop") := smd(within_diff(x, s, d$population)),
+               !!paste0("smd_", name, "_popyear") := smd(within_diff(x, s, d$pop_year)))
+      })
+    }) %>%
+    ungroup()
+}
