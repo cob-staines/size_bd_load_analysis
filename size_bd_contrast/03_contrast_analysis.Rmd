@@ -1000,7 +1000,7 @@ unit_label_cols = c("job", "taxon_capture", "variant", "part", "level", "group_i
 
 # group intercepts: overall infection of every site, site-year and event (midpoint of the two
 # stages; prevalence on the -hu logit scale, load on log load among positives), all parts and
-# tiers. for the intercept-contrast scatter and the absolute patterns
+# tiers. for the intercept-contrast scatter and the relative patterns
 group_intercepts = intercept_summary %>%
   label_units() %>%
   select(all_of(unit_label_cols), starts_with("intercept_"))
@@ -1218,7 +1218,7 @@ p_year_load
 #     construction and no pattern can show: the "informed" column says which levels to read.
 #   - exploratory: no thresholds, read the size and sign agreement (pd) of the summaries.
 #
-# the same helpers serve the contrasts here and the intercepts (absolute patterns) below.
+# the same helpers serve the contrasts here and the intercepts (relative patterns) below.
 # needs the unit draws kept in processing (refresh = TRUE once after they were added)
 unit_draws = function(job, part, level) processed[[job]]$unit_draws[[part]][[level]]
 int_unit_draws = function(job, part, level) processed[[job]]$int_unit_draws[[part]][[level]]
@@ -1335,9 +1335,11 @@ season_curve_draws = function(units, get_m, transform = identity) {
 }
 
 # plot of per-draw curves over unit medians (pts: job, taxon_capture, season_day, point_value);
-# facet_note: optional per-job suffix for the facet label (e.g. "event sd mostly prior")
+# facet_note: optional per-job suffix for the facet label (e.g. "event sd mostly prior");
+# ref_line: y of the reference line (0 for contrasts, 1 for ratios; NULL = none);
+# facet_scales: "free" (each species its own y range) or "free_x" (one y range for all species)
 plot_curves = function(curves, pts, part_name, y_label, subtitle, facet_note = NULL,
-                       y_scale = NULL, zero_line = TRUE) {
+                       y_scale = NULL, ref_line = 0, facet_scales = "free") {
   if (!"part" %in% names(curves)) return(NULL)   # no draws
   cu = curves %>% filter(part == part_name)
   if (nrow(cu) == 0) return(NULL)
@@ -1351,11 +1353,11 @@ plot_curves = function(curves, pts, part_name, y_label, subtitle, facet_note = N
            species = factor(species, levels = species)) %>%
     select(job, species)
   p = ggplot(left_join(cu, facet_labels, by = "job"), aes(x = season_day, y = value)) +
-    (if (zero_line) geom_hline(yintercept = 0, color = "grey60") else NULL) +
+    (if (!is.null(ref_line)) geom_hline(yintercept = ref_line, color = "grey60") else NULL) +
     geom_line(aes(group = interaction(.draw, segment)), alpha = 0.08, color = "#2166AC") +
     geom_point(data = left_join(pts, facet_labels, by = "job"), aes(y = point_value),
                size = 0.8, alpha = 0.6) +
-    facet_wrap(~ species, scales = "free", ncol = 4) +
+    facet_wrap(~ species, scales = facet_scales, ncol = 4) +
     labs(x = "day of the species' season (from its seasonal origin)", y = y_label, subtitle = subtitle) +
     theme_classic() +
     theme(strip.text = element_text(face = "italic", size = 8))
@@ -1430,7 +1432,7 @@ if (nrow(year_summary) > 0) year_summary %>%
 
 ```
 
-## Absolute patterns: overall infection through the season and years (item 4; supplement)
+## Relative patterns: overall infection through the season and years (item 4; supplement)
 ```{r}
 #| fig-height: 10
 #| fig-width: 14
@@ -1440,11 +1442,24 @@ if (nrow(year_summary) > 0) year_summary %>%
 # events count than for the contrast, in every tier (D included).
 # units: "observed" events / site-years, >= 5 swabs (prevalence) or >= 3 positive swabs (load),
 # not co-sampled ones. the midpoint avoids predicting a stage where it was not swabbed.
-# scales: slopes and late - early on the model scale (logit prevalence, log load among
-# positives); curves and points back-transformed to prevalence and median load among positives.
+#
+# relative, not absolute (2026-11-26): absolute prevalence and load differ between labs (assay
+# sensitivity, standards), so they are not shown, to avoid comparing levels between species.
+# everything is relative to the species' own reference:
+#   - curves and points: each event's intercept minus the mean of the species' plotted events,
+#     per draw (reference = "the species' average sampled event"; the band centers on x1 and
+#     shows shape only). subtracting per draw, before taking medians, removes the uncertainty in
+#     the species level and keeps only the uncertainty in the pattern.
+#   - back-transformed with exp: prevalence -> odds ratio of a Bd-positive swab (the logit
+#     difference; NOT a prevalence ratio: doubling the odds from 80% gives 89%); load -> ratio of
+#     the median load among positives (exp of a log difference: x2 = twice the median load).
+#   - slopes and late - early are differences already (a constant reference cancels), shown
+#     also as ratios: per 30 days, late vs early third, per year.
+# axes: log2, x1/2 and x2 equally far from x1. load on one y range for all species (load ratios
+# can be compared across species: lab offsets cancel in a ratio); prevalence free per species
+# (lab sensitivity does not act multiplicatively on the odds: read within species only).
 # caveats as above (no seasonal / year term, pooled comparisons mix in sampling timing), plus:
-# absolute levels are within-species only (labs differ in sensitivity), and the midpoint is not a
-# population average weighted by the stages present.
+# the midpoint is not a population average weighted by the stages present.
 min_swabs_abs = 5
 min_pos_abs = 3
 
@@ -1459,6 +1474,16 @@ observed_units = function(level_name) {
 abs_season_units = observed_units("pop_year_event") %>% add_season_day()
 get_event_intercepts = function(job, part) int_unit_draws(job, part, "pop_year_event")
 
+# ratio columns for a summary table: exp of a model-scale difference. prevalence = odds ratio of
+# a Bd-positive swab, load = ratio of median load among positives. exp is monotone, so the median
+# and interval limits transform directly (pd and support are unchanged)
+add_ratio = function(s) {
+  if (nrow(s) == 0) return(s)
+  s %>% mutate(ratio_median = exp(value_median),
+               ratio_lower_95 = exp(value_lower_95),
+               ratio_upper_95 = exp(value_upper_95))
+}
+
 abs_season_draws = season_pattern_draws(abs_season_units, get_event_intercepts)
 abs_season_summary = summarise_unit_draws(abs_season_draws, c("slope_within", "slope_pooled", "late_minus_early"))
 if (nrow(abs_season_summary) > 0) abs_season_summary = abs_season_summary %>%
@@ -1466,38 +1491,69 @@ if (nrow(abs_season_summary) > 0) abs_season_summary = abs_season_summary %>%
               group_by(job, part) %>%
               summarise(n_events = n(),
                         n_site_years_multi = sum(table(pop_year) >= 2), .groups = "drop"),
-            by = c("job", "part"))
+            by = c("job", "part")) %>%
+  add_ratio()
 
+# value: model scale (logit / log difference); ratio: odds ratio (prevalence) or fold change in
+# median load (load). slopes per 30 days, late_minus_early = late vs early third
 if (nrow(abs_season_summary) > 0) abs_season_summary %>%
   transmute(species = species_label(taxon_capture), part, summary, n_events, n_site_years_multi,
             value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            ratio = fmt_ci(ratio_median, ratio_lower_95, ratio_upper_95),
             pd = round(value_pd, 3), support = value_support) %>%
   arrange(part, species, summary)
 
-# curves on readable scales: prevalence = plogis(-hu intercept); median load among positives =
-# exp(mu intercept), on a log axis
-abs_curves = bind_rows(
-  season_curve_draws(abs_season_units %>% filter(part == "prevalence"), get_event_intercepts,
-                     transform = plogis),
-  season_curve_draws(abs_season_units %>% filter(part == "load"), get_event_intercepts,
-                     transform = exp))
-abs_points = abs_season_units %>%
-  mutate(point_value = if_else(part == "prevalence", plogis(intercept_median), exp(intercept_median)))
+# event intercepts relative to the species' average plotted event, per draw: the plotted events
+# of that species and part (abs_season_units), minus their mean in each draw (row)
+get_event_intercepts_rel = function(job, part) {
+  m = get_event_intercepts(job, part)
+  if (is.null(m)) return(NULL)
+  ids = abs_season_units$group_id[abs_season_units$job == job & abs_season_units$part == part]
+  m = m[, ids, drop = FALSE]
+  m - rowMeans(m)
+}
 
-p_abs_season_prev = plot_curves(abs_curves, abs_points, "prevalence",
-                                y_label = "prevalence (midpoint of the two stages)",
+# point per event: median over draws of its relative value (not its absolute median minus the
+# reference median)
+rel_points = abs_season_units %>%
+  group_by(job, part) %>%
+  group_modify(function(u, key) {
+    m = get_event_intercepts_rel(key$job, key$part)
+    u$point_value = if (is.null(m)) NA_real_ else exp(apply(m[, u$group_id, drop = FALSE], 2, median))
+    u
+  }) %>%
+  ungroup()
+
+# curves: exp of the relative smooth = odds ratio (prevalence) or load ratio (load)
+rel_curves = season_curve_draws(abs_season_units, get_event_intercepts_rel, transform = exp)
+
+# log2 axis labelled as multiples of the reference (x1/4, x1/2, x1, x2, ...); at most ~8 breaks,
+# always including x1
+ratio_breaks = function(lims) {
+  k = floor(log2(lims[1])):ceiling(log2(lims[2]))
+  step = max(1, ceiling(length(k) / 8))
+  2^k[k %% step == 0]
+}
+ratio_labels = function(x) ifelse(x >= 1, paste0("×", x), paste0("×1/", 1 / x))
+ratio_scale = scale_y_continuous(trans = "log2", breaks = ratio_breaks, labels = ratio_labels)
+
+p_rel_season_prev = plot_curves(rel_curves, rel_points, "prevalence",
+                                y_label = "odds of a Bd-positive swab,\nrelative to the species' average event",
                                 subtitle = paste0("prevalence: observed event intercepts (points, >= ", min_swabs_abs,
-                                                  " swabs) and per-draw seasonal smooths (100 draws)"),
-                                y_scale = scale_y_continuous(labels = scales::percent), zero_line = FALSE)
-p_abs_season_load = plot_curves(abs_curves, abs_points, "load",
-                                y_label = "median load density among positives (midpoint)",
+                                                  " swabs) and per-draw seasonal smooths (100 draws), relative to ",
+                                                  "each species' average event\nodds ratio, not prevalence ratio; ",
+                                                  "y axis per species: read within species only"),
+                                y_scale = ratio_scale, ref_line = 1, facet_scales = "free")
+p_rel_season_load = plot_curves(rel_curves, rel_points, "load",
+                                y_label = "median load among positives,\nrelative to the species' average event",
                                 subtitle = paste0("load: observed event intercepts (points, >= ", min_pos_abs,
-                                                  " positives) and per-draw seasonal smooths (100 draws)"),
-                                y_scale = scale_y_log10(), zero_line = FALSE)
-p_abs_season_prev
-p_abs_season_load
+                                                  " positives) and per-draw seasonal smooths (100 draws), relative to ",
+                                                  "each species' average event\none y axis for all species"),
+                                y_scale = ratio_scale, ref_line = 1, facet_scales = "free_x")
+p_rel_season_prev
+p_rel_season_load
 
-# across years within sites
+# across years within sites (table only; slopes per year, also as ratios)
 abs_year_units = observed_units("pop_year")
 abs_year_draws = year_pattern_draws(abs_year_units, function(job, part) int_unit_draws(job, part, "pop_year"))
 abs_year_summary = summarise_unit_draws(abs_year_draws, c("slope_within", "slope_pooled"))
@@ -1506,11 +1562,13 @@ if (nrow(abs_year_summary) > 0) abs_year_summary = abs_year_summary %>%
               group_by(job, part) %>%
               summarise(n_site_years = n(), n_years = n_distinct(year),
                         n_sites_multi = sum(table(population) >= 2), .groups = "drop"),
-            by = c("job", "part"))
+            by = c("job", "part")) %>%
+  add_ratio()
 
 if (nrow(abs_year_summary) > 0) abs_year_summary %>%
   transmute(species = species_label(taxon_capture), part, summary, n_site_years, n_years, n_sites_multi,
             value = fmt_ci(value_median, value_lower_95, value_upper_95),
+            ratio = fmt_ci(ratio_median, ratio_lower_95, ratio_upper_95),
             pd = round(value_pd, 3), support = value_support) %>%
   arrange(part, species, summary)
 
@@ -1664,8 +1722,8 @@ save_plot(p_int_contrast_prev, "03_contrast_intercept_scatter_prevalence.png", 1
 save_plot(p_int_contrast_load, "03_contrast_intercept_scatter_load.png", 14, 12)
 save_plot(p_sd_ratio, "03_contrast_sd_ratio.png", 11, 9)
 save_plot(p_share_compare, "03_contrast_share_compare.png", 11, 9)
-save_plot(p_abs_season_prev, "03_absolute_season_prevalence.png", 14, 10)
-save_plot(p_abs_season_load, "03_absolute_season_load.png", 14, 10)
+save_plot(p_rel_season_prev, "03_relative_season_prevalence.png", 14, 10)
+save_plot(p_rel_season_load, "03_relative_season_load.png", 14, 10)
 save_plot(p_consistency_m11g, "03_contrast_consistency_m11g.png", 10, 5)
 save_plot(p_consistency_season, "03_contrast_consistency_season.png", 10, 5)
 
@@ -1700,12 +1758,12 @@ write_csv(consistency_m11g, file.path(intermediates_dir, "03_contrast_consistenc
 # per-draw season and year summaries (exploratory; stage 2 tests these formally)
 write_csv(season_summary, file.path(intermediates_dir, "03_contrast_season_summary.csv"))
 write_csv(year_summary, file.path(intermediates_dir, "03_contrast_year_summary.csv"))
-# overall infection (intercepts): per-level sds and shares, per-unit intercepts, absolute season
-# and year summaries (within species only)
+# overall infection (intercepts): per-level sds and shares, per-unit intercepts, season and
+# year summaries (model-scale differences plus ratio columns: odds ratio / load ratio)
 write_csv(intercept_level_summary, file.path(intermediates_dir, "03_intercept_level_summary.csv"))
 write_csv(group_intercepts, file.path(intermediates_dir, "03_group_intercepts.csv"))
-write_csv(abs_season_summary, file.path(intermediates_dir, "03_absolute_season_summary.csv"))
-write_csv(abs_year_summary, file.path(intermediates_dir, "03_absolute_year_summary.csv"))
+write_csv(abs_season_summary, file.path(intermediates_dir, "03_relative_season_summary.csv"))
+write_csv(abs_year_summary, file.path(intermediates_dir, "03_relative_year_summary.csv"))
 
 # manuscript essential data
 repo_dir = gsub("size_bd_load_analysis", "", here())
