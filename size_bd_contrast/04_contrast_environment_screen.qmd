@@ -21,12 +21,15 @@ What this can and cannot say:
 - **co-sampled events only**: the only units that carry information about a stage x environment
   interaction. Species with few co-sampled events add little; *R. sierrae* has the most, but
   species-varying slopes keep it from setting the mean slope on its own.
-- **between-site climate pending**: the site mean of swab-date weather is "climate at sampling
-  time" (a summer-only site looks warm), so site climate waits for long-term normals (bioclim at
-  site coordinates). Within-season and between-year terms are used here.
+- **between-site climate from long-term normals**: the site mean of swab-date weather is
+  "climate at sampling time" (a summer-only site looks warm), so between-site terms use CHELSA
+  bioclim 1981-2010 at site coordinates (`size_bd_unified/site_bioclim.Rmd`; added 2026-11-26):
+  annual mean temperature, temperature seasonality, annual precipitation, precipitation
+  seasonality, centered within species. Their slopes rest on species with co-sampled events at
+  several sites in different climates (mostly the data-rich *Rana*).
 
-Run order: `size_bd_unified/01_model_data.Rmd` (model data), `01_contrast_tiers.Rmd` (species
-table), then this script. Fits are small (hundreds of rows) and cached with `file =`.
+Run order: `size_bd_unified/01_model_data.Rmd` (model data), `size_bd_unified/site_bioclim.Rmd`
+(site climate), `01_contrast_tiers.Rmd` (species table), then this script. Fits are small (hundreds of rows) and cached with `file =`.
 
 # Setup
 ```{r}
@@ -50,6 +53,10 @@ source(here("size_bd_contrast", "contrast_data_functions.R"))
 source(here("size_bd_season", "season_check_functions.R"))
 
 set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+
+# long-term site climate (CHELSA bioclim 1981-2010; size_bd_unified/site_bioclim.Rmd)
+site_bioclim = read_csv(here("size_bd_unified", "intermediates", "site_bioclim.csv"),
+                        col_types = cols(site = "c", kg_code_3 = "c"))
 
 # included species (01_contrast_tiers.Rmd)
 species_table = read_csv(file.path(intermediates_dir, "01_contrast_species.csv"), show_col_types = FALSE)
@@ -84,21 +91,44 @@ events = contrast_data %>%
             mean_ll_sub = mean(log_load[life_stage_simple == "subadult"], na.rm = TRUE),
             .groups = "drop")
 
-# climate split into three parts, within species:
+# swab-date weather split into two parts, within species:
 #   *_within  event - its site-year mean      (within season)
 #   *_year    site-year mean - its site mean  (between years at a site)
-#   *_site    site mean - species mean        (between sites; NOT used: climate at sampling time)
-# means are over events, so each event counts once whatever its swab count
+# means are over events, so each event counts once whatever its swab count. (the site mean of
+# swab-date weather is not used between sites: it is climate at sampling time)
 events = events %>%
   group_by(taxon_capture, pop_year) %>%
   mutate(temp_py = mean(temp), precip_py = mean(precip)) %>%
   group_by(taxon_capture, population) %>%
   mutate(temp_pop = mean(temp_py), precip_pop = mean(precip_py)) %>%
-  group_by(taxon_capture) %>%
+  ungroup() %>%
   mutate(temp_within = temp - temp_py, precip_within = precip - precip_py,
-         temp_year = temp_py - temp_pop, precip_year = precip_py - precip_pop,
-         temp_site = temp_pop - mean(temp_pop), precip_site = precip_pop - mean(precip_pop)) %>%
+         temp_year = temp_py - temp_pop, precip_year = precip_py - precip_pop)
+
+# between sites: long-term climate of each population (mean over its sites, each site weighted
+# equally), centered within species on the mean over the species' populations. scaled so each
+# slope reads per a meaningful step:
+#   site_temp         annual mean temperature (bio1), per degree C
+#   site_temp_seas    temperature seasonality (bio4 / 100 = sd of monthly means), per degree C of sd
+#   site_precip       annual precipitation (log2 bio12), per doubling
+#   site_precip_seas  precipitation seasonality (bio15 / 10), per 10 points of coefficient of variation
+population_climate = contrast_data %>%
+  distinct(taxon_capture, population, site = as.character(site)) %>%
+  left_join(site_bioclim, by = "site") %>%
+  group_by(taxon_capture, population) %>%
+  summarise(site_temp = mean(bio1_temp_mean),
+            site_temp_seas = mean(bio4_temp_seasonality) / 100,
+            site_precip = log2(mean(bio12_precip_annual)),
+            site_precip_seas = mean(bio15_precip_seasonality) / 10,
+            .groups = "drop") %>%
+  group_by(taxon_capture) %>%
+  mutate(across(starts_with("site_"), ~ .x - mean(.x))) %>%
   ungroup()
+
+# populations without site climate (expected: none)
+population_climate %>% filter(if_any(starts_with("site_"), is.na))
+
+events = events %>% left_join(population_climate, by = c("taxon_capture", "population"))
 
 ```
 
@@ -146,6 +176,17 @@ prev_events %>%
                             ~ round(sd(.x), 2)), .groups = "drop") %>%
   arrange(desc(n))
 
+# site climate among the populations with co-sampled events, per species: the between-site slopes
+# rest on species with several such populations spanning a climate range
+prev_events %>%
+  distinct(taxon_capture, population, site_temp, site_temp_seas, site_precip, site_precip_seas) %>%
+  group_by(taxon_capture) %>%
+  summarise(n_populations = n(),
+            across(c(site_temp, site_temp_seas, site_precip, site_precip_seas),
+                   ~ round(max(.x) - min(.x), 2), .names = "{.col}_range"),
+            .groups = "drop") %>%
+  arrange(desc(n_populations))
+
 ```
 
 # Models
@@ -170,6 +211,13 @@ env_formula = bf(contrast | se(se, sigma = TRUE) ~ 1 + temp_within + precip_with
                    precip_year + (1 + temp_within + precip_within | taxon_capture) +
                    (1 | taxon_capture:population))
 null_formula = bf(contrast | se(se, sigma = TRUE) ~ 1 + (1 | taxon_capture) +
+                    (1 | taxon_capture:population))
+# site model: the environment model plus long-term site climate (shared slopes, to keep
+# parameters few). comparing the site sd with the environment model says how much of the
+# between-site variation in the contrast site climate explains (Q8)
+site_formula = bf(contrast | se(se, sigma = TRUE) ~ 1 + temp_within + precip_within + temp_year +
+                    precip_year + site_temp + site_temp_seas + site_precip + site_precip_seas +
+                    (1 + temp_within + precip_within | taxon_capture) +
                     (1 | taxon_capture:population))
 
 # priors: weakly informative on the contrast scale (logit for prevalence, log load for load).
@@ -199,7 +247,26 @@ screen_fits = list(
   prevalence_env  = fit_screen(env_formula,  prev_events, screen_priors(TRUE, 2),  "screen_prevalence_env"),
   prevalence_null = fit_screen(null_formula, prev_events, screen_priors(FALSE, 2), "screen_prevalence_null"),
   load_env        = fit_screen(env_formula,  load_events, screen_priors(TRUE, 3),  "screen_load_env"),
-  load_null       = fit_screen(null_formula, load_events, screen_priors(FALSE, 3), "screen_load_null"))
+  load_null       = fit_screen(null_formula, load_events, screen_priors(FALSE, 3), "screen_load_null"),
+  prevalence_site = fit_screen(site_formula, prev_events, screen_priors(TRUE, 2),  "screen_prevalence_site"),
+  load_site       = fit_screen(site_formula, load_events, screen_priors(TRUE, 3),  "screen_load_site"))
+
+# same-condition species contrasts for the predictive model's sensitivity fit (README "Downstream
+# models"): the null model with species as FIXED effects, so each species' contrast rests on its
+# own co-sampled events. the random-effect null above pulls species toward the cross-species
+# mean; feeding those into a cross-species model would pool twice (trait slopes and between-
+# species variance too small). weakly informative prior on each species' contrast
+species_formula = bf(contrast | se(se, sigma = TRUE) ~ 0 + taxon_capture +
+                       (1 | taxon_capture:population))
+species_priors = function(contrast_sd) {
+  set_prior(paste0("normal(0, ", contrast_sd, ")"), class = "b") +
+    set_prior("exponential(1)", class = "sd") +
+    set_prior("exponential(1)", class = "sigma")
+}
+screen_fits$prevalence_species = fit_screen(species_formula, prev_events, species_priors(2),
+                                            "screen_prevalence_species")
+screen_fits$load_species = fit_screen(species_formula, load_events, species_priors(3),
+                                      "screen_load_species")
 
 # sampler checks (thresholds in conv_check)
 map_dfr(screen_fits, conv_check, .id = "fit")
@@ -213,27 +280,33 @@ map_dfr(screen_fits, conv_check, .id = "fit")
 
 # population-level slopes: change in the contrast per degree C (temperature) or per doubling of
 # 10-day precipitation. median, 50 / 95% intervals, pd
-slope_draws = imap_dfr(screen_fits[c("prevalence_env", "load_env")], function(fit, name) {
-  as_draws_df(fit, variable = "^b_(temp|precip)_", regex = TRUE) %>%
+# env = weather terms only; site = weather + long-term site climate (site_* terms; the weather
+# slopes should barely move between the two)
+slope_draws = imap_dfr(screen_fits[c("prevalence_env", "load_env", "prevalence_site", "load_site")],
+                       function(fit, name) {
+  as_draws_df(fit, variable = "^b_(temp|precip|site)_", regex = TRUE) %>%
     as_tibble() %>%
     pivot_longer(starts_with("b_"), names_to = "term", values_to = "value") %>%
-    mutate(part = sub("_env$", "", name), term = sub("^b_", "", term))
+    mutate(part = sub("_(env|site)$", "", name), model = sub("^.*_", "", name),
+           term = sub("^b_", "", term))
 })
 
 (slope_summary = slope_draws %>%
-  group_by(part, term) %>%
+  group_by(part, model, term) %>%
   summarise(median = median(value),
             lower_50 = quantile(value, 0.25), upper_50 = quantile(value, 0.75),
             lower_95 = quantile(value, 0.025), upper_95 = quantile(value, 0.975),
             pd = max(mean(value > 0), mean(value < 0)), .groups = "drop") %>%
   mutate(across(where(is.double), ~ round(.x, 3))))
 
-ggplot(slope_draws, aes(x = value, y = term)) +
+ggplot(slope_draws %>% filter(model == "site"), aes(x = value, y = term)) +
   stat_halfeye(.width = c(0.5, 0.95), normalize = "panels") +
   geom_vline(xintercept = 0, linetype = "dashed") +
   facet_wrap(~ part, scales = "free_x") +
-  labs(x = "change in the subadult - adult contrast (per degree C / per doubling of precipitation)",
-       y = NULL, subtitle = "population-level slopes; *_within = within season, *_year = between years at a site") +
+  labs(x = "change in the subadult - adult contrast per step (see the events chunk for units)",
+       y = NULL,
+       subtitle = paste("population-level slopes (site model); *_within = within season,",
+                        "*_year = between years at a site, site_* = long-term site climate")) +
   theme_classic()
 
 # how much the environment explains: event-level sd (sigma) and site sd, null vs environment
@@ -250,7 +323,9 @@ ggplot(slope_draws, aes(x = value, y = term)) +
 
 # out-of-sample comparison per part (small models: loo is cheap here)
 map(c(prevalence = "prevalence", load = "load"), function(p) {
-  loo_compare(loo(screen_fits[[paste0(p, "_env")]]), loo(screen_fits[[paste0(p, "_null")]]))
+  loo_compare(list(null = loo(screen_fits[[paste0(p, "_null")]]),
+                   env = loo(screen_fits[[paste0(p, "_env")]]),
+                   site = loo(screen_fits[[paste0(p, "_site")]])))
 })
 
 ```
@@ -286,8 +361,53 @@ ggplot(species_slopes %>% filter(.width == 0.95),
 
 ```
 
+# Same-condition species contrasts
+```{r}
+#| fig-height: 9
+#| fig-width: 10
+
+# per species: the contrast at its average co-sampled event (fixed-species null model), as
+# posterior mean and sd for the predictive model's sensitivity fit. same scales as stage 1:
+# prevalence = logit difference (positive = subadults more often infected), load = difference in
+# mean log load among positives. note: the Haldane correction (+0.5 per cell) pulls extreme
+# prevalence contrasts slightly toward 0; not corrected
+species_draws_sc = imap_dfr(list(prevalence = prev_events, load = load_events), function(ev, part) {
+  as_draws_df(screen_fits[[paste0(part, "_species")]], variable = "^b_taxon_capture", regex = TRUE) %>%
+    as_tibble() %>%
+    select(starts_with("b_")) %>%
+    pivot_longer(everything(), names_to = "taxon_capture", values_to = "contrast") %>%
+    mutate(taxon_capture = sub("^b_taxon_capture", "", taxon_capture), part = part)
+})
+
+same_condition_contrasts = species_draws_sc %>%
+  group_by(taxon_capture, part) %>%
+  summarise(contrast_mean = mean(contrast), contrast_sd = sd(contrast),
+            contrast_skew = mean(((contrast - mean(contrast)) / sd(contrast))^3),
+            .groups = "drop") %>%
+  left_join(bind_rows(prevalence = count(prev_events, taxon_capture, name = "n_events"),
+                      load = count(load_events, taxon_capture, name = "n_events"), .id = "part"),
+            by = c("taxon_capture", "part"))
+
+same_condition_contrasts %>%
+  mutate(across(where(is.double), ~ round(.x, 3))) %>%
+  arrange(part, desc(n_events))
+
+# half-eye check: roughly symmetric, unimodal shapes support mean and sd as the summary
+species_draws_sc %>%
+  mutate(part = factor(part, levels = c("prevalence", "load"))) %>%
+  ggplot(aes(x = contrast, y = taxon_capture)) +
+  stat_halfeye(.width = c(0.5, 0.95), normalize = "groups", point_size = 1) +
+  geom_vline(xintercept = 0, color = "grey60") +
+  facet_wrap(~ part, scales = "free") +
+  labs(x = "same-condition contrast (median, 50 / 95% intervals)", y = NULL,
+       subtitle = "species contrasts from co-sampled events only (fixed-species null model)") +
+  theme_classic()
+
+```
+
 # Export
 ```{r}
+write_csv(same_condition_contrasts, file.path(intermediates_dir, "04_same_condition_species_contrasts.csv"))
 write_csv(slope_summary, file.path(intermediates_dir, "04_environment_screen_slopes.csv"))
 write_csv(variance_explained, file.path(intermediates_dir, "04_environment_screen_variance.csv"))
 

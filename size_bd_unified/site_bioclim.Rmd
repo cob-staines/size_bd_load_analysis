@@ -1,0 +1,236 @@
+---
+title: "site_bioclim"
+output: html_document
+---
+
+Purpose: long-term climate at each modeling site (CHELSA v2.1 bioclim, 1981-2010, 30 arc-seconds
+~1 km, the grid of the KG raster used in `01_model_data.Rmd`). The swab-date weather in the model
+data is "climate at sampling time" (a site surveyed only in midsummer looks warm), so it cannot
+describe a site's climate. Used downstream for (README `size_bd_contrast/README.md`, "Downstream
+models"):
+
+- between-site climate terms in `size_bd_contrast/04_contrast_environment_screen.qmd` (Q8)
+- species-typical climate in the predictive model (mean over a species' sites, each site
+  weighted equally, so heavily sampled sites do not set a species' typical climate; written to
+  `intermediates/species_bioclim.csv`)
+- site-climate moderators in per-species moderation fits (option B), if pursued
+
+Variables (decided 2026-11-26): the mean and the seasonality of each climate variable.
+
+| CHELSA | name here | meaning | unit (after scaling) |
+|---|---|---|---|
+| bio1 | `bio1_temp_mean` | annual mean air temperature | degrees C |
+| bio4 | `bio4_temp_seasonality` | sd of monthly mean temperatures | degrees C / 100 (CHELSA convention, see check below) |
+| bio12 | `bio12_precip_annual` | annual precipitation | mm (kg m-2 year-1) |
+| bio15 | `bio15_precip_seasonality` | coefficient of variation of monthly precipitation | % |
+
+Kept separate from `01_model_data.Rmd` so the model data `.RData` that every analysis loads does
+not change. Run order: `01_model_data.Rmd` (writes the site table), the download below, then this
+script.
+
+**Download (once, by hand)** into `data/chelsa_bioclim/` (gitignored with the rest of `data/`):
+one global GeoTIFF per variable, ~100-400 MB each, from the CHELSA v2.1 climatologies
+(https://chelsa-climate.org, "Downloads" -> V2.1 -> GLOBAL -> climatologies -> 1981-2010 -> bio).
+File names: `CHELSA_bio1_1981-2010_V.2.1.tif` (and bio4, bio12, bio15). At the time of writing the
+files were served under
+`https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies/1981-2010/bio/` (older links:
+`.../envicloud/chelsa/chelsa_V2/GLOBAL/climatologies/1981-2010/bio/`); check the download page if
+these move.
+
+Optional, for the elevation check: a 30 arc-second DEM at `data/chelsa_bioclim/dem_30s.tif`
+(e.g. `geodata::elevation_global(res = 0.5, path = here("data", "chelsa_bioclim"))`, then rename).
+Without it the check is skipped.
+
+# Setup
+```{r}
+#| eval: true
+#| output: false
+#| code-fold: true
+#| code-summary: "Show setup code"
+
+librarian::shelf(tidyverse, here, terra)
+
+chelsa_dir = here("data", "chelsa_bioclim")
+intermediates_dir = here("size_bd_unified", "intermediates")
+
+# site table written by 01_model_data.Rmd (coordinates, KG zone)
+sites = read_csv(file.path(intermediates_dir, "size_bd_modeling_sites.csv"), show_col_types = FALSE) %>%
+  mutate(site = as.character(site))
+
+# recorded site elevation, from the model data (present for some sites only)
+load(here("size_bd_unified", "intermediates", "bd_model_env_unified_2026-11-12.RData"))
+site_elevation = brms_data %>%
+  mutate(site = as.character(site)) %>%
+  group_by(site) %>%
+  summarise(site_elevation_m = mean(site_elevation_m, na.rm = TRUE), .groups = "drop") %>%
+  mutate(site_elevation_m = if_else(is.nan(site_elevation_m), NA_real_, site_elevation_m))
+# which species were swabbed at which sites (for species-typical climate)
+species_sites = brms_data %>%
+  distinct(taxon_capture, site = as.character(site))
+rm(brms_data)
+
+```
+
+# Rasters
+```{r}
+bioclim_vars = c(bio1_temp_mean = "bio01", bio4_temp_seasonality = "bio04",
+                 bio12_precip_annual = "bio12", bio15_precip_seasonality = "bio15")
+
+bioclim_files = file.path(chelsa_dir, paste0("CHELSA_", bioclim_vars, "_1981-2010_V.2.1.tif"))
+missing_files = bioclim_files[!file.exists(bioclim_files)]
+if (length(missing_files) > 0) {
+  stop("CHELSA files not found (see the download note at the top):\n  ",
+       paste(missing_files, collapse = "\n  "))
+}
+
+bioclim = rast(bioclim_files)
+names(bioclim) = names(bioclim_vars)
+bioclim
+
+```
+
+# Extract at sites
+```{r}
+site_points = vect(sites, geom = c("site_longitude", "site_latitude"), crs = "EPSG:4326")
+
+site_bioclim = sites %>%
+  select(site, site_latitude, site_longitude, kg_code_3) %>%
+  bind_cols(terra::extract(bioclim, site_points, ID = FALSE))
+
+# sites on a coast or a no-data cell get NA: fall back to the mean of valid cells within 1.5 km,
+# then 5 km, and record which sites needed it
+fill_na_sites = function(df, radius_m) {
+  na_rows = which(!complete.cases(df[, names(bioclim_vars)]))
+  if (length(na_rows) == 0) return(df)
+  buffers = buffer(site_points[na_rows], width = radius_m)
+  filled = terra::extract(bioclim, buffers, fun = mean, na.rm = TRUE, ID = FALSE)
+  for (v in names(bioclim_vars)) {
+    df[[v]][na_rows] = coalesce(df[[v]][na_rows], filled[[v]])
+  }
+  df$filled_radius_m[na_rows] = if_else(complete.cases(filled), radius_m, df$filled_radius_m[na_rows])
+  df
+}
+
+site_bioclim = site_bioclim %>%
+  mutate(filled_radius_m = NA_real_) %>%
+  fill_na_sites(1500) %>%
+  fill_na_sites(5000)
+
+# sites filled from neighboring cells, and any still missing
+site_bioclim %>% filter(!is.na(filled_radius_m)) %>% count(filled_radius_m)
+site_bioclim %>% filter(!complete.cases(across(all_of(names(bioclim_vars)))))
+
+```
+
+# Units
+```{r}
+# CHELSA v2.1 stores some bioclim layers as scaled integers (e.g. temperature as 0.1 K), with the
+# scale and offset in the file metadata, which terra may or may not have applied on reading. the
+# documented conversions (CHELSA v2.1 technical specification) are applied only when the raw
+# values are clearly unscaled, judged from plausible ranges at these sites (latitude -24 to 47):
+#   bio1  annual mean temperature, degrees C: plausible -15 to 30; stored as 0.1 K -> x * 0.1 - 273.15
+#   bio4  temperature seasonality: plausible 0 to ~1500 (degrees C / 100); stored x 0.1 -> x * 0.1
+#   bio12 annual precipitation, mm: plausible 50 to 8000; stored x 0.1 -> x * 0.1
+#   bio15 precipitation seasonality, %: plausible 0 to 250; stored x 0.1 -> x * 0.1
+# check the printed ranges against these after any conversion.
+raw_ranges = site_bioclim %>%
+  summarise(across(all_of(names(bioclim_vars)), list(min = ~ min(.x, na.rm = TRUE),
+                                                     median = ~ median(.x, na.rm = TRUE),
+                                                     max = ~ max(.x, na.rm = TRUE))))
+raw_ranges
+
+if (median(site_bioclim$bio1_temp_mean, na.rm = TRUE) > 200) {
+  message("bio1 looks like 0.1 K: converting to degrees C")
+  site_bioclim$bio1_temp_mean = site_bioclim$bio1_temp_mean * 0.1 - 273.15
+}
+if (median(site_bioclim$bio12_precip_annual, na.rm = TRUE) > 8000) {
+  message("bio12 looks scaled x10: converting to mm")
+  site_bioclim$bio12_precip_annual = site_bioclim$bio12_precip_annual * 0.1
+}
+if (median(site_bioclim$bio15_precip_seasonality, na.rm = TRUE) > 250) {
+  message("bio15 looks scaled x10: converting to %")
+  site_bioclim$bio15_precip_seasonality = site_bioclim$bio15_precip_seasonality * 0.1
+}
+if (median(site_bioclim$bio4_temp_seasonality, na.rm = TRUE) > 1500) {
+  message("bio4 looks scaled x10: converting")
+  site_bioclim$bio4_temp_seasonality = site_bioclim$bio4_temp_seasonality * 0.1
+}
+
+# after conversion: ranges should sit inside the plausible ranges above
+site_bioclim %>%
+  summarise(across(all_of(names(bioclim_vars)), list(min = ~ min(.x, na.rm = TRUE),
+                                                     median = ~ median(.x, na.rm = TRUE),
+                                                     max = ~ max(.x, na.rm = TRUE))))
+
+```
+
+# Checks
+```{r}
+#| fig-height: 6
+#| fig-width: 10
+
+# elevation: a ~1 km cell averages over terrain, so in mountains its elevation (and climate) can
+# differ from the site's. diagnostic only (no lapse-rate correction unless mismatches are common):
+# sites with a recorded elevation that differs from the cell's by > 300 m (~2 degrees C at a
+# typical lapse rate of 6.5 degrees C / km)
+dem_file = file.path(chelsa_dir, "dem_30s.tif")
+site_bioclim = site_bioclim %>% left_join(site_elevation, by = "site")
+if (file.exists(dem_file)) {
+  site_bioclim$cell_elevation_m = terra::extract(rast(dem_file), site_points, ID = FALSE)[[1]]
+  site_bioclim = site_bioclim %>% mutate(elevation_diff_m = site_elevation_m - cell_elevation_m)
+
+  site_bioclim %>%
+    summarise(n_with_both = sum(!is.na(elevation_diff_m)),
+              n_diff_gt_300m = sum(abs(elevation_diff_m) > 300, na.rm = TRUE),
+              median_abs_diff_m = median(abs(elevation_diff_m), na.rm = TRUE))
+
+  site_bioclim %>% filter(abs(elevation_diff_m) > 300) %>% arrange(desc(abs(elevation_diff_m)))
+} else {
+  message("no DEM at ", dem_file, ": elevation check skipped")
+}
+
+# sanity check against the KG zone: annual mean temperature by zone (tropical A zones warm, D
+# zones cold, B dry zones low precipitation)
+site_bioclim %>%
+  group_by(kg_code_3) %>%
+  summarise(n = n(), temp_mean = round(median(bio1_temp_mean), 1),
+            precip_annual = round(median(bio12_precip_annual)), .groups = "drop") %>%
+  arrange(temp_mean)
+
+# distribution of annual mean temperature across sites, by KG main zone
+site_bioclim %>%
+  select(site, bio1_temp_mean, kg_code_3) %>%
+  ggplot(aes(x = bio1_temp_mean, fill = substr(kg_code_3, 1, 1))) +
+  geom_histogram(bins = 40) +
+  labs(x = "annual mean temperature (CHELSA bio1, degrees C)", y = "sites", fill = "KG zone") +
+  theme_classic()
+
+```
+
+# Species-typical climate
+```{r}
+# per species: mean over the sites where it was swabbed, each site weighted equally (decided
+# 2026-11-26: heavily sampled sites should not set a species' typical climate), plus the range
+# (max - min) across its sites as a climate-breadth measure. for the predictive model
+# (size_bd_contrast/README.md, "Downstream models")
+species_bioclim = species_sites %>%
+  inner_join(site_bioclim %>% select(site, all_of(names(bioclim_vars))), by = "site") %>%
+  group_by(taxon_capture) %>%
+  summarise(n_sites = n(),
+            across(all_of(names(bioclim_vars)),
+                   list(mean = ~ mean(.x, na.rm = TRUE),
+                        range = ~ max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE))),
+            .groups = "drop")
+
+species_bioclim %>%
+  mutate(across(where(is.double), ~ round(.x, 1))) %>%
+  arrange(bio1_temp_mean_mean)
+
+```
+
+# Export
+```{r}
+write_csv(site_bioclim, file.path(intermediates_dir, "site_bioclim.csv"))
+write_csv(species_bioclim, file.path(intermediates_dir, "species_bioclim.csv"))
+
+```

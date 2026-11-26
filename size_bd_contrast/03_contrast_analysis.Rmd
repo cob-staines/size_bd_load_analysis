@@ -1714,6 +1714,81 @@ if (file.exists(season_file)) {
 
 ```
 
+# Predictive model responses
+```{r}
+#| fig-height: 12
+#| fig-width: 11
+
+# inputs for the predictive model (README "Downstream models"): per species (main fits) and part,
+# the posterior mean and sd of the mean contrast, for contrast | se(sd, sigma = TRUE). that
+# treats each species' posterior as normal: the half-eye plot and the skewness column check it
+# (refit over posterior draws only for species that are clearly skewed or bounded).
+#
+# tier D se inflation (decided 2026-11-26): a tier D interval covers the sampled sites only, so
+# the missing between-site part of a species-wide mean is added:
+#   se_inflated^2 = sd^2 + tau^2 / n_co_pops
+# tau = median site-level contrast sd over the species whose site sd is informed (that part);
+# n_co_pops = the species' co-sampled populations (that part's definition). other tiers keep sd.
+species_table = read_csv(file.path(intermediates_dir, "01_contrast_species.csv"), show_col_types = FALSE)
+
+(tier_d_tau = level_summary %>%
+  filter(level == "population", informed) %>%
+  semi_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  group_by(part) %>%
+  summarise(tau = median(sd_median), n_informed_species = n(), .groups = "drop"))
+
+predictive_responses = species_draws %>%
+  semi_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  group_by(job, part) %>%
+  summarise(contrast_mean = mean(contrast),
+            contrast_sd = sd(contrast),
+            # standardized third moment: near 0 = symmetric; |skew| > ~0.5 worth a look
+            contrast_skew = mean(((contrast - mean(contrast)) / sd(contrast))^3),
+            .groups = "drop") %>%
+  left_join(job_info %>% select(job, taxon_capture, tier_hu, tier_mu, fit_ok), by = "job") %>%
+  left_join(species_table %>%
+              # pct_swabs_in_co_load_event: written by 01 from 2026-11-26 (re-run 01 if missing)
+              select(taxon_capture, n_co_pop, n_co_load_pop, pct_swabs_in_co_event,
+                     pct_swabs_in_co_load_event),
+            by = "taxon_capture") %>%
+  left_join(tier_d_tau %>% select(part, tau), by = "part") %>%
+  mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu),
+         n_co_pops = if_else(part == "prevalence", n_co_pop, n_co_load_pop),
+         # share of swabs in co-sampled events, in the part's definition (check fit)
+         pct_swabs_co_event = if_else(part == "prevalence", pct_swabs_in_co_event,
+                                      pct_swabs_in_co_load_event),
+         contrast_se = if_else(tier == "D", sqrt(contrast_sd^2 + tau^2 / pmax(n_co_pops, 1)), contrast_sd)) %>%
+  filter(tier != "none") %>%
+  select(taxon_capture, part, tier, fit_ok, contrast_mean, contrast_sd, contrast_se, contrast_skew,
+         n_co_pops, pct_swabs_co_event)
+
+# species with the largest inflation (tier D) and any skewed posteriors
+predictive_responses %>%
+  mutate(inflation = round(contrast_se / contrast_sd, 2), across(where(is.double), ~ round(.x, 3))) %>%
+  filter(tier == "D" | abs(contrast_skew) > 0.5) %>%
+  arrange(part, desc(inflation))
+
+# half-eye plot of the mean-contrast draws, per species and part: roughly symmetric, unimodal
+# shapes support summarising each species by its mean and sd
+p_response_draws = species_draws %>%
+  semi_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  left_join(job_info %>% select(job, taxon_capture), by = "job") %>%
+  mutate(species = factor(species_label(taxon_capture), levels = rev(species_levels)),
+         part = factor(part, levels = c("prevalence", "load"))) %>%
+  ggplot(aes(x = contrast, y = species)) +
+  ggdist::stat_halfeye(.width = c(0.5, 0.95), normalize = "groups", point_size = 1) +
+  geom_vline(xintercept = 0, color = "grey60") +
+  facet_wrap(~ part, scales = "free_x",
+             labeller = labeller(part = c(prevalence = "prevalence (logit)", load = "load among positives (log)"))) +
+  labs(x = "mean contrast draws (median, 50 / 95% intervals)", y = NULL,
+       subtitle = "posterior of each species' mean contrast: the predictive model summarises it by mean and sd") +
+  theme_classic() +
+  theme(axis.text.y = element_text(face = "italic"))
+
+p_response_draws
+
+```
+
 # Save figures
 ```{r}
 # ggsave for plots that may be NULL (no species of a tier for that part, no seasonal summary)
@@ -1743,6 +1818,7 @@ save_plot(p_rel_season_prev, "03_relative_season_prevalence.png", 14, 10)
 save_plot(p_rel_season_load, "03_relative_season_load.png", 14, 10)
 save_plot(p_consistency_m11g, "03_contrast_consistency_m11g.png", 10, 5)
 save_plot(p_consistency_season, "03_contrast_consistency_season.png", 10, 5)
+save_plot(p_response_draws, "03_predictive_response_draws.png", 11, 12)
 
 ```
 
@@ -1781,6 +1857,9 @@ write_csv(intercept_level_summary, file.path(intermediates_dir, "03_intercept_le
 write_csv(group_intercepts, file.path(intermediates_dir, "03_group_intercepts.csv"))
 write_csv(abs_season_summary, file.path(intermediates_dir, "03_relative_season_summary.csv"))
 write_csv(abs_year_summary, file.path(intermediates_dir, "03_relative_year_summary.csv"))
+# predictive model responses: species mean contrast mean / sd, tier D-inflated se, skewness,
+# co-sampled populations and share of swabs in co-sampled events (part definition)
+write_csv(predictive_responses, file.path(intermediates_dir, "03_predictive_responses.csv"))
 
 # manuscript essential data
 repo_dir = gsub("size_bd_load_analysis", "", here())

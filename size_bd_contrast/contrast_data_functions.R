@@ -114,6 +114,9 @@ count_co_units = function(df, unit, response = response_col,
               n_co = sum(co),
               n_co_load = sum(co_load),
               pct_swabs_in_co = round(100 * sum(n_unit[co]) / sum(n_unit), 1),
+              # the same share with the load definition (>= 1 positive of each stage as well);
+              # used for the load part of the predictive model's check fit (2026-11-26)
+              pct_swabs_in_co_load = round(100 * sum(n_unit[co_load]) / sum(n_unit), 1),
               .groups = "drop")
 }
 
