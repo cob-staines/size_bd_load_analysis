@@ -98,7 +98,8 @@ Stage 1 (per species, separately for prevalence and load):
 Downstream (Downstream models):
 
 - **Q7.** Is the species mean contrast phylogenetically structured, or related to habitat, life
-  history, body size or species-typical climate? (predictive model, across species)
+  history (extended larval period)? (predictive model, across species; climate and body size
+  left out, see Downstream models)
 - **Q8.** Do sites in different climates show different contrasts? (within species; needs
   long-term site climate)
 - **Q9.** Does the contrast move with conditions through time (within season, between years)?
@@ -404,21 +405,55 @@ Decided 2026-11-26. Stage 1 feeds two downstream analyses; the GAM runs separate
 
 ```
 stage 1 contrast models (per species)
-   |-> predictive model           species mean contrasts ~ phylogeny + traits (+ species-typical climate)
+   |-> predictive model           species mean contrasts ~ phylogeny + traits (no climate)
    |-> environment and contrast   within species: does the contrast move with conditions?
                                   environment screen (04) -> per-species moderation fits if warranted
 GAM (size_bd_gam/)                finer age resolution; stage 1 nuisance structure, no climate terms
 ```
 
-**Predictive model** (replaces `size_bd_unified/05_species_regression.qmd`). Response: species
-mean contrasts (prevalence and load), stage 1 uncertainty carried through (`contrast | se(sd)` or
-fits over posterior draws), phylogenetic covariance from
-`size_bd_unified/intermediates/phylo_tree.nwk`. Candidate predictors: habitat breadth, aquatic
-index, body size (adult median SVL) and stage gap (subadult / adult median SVL), species-typical
-climate (pending long-term site climate). Development mode dropped: only 2 of 31 species are
-coded direct (*I. henselii*, and *C. panamansis*, which is probably larval: males carry tadpoles
-to streams), so its effect would rest on one species. With 31 species, predictors are few per
-model (small hypothesis-specific models with regularizing priors).
+**Predictive model** (replaces `size_bd_unified/05_species_regression.qmd`; decided 2026-11-26).
+
+- *Response*: species mean contrasts, prevalence and load in one multivariate model
+  (`mvbf`, `subset()` for load: *B. faber* has no load contrast), so the phylogenetic
+  correlation between the two parts is estimated. 31 species for prevalence, 30 for load.
+- *Uncertainty*: each species' posterior mean and sd of its mean contrast in
+  `se(sd, sigma = TRUE)`. Assumes roughly normal posteriors: checked with half-eye plots of the
+  draws (`03`, and `04` for the same-condition contrasts); refits over posterior draws only if
+  some are clearly skewed.
+- *Tier D*: a tier D interval covers the sampled sites only, so its se is inflated with the
+  missing between-site part of a species-wide mean: se_inflated^2 = se^2 + tau^2 / n_co_pops,
+  tau = median site-level contrast SD over the informed species of that part, n_co_pops = the
+  species' co-sampled populations (that part's definition). Fixed before fitting.
+- *Predictors* (standardized): log habitat breadth, aquatic index, extended larval period
+  (binary: age at metamorphosis > 12 months, i.e. overwintering larvae; 8 species: *A. mavortium*,
+  *A. canorus*, *R. cascadae*, *R. catesbeiana*, *R. clamitans*, *R. luteiventris*, *R. muscosa*,
+  *R. sierrae*; from `data/species_notes_2026-11-26.csv`, coding fixed for *R. catesbeiana*,
+  *R. clamitans* and *H. phyllodes* on 2026-11-26), plus a phylogenetic random effect
+  (`(1 | p | gr(taxon_capture, cov = A))`, correlation matrix from
+  `size_bd_unified/intermediates/phylo_tree.nwk`). The extended group overlaps partly with
+  *Rana* (the phylogenetic effect competes) and with the Sierra Nevada epizootics; the two
+  eastern bullfrogs weaken the overlap with region.
+- *Left out*:
+  - species-typical climate: across species it is almost a region label (the Panama species all
+    at ~23 degrees C and ~3500 mm, the Sierra Nevada species at 0-1 degrees C, the Brazilian
+    species at ~19 degrees C), entangled with lab and lineage, and within species long-term site
+    climate explains little of the contrast (environment screen, below). Available in
+    `size_bd_unified/intermediates/species_bioclim.csv`.
+  - body size: correlated with habitat breadth (log adult SVL vs log habitat breadth, r = 0.71).
+  - stage gap (subadult / adult SVL): partly reflects sampling (metamorphs vs older juveniles)
+    and the SVL cutoff, and is mechanically tied to the load response: load density = copies /
+    SVL, so the density contrast = the per-swab contrast - log(gap), and a gap slope would be
+    fixed at -1 in part by definition. Size questions belong in the GAM. (*R. luteiventris* has
+    no SVL: a constant placeholder of 25 mm, since its swabs used standardized stroke lengths;
+    life stage was assigned from morphology. Fine for stage 1; it would have been dropped had
+    SVL-based predictors been used.)
+  - development mode: 1 direct developer after the coding fixes (*I. henselii*).
+  - age at maturity: mostly inferred from congeners at low confidence.
+  - candidates for later models: disease history (Bd-associated decline status, e.g.
+    Scheele et al. 2019; or epizootic vs enzootic phase), larval habitat (stream vs pond),
+    breeding phenology.
+- *Variants*: an ordinal version of age at metamorphosis (`mo()`, D < R < M < E) as a
+  sensitivity fit; only its total effect is readable (D and R hold 1 and 2 species).
 
 The mix of same-condition and realized contrasts across species (How to read the results) is
 handled in three parts (decided 2026-11-26):
@@ -431,7 +466,9 @@ handled in three parts (decided 2026-11-26):
   15 for load). Every species then contributes the same kind of contrast. Agreement with the
   main fit = trait conclusions do not rest on the mix; disagreement is itself a result about
   timing.
-- *check, descriptor as covariate*: one fit adding a stage sampling conditions term; its slope
+- *check, descriptor as covariate*: one fit adding the share of swabs in co-sampled events
+  (prevalence definition for the prevalence part, load definition for the load part; chosen over
+  |SMD| of temperature, which would miss timing differences in aseasonal Panama); its slope
   near 0 = the mix does not shift contrasts systematically. Read cautiously: it uses a predictor
   slot, may track data sparsity or lineage, and may absorb real biology (timing is part of being
   a subadult).
@@ -469,15 +506,39 @@ question. What remains is whether the *contrast* changes with conditions, asked 
     sampling se dominates), so variance explained cannot be read.
   - all seasonal-environmental (raw lags; site-year means also shift with when in the season a
     year was sampled), not weather effects.
-- *Per-species moderation fits* (option B), if pursued: stage 1 refits adding `stage_c x`
+- *Per-species moderation fits* (option B; on hold since 2026-11-26), if pursued: stage 1 refits adding `stage_c x`
   within-site-year weather deviations (main effects absorbed by the event intercepts), only for
   parts whose contrast varies at that level (tier A for weather; tiers A-C for site climate), so
   the moderator does not take credit for all unit-to-unit variation. "How much" = the reduction
   in the event (site) contrast SD. Kept as new job variants; the main fits stay the source for
-  Q1-Q6.
-- *Site climate* (Q8) needs long-term normals (e.g. WorldClim / CHELSA bioclim at site
-  coordinates): the site mean of swab-date weather is "climate at sampling time". A weather
-  interpretation (Q9) needs a climatology / anomaly split (multi-year site x day-of-year normals).
+  Q1-Q6. Given the screen, the justified scope would be weather only, for the tier A parts:
+  site-climate moderators are low priority.
+- *Site climate* (Q8): long-term normals (CHELSA bioclim 1981-2010 at site coordinates,
+  `size_bd_unified/site_bioclim.Rmd`), not the site mean of swab-date weather ("climate at
+  sampling time"). Added to the screen as a third model (`site`: weather terms + annual mean
+  temperature, temperature seasonality, log2 annual precipitation, precipitation seasonality,
+  each population's climate centered within species, shared slopes). The between-site slopes rest
+  on species with co-sampled events at several sites spanning a climate range: *R. sierrae* (42
+  populations, 6.1 degrees C range), *R. muscosa* (16), *R. clamitans* (11, 13 degrees C),
+  *R. cascadae*, *N. viridescens*, *R. catesbeiana* (5-7). Mean temperature and temperature
+  seasonality are correlated (r = -0.73 among co-sampled events), so their separate slopes are
+  less certain than their joint effect. Results (run 2026-11-26):
+  - the weather slopes do not move when site climate is added (load temp_year +0.30 [0.10, 0.50],
+    pd 0.998; prevalence precip_year -0.11 [-0.23, 0.02], pd 0.96): the between-year
+    associations are not explained by which climates the sites sit in.
+  - site climate shows weak evidence at most. Load: smaller gap at sites with more seasonal
+    rainfall, -0.46 per 10 points of precipitation seasonality [-1.08, 0.15], pd 0.93 (1 of 8
+    site-climate slopes; mostly the Sierra Nevada *Rana*); mean temperature, temperature
+    seasonality and annual precipitation near 0 (pd 0.63-0.77). Prevalence: all four near 0
+    (pd 0.54-0.86).
+  - load site SD 0.77 -> 0.66 (taken at face value ~27% of the between-site variance in the load
+    contrast, but the intervals overlap widely: 0.27-1.23 vs 0.11-1.15); prevalence site SD
+    unchanged (0.24 vs 0.23).
+  - reading for Q8: within species, little sign that long-term site climate shapes the contrast;
+    precipitation seasonality for load is a weak, mostly Sierra Nevada candidate.
+
+  A weather interpretation (Q9) needs a climatology / anomaly split (multi-year site x
+  day-of-year normals).
 
 **GAM** (`size_bd_gam/`, option 1): add the event intercept `(1 | pop_year_event)` and drop the
 climate terms and their m11g prior. The SVL curve is then estimated from size differences within
@@ -499,8 +560,8 @@ wrong sign for a species).
 | `02_contrast_modeling.qmd` | formula and priors by tier, prior validation, local timing, fit / load, model checks | written |
 | `r-brms-contained/size_bd_contrast_modeling.R` + `hpc/` | cluster fits, one job per array index (`hpc/submit_size_bd_contrast.sh` submits the four resource groups) | written |
 | `03_contrast_analysis.Rmd` | stage 1 results (mean contrasts, contrast sds, sign consistency, variance shares, group contrasts), consistency checks, exports for the downstream models | written |
-| `04_contrast_environment_screen.qmd` | environment screen: empirical contrasts of co-sampled events vs within-season and between-year weather (Downstream models) | written, run |
-| predictive model (file to be named) | species mean contrasts ~ phylogeny and traits | planned |
+| `04_contrast_environment_screen.qmd` | environment screen: empirical contrasts of co-sampled events vs within-season and between-year weather, and long-term site climate (Downstream models) | written, run (weather and site models) |
+| `05_contrast_predictive_model.qmd` | predictive model: species mean contrasts ~ log habitat breadth + aquatic index + extended larval period + phylogeny (main, same-condition, check, ordinal fits) | written |
 
 Outputs: `intermediates/` (tables), `models/` (fits, not tracked), `figures/`.
 
@@ -619,6 +680,25 @@ Dated one-liners; the reasoning is in the linked sections.
   from the environment screen's null model, 22 / 15 species) + one check fit with the descriptor
   as a covariate. Timing component (realized - same-condition) not a stated question: discussed
   per species (Downstream models).
+- 2026-11-26: long-term site climate from CHELSA v2.1 bioclim, 1981-2010, 30 arc-seconds (period
+  close to the KG raster's; better mountain precipitation than WorldClim): bio1 annual mean
+  temperature, bio4 temperature seasonality, bio12 annual precipitation, bio15 precipitation
+  seasonality (`size_bd_unified/site_bioclim.Rmd`). Species-typical climate = mean over the
+  species' sites, each site weighted equally.
+- 2026-11-26: between-site climate added to the environment screen (`04`, `site` model) from the
+  CHELSA site climate; species-typical climate (site-weighted means and ranges) written by
+  `site_bioclim.Rmd` for the predictive model.
+- 2026-11-26: site-climate screen results (`04`, `site` model): weather slopes unchanged; site
+  climate weak at most (load: precipitation seasonality -0.46 per 10 points, pd 0.93; others
+  near 0). Q8 read as little within-species evidence. Option B on hold (if revisited: weather
+  only, tier A). Species-typical climate left out of the predictive model (regional, entangled
+  with lab and lineage; little within-species signal); file kept.
+- 2026-11-26: predictive model specified (Downstream models): one multivariate model for both
+  parts; predictors log habitat breadth, aquatic index, extended larval period (binary, 8 of 31
+  species) + phylogeny; mean / sd in se(); tier D se inflated (se^2 + tau^2 / n_co_pops); body
+  size, stage gap, climate, development mode and age at maturity left out; check fit uses the
+  share of swabs in co-sampled events (load definition for load); same-condition contrasts from
+  a fixed-species null model in `04`.
 
 ## Open questions
 
@@ -629,13 +709,17 @@ Dated one-liners; the reasoning is in the linked sections.
   contrasts.
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
-- Predictive model: final predictor set and model grouping; which descriptor term for the check
-  fit (abs SMD of temperature, or share of swabs in co-sampled events); export of the
-  same-condition species contrasts from `04` (null models); species-typical climate.
-- Long-term site climate (bioclim at site coordinates) for Q8 and species-typical climate; then
-  the between-site terms in `04`.
-- Per-species moderation fits (option B): worth the refits given the screen's year-level load
-  signal? Which parts (tier A weather only, or also site climate)?
+- Predictive model inputs written (to run: `01`, `03`, `04`): load-definition co-sampling share
+  (`count_co_units()`, `01`); `03_predictive_responses.csv` (species mean / sd of the mean
+  contrast, tier D-inflated se, skewness, half-eye plot); `04_same_condition_species_contrasts.csv`
+  (fixed-species null model; the random-effect version would pool twice), with a half-eye
+  check. Inputs run 2026-11-26: no skewed posteriors (|skew| <= 0.42), so mean / sd suffice;
+  tier D inflation small (<= 9%). Three load tier D species have 0 co-sampled load populations
+  (*S. sila*, *A. mavortium*, *S. holbrookii*): their load contrasts rest entirely on
+  between-population comparisons. Model script: `05_contrast_predictive_model.qmd` (written).
+- *H. phyllodes* larval habitat coded D in `data/species_notes_2026-11-26.csv` (stream tadpoles:
+  probably A); not used in the model.
+- Per-species moderation fits (option B): on hold. If revisited: weather only, tier A parts.
 - Potential-bias measure (imbalance x the species' climate slope for overall infection), if any
   imbalanced species becomes central to the paper.
 - Climatology / anomaly split, needed only for a weather interpretation.
