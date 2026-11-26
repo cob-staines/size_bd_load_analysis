@@ -217,7 +217,7 @@ fit_contrast_model = function(job_row) {
 
 # Load fitted models
 ```{r}
-#| eval: false
+#| eval: true
 
 # cluster fits are copied into size_bd_contrast/models/ (named as in contrast_model_file).
 # jobs without a fit file yet are skipped with a message.
@@ -392,21 +392,55 @@ contrast_sds %>%
 # parameter. for contrast sds at levels with little co-sampling this is EXPECTED (shrinkage at
 # work, and what "mostly prior" in 03 means); it matters for tier A levels and for the mean
 # contrasts.
-# memory: brms hands priorsense the pointwise log-likelihood of every fit (draws x swabs: ~3.4 GB
-# for r. sierrae at 16000 draws), so the largest fits may need a machine with more memory; run
-# them one at a time if needed. the contrast-sd check below avoids this.
+#
+# memory: calling powerscale_sensitivity(fit) on a brmsfit makes brms build the pointwise
+# log-likelihood (draws x swabs) plus the mu / hu / sigma predictors at the same size: ~3.4 GB
+# each for r. sierrae (16000 draws x ~26.6k swabs). that crashed a 30 GB session (OOM kill,
+# 2026-11-26). but scaling the likelihood by alpha only reweights each draw by
+# exp((alpha - 1) * sum_i log_lik_i): one number per draw, the log-likelihood summed over swabs.
+# so it is computed here in blocks of draws, keeping only the row sums (~0.2 GB per block for
+# r. sierrae), and handed to priorsense as a draws object, as in sd_prior_draws() below.
+# priorsense reads the log prior from every column starting with "lprior" (lprior, plus
+# lprior_sdcontrast where the round 3 prior tag exists) and the log-likelihood from "log_lik".
 library(priorsense)
 
 contrast_vars = function(fit) {
   grep("^b_(hu_)?stage_c$|^sd_.*__(hu_)?stage_c$", variables(fit), value = TRUE)
 }
 
+# summed log-likelihood per draw, block by block. log_lik() returns rows in draw order
+# (draw_ids), the same order as as_draws_df(), so the sums line up with the draws
+summed_log_lik = function(fit, block = 1000) {
+  ids = seq_len(ndraws(fit))
+  unlist(lapply(split(ids, ceiling(ids / block)),
+                function(d) rowSums(log_lik(fit, draw_ids = d))),
+         use.names = FALSE)
+}
+
+# the contrast parameters, the log prior terms, and the summed log-likelihood of one fit
+powerscale_draws = function(fit) {
+  lprior_vars = grep("^lprior", variables(fit), value = TRUE)
+  dr = as_draws_df(fit, variable = c(contrast_vars(fit), lprior_vars))
+  dr$log_lik = summed_log_lik(fit)
+  dr
+}
+
 contrast_sensitivity = imap(contrast_models, function(fit, job) {
-  powerscale_sensitivity(fit, variable = contrast_vars(fit)) %>%
+  message(job)   # progress, and shows which job was running if memory runs out
+  dr = powerscale_draws(fit)
+  out = powerscale_sensitivity(dr, variable = contrast_vars(fit)) %>%
     as_tibble() %>%
     mutate(job = job)
+  rm(dr); gc()
+  out
 }) %>%
   list_rbind()
+
+# one-time check that the shortcut matches brms' own route, on a fit small enough for both
+# (r. clamitans, n ~2.6k): the two tables should agree to rounding
+# powerscale_sensitivity(contrast_models[["rana_clamitans_main"]],
+#                        variable = contrast_vars(contrast_models[["rana_clamitans_main"]]))
+# filter(contrast_sensitivity, job == "rana_clamitans_main")
 
 contrast_sensitivity %>%
   filter(diagnosis != "-")
@@ -415,7 +449,7 @@ contrast_sensitivity %>%
 
 ### Does the contrast-sd prior drive the mean contrast?
 ```{r}
-#| eval: false
+#| eval: true
 
 # the question behind keeping prior-dominated contrast sds in tiers B and C (README "How to read
 # the results"): those sds widen the mean contrast's interval for between-site variation, and
