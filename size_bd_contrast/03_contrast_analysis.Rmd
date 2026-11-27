@@ -1787,6 +1787,24 @@ p_response_draws = species_draws %>%
 
 p_response_draws
 
+# within-species estimation-error correlation between the prevalence and load mean contrasts:
+# both parts come from the same fit, so their draws are paired. se() in the predictive model
+# treats the two errors as independent; correlations near 0 support that (the hurdle parts share
+# no parameters, so they are expected near 0). clearly non-zero values would leak into the
+# cross-species prevalence - load correlation
+(predictive_error_cor = species_draws %>%
+  semi_join(job_info %>% filter(variant == "main"), by = "job") %>%
+  select(job, part, .draw, contrast) %>%
+  pivot_wider(names_from = part, values_from = contrast) %>%
+  filter(!is.na(prevalence), !is.na(load)) %>%
+  group_by(job) %>%
+  summarise(error_cor = cor(prevalence, load), .groups = "drop") %>%
+  left_join(job_info %>% select(job, taxon_capture), by = "job") %>%
+  select(taxon_capture, error_cor) %>%
+  arrange(desc(abs(error_cor))))
+
+summary(predictive_error_cor$error_cor)
+
 ```
 
 # Save figures
@@ -1860,6 +1878,7 @@ write_csv(abs_year_summary, file.path(intermediates_dir, "03_relative_year_summa
 # predictive model responses: species mean contrast mean / sd, tier D-inflated se, skewness,
 # co-sampled populations and share of swabs in co-sampled events (part definition)
 write_csv(predictive_responses, file.path(intermediates_dir, "03_predictive_responses.csv"))
+write_csv(predictive_error_cor, file.path(intermediates_dir, "03_predictive_error_cor.csv"))
 
 # manuscript essential data
 repo_dir = gsub("size_bd_load_analysis", "", here())
