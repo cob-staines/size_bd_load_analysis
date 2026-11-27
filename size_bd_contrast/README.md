@@ -400,9 +400,9 @@ What is lost, accepted:
 
 Kept from `size_bd_unified/`: `01_model_data.Rmd` (model data), `env_functions.R`,
 `contrast_functions.R` (`f_draw_agg`), `svl_stage_cutoffs.R`, the phylogenetic tree, data
-summaries (species / lab stats, sex composition) and the naive cutoff bootstrap. To do when
-retiring: re-point manuscript inputs from `unified_03_*` / `unified_05_*` to the contrast
-exports, and drop the m11g consistency check from `03` (or keep it as a historical note).
+summaries (species / lab stats, sex composition) and the naive cutoff bootstrap. Manuscript
+figures and tables re-pointed to the contrast exports 2026-11-27 (decision log). The m11g
+consistency check stays in the `03` code, not reported (decided 2026-11-27).
 
 ## Downstream models
 
@@ -833,19 +833,37 @@ Dated one-liners; the reasoning is in the linked sections.
   results). All priors together: load mean contrasts clean in 26 of 31 (flags = wide tier D
   posteriors and *R. pipiens*); prevalence flagged in 18 of 32 (0.05-0.21; largest
   *R. luteiventris* 3.20 +/- 1.15), not from the contrast-SD prior; split by prior part added
-  (`02` "Which prior moves the mean contrast?"). Where the contrast prior pulls large uncertain
-  contrasts toward 0 (several extended-larval species), the extended-larval slope in `05` would
-  be conservative (to confirm with the split).
+  (`02` "Which prior moves the mean contrast?").
+- 2026-11-27: prior split run (`02_powerscale_prior_split.csv`; all pareto k <= 0.65). The
+  prevalence flags come mainly from the contrast prior itself (normal(0, 2)); intercept and
+  nuisance priors move almost nothing (1 of 63 contrasts > 0.05). 49 of 63 mean contrasts shift
+  < 0.2 posterior SD under every prior part (a 95% interval is ~4 SD). Larger shifts are all
+  shrinkage toward 0: *R. luteiventris* prevalence (tier D, contrast prior, +/- 0.66 SD;
+  prior-shaped, reported as such), *A. mavortium* load (0.43), *R. muscosa* prevalence
+  (contrast-SD prior, 0.45), and the large negative prevalence contrasts of *B. faber*,
+  *P. regilla*, *R. pipiens*, *P. crucifer* (0.25-0.39). Shrinkage at both ends narrows the
+  extended vs other gap, so the extended-larval slope in `05` is conservative with respect to
+  the stage 1 priors. No refits: the reweighted posteriors already show the looser-prior answer
+  and no fit failed computationally.
+
+- 2026-11-27: manuscript figures and tables re-pointed from m11g to the contrast exports
+  (`size-bd-dynamics-manuscript/build_intermediates.Rmd`, captions in `main_text.qmd`; text not
+  revised). Species contrasts (cascade, scatters, tree maps, combined rank, contrast table) from
+  `contrast_03_a`, tier D drawn as open symbols; phylogenetic signal table and trait figure from
+  `contrast_05_b` / `contrast_05_a` (main fit, 50 / 95% intervals); population figures replaced
+  by per-population contrasts (`contrast_03_c`) and contrast SDs by level (`contrast_03_b`);
+  weather and variance-component figures removed. Data summary table, sex check and seasonal
+  size structure restricted to the 31 contrast species (the six m11g-only species dropped).
+  Main-text contrast figure = contrasts on the phylogeny (posterior medians, 50 / 95%, support,
+  tier D open, extended larval period marked), replacing the cascade (moved to the supplement,
+  ranked) and the contMap trees (ancestral states reconstructed from medians, ignoring
+  uncertainty). Same-condition estimates left out of the manuscript figures for now. m11g
+  consistency check kept in the `03` code, not reported.
 
 ## Open questions
 
 - Load co-sampling uses >= 1 positive of each stage; a stricter positive count may better match
   how much a unit informs the load contrast.
-- Mean-contrast prior sensitivity (`02` "Which prior moves the mean contrast?", written, to
-  run): which prior part (contrast prior, contrast-SD prior, other) moves the 18 flagged
-  prevalence mean contrasts, and by how many posterior SDs. Refits with exponential(1) /
-  exponential(4) only if a mean contrast shifts materially (the contrast-SD prior alone does
-  not; 2026-11-27 entry).
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
 - Predictive model inputs written (to run: `01`, `03`, `04`): load-definition co-sampling share
@@ -859,7 +877,7 @@ Dated one-liners; the reasoning is in the linked sections.
 - *H. phyllodes* larval habitat coded D in `data/species_notes_2026-11-26.csv` (stream tadpoles:
   probably A); not used in the model.
 - Predictive model: settle the wording of the results (provisional reading in Downstream
-  models); enable the manuscript exports in `05` once reviewed. Optional: prior sensitivity of
+  models). Manuscript exports (`contrast_05_*`) and figures enabled 2026-11-27. Optional: prior sensitivity of
   the extended-larval slope (`powerscale_sequence`), since it showed a mild prior-likelihood
   conflict (the prior pulls it in); a simulation of the achievable precision of the residual
   phylogenetic signal (31 species, these se's, this tree).
@@ -874,6 +892,5 @@ Dated one-liners; the reasoning is in the linked sections.
 - GAM option 1 to implement in `size_bd_gam/02_size_bd_GAM_modeling.qmd`.
 - Check *C. panamansis* development mode in `iucn_habitat_metrics.csv` (probably larval; moot
   for the predictive model, which drops development mode).
-- Retirement to-dos: manuscript inputs (`unified_03_*`, `unified_05_*`) re-pointed to contrast
-  exports; m11g consistency check in `03`; species-level mean contrasts for the six m11g-only
-  species reported as excluded.
+- Manuscript methods / results / discussion text still describes m11g (figures and captions
+  re-pointed 2026-11-27; text to be revised by the authors once the analysis is final).
