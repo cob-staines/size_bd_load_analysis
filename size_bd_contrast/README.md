@@ -462,16 +462,86 @@ handled in three parts (decided 2026-11-26):
   stage sampling conditions (SMDs, share of swabs in co-sampled events) reported next to every
   species-level result.
 - *sensitivity, same-condition response*: the same model on species mean contrasts from
-  co-sampled events only, from the environment screen's null model (22 species for prevalence,
-  15 for load). Every species then contributes the same kind of contrast. Agreement with the
-  main fit = trait conclusions do not rest on the mix; disagreement is itself a result about
-  timing.
+  co-sampled events only (22 species for prevalence, 15 for load). Every species then
+  contributes the same kind of contrast. Agreement with the main fit = trait conclusions do not
+  rest on the mix; disagreement is itself a result about timing. Prevalence comes from a
+  binomial model on the co-sampled events' counts, load from the empirical event contrasts
+  (environment screen, fixed-species null model). The empirical prevalence logits were replaced
+  on 2026-11-27 (Same-condition prevalence estimators, below); they stay as a labelled
+  comparison fit.
 - *check, descriptor as covariate*: one fit adding the share of swabs in co-sampled events
   (prevalence definition for the prevalence part, load definition for the load part; chosen over
   |SMD| of temperature, which would miss timing differences in aseasonal Panama); its slope
   near 0 = the mix does not shift contrasts systematically. Read cautiously: it uses a predictor
   slot, may track data sparsity or lineage, and may absorb real biology (timing is part of being
   a subadult).
+
+Results so far (`05`, 2026-11-27; medians, 95% intervals):
+
+| term | main | same-condition (binomial prevalence) | main on same-condition species |
+|---|---|---|---|
+| prevalence, extended larval period | +1.43 [0.72, 2.12], pd 1.00 | +0.55 [-0.30, 1.37], pd 0.91 | +1.40 |
+| load, extended larval period | +1.34 [0.34, 2.24], pd 0.99 | +0.72 [-0.81, 2.16], pd 0.83 | +0.79 |
+| prevalence, log habitat breadth | -0.54 [-0.90, -0.16], pd 1.00 | -0.20 [-0.65, 0.28], pd 0.81 | -0.50 |
+| load, log habitat breadth | -0.66 [-1.14, -0.16], pd 0.99 | -0.49 [-1.24, 0.35], pd 0.88 | -0.56 |
+| aquatic index | ~0 | ~0 | ~0 |
+
+- *robust*: to any single species (leave-one-out; *A. canorus* moves it most, to +1.03
+  prevalence and +0.97 load, interval just touching 0 for load; *A. mavortium* is not the driver,
+  +1.22 load without it), to the check fit (co-sampling share slope ~0: -0.01 prevalence, -0.12
+  load, pd 0.70; trait slopes unchanged), to an ordinal coding of age at metamorphosis, and to
+  dropping the 11 time-segregated species, where it gets larger (prevalence +1.70 [0.89, 2.41],
+  load +1.64 [0.51, 2.65]; habitat breadth unchanged).
+- *weaker on same-condition contrasts*: the extended-larval effect keeps its direction at
+  ~40-55% of its main size. For load the gap is the species set (the main model on the
+  same-condition species already drops to +0.79); for prevalence it is the response (the main
+  model on those species keeps +1.40), concentrated in species whose same-condition estimate is
+  realized-dominated in stage 1 (*R. muscosa*, *R. pipiens*) or mostly prior (1-2 co-sampled
+  events: *P. crucifer*, *L. sphenocephalus*, *H. versicolor*). The time-segregated species are not
+  what carries the main effect (their contrasts are mixed in sign and noisy; dropping them
+  sharpens it). For load, the species without co-sampled load events do carry part of it.
+- *phylogenetic structure (Q7)*: informed without traits. In an intercept-only phylogenetic
+  model, H2 is 0.99 [0.69, 1.00] (prevalence) and 0.96 [0.56, 1.00] (load), against a roughly
+  uniform prior (median 0.52, 95% 0.00-1.00): related species have similar contrasts. With the
+  traits in the model, H2 falls back to the prior's range (0.87 [0.02, 1.00], 0.76 [0.01, 1.00]):
+  the extended larval period (6 of 8 species *Rana*) takes up most of the clade structure, and
+  loo shows no clear gain from the phylogeny once traits are in (elpd difference -2.6, se 2.7,
+  prevalence; -1.5, se 1.8, load). The extended effect stays positive with the phylogenetic
+  effect included, so there is trait signal beyond relatedness, resting on the species that
+  break the overlap: non-*Rana* extended species (*A. canorus*, the most influential;
+  *A. mavortium*) and non-extended *Rana* (*R. boylii*, *R. pipiens*, *R. sylvatica*).
+- *prevalence - load correlation*: the total cross-species correlation (phylogenetic +
+  non-phylogenetic species effects, traits in the model) is 0.51 [-0.02, 0.88], pd 0.97:
+  species with larger prevalence gaps tend to have larger load gaps. The phylogenetic-only split
+  is not informed (main 0.55 [-0.48, 0.94]); without traits it is 0.87 [0.44, 0.98], partly
+  shared trait structure. Within-species estimation errors of the two parts are uncorrelated
+  (|r| <= 0.013 for every species), so this is not an estimation artefact.
+- *asynchrony, narrowed*: some asynchronous, sparsely co-sampled species have strongly negative
+  realized contrasts (*P. crucifer* -2.17, *L. sphenocephalus* -1.40; and, not time-segregated,
+  *R. pipiens* -2.05, *P. regilla* -1.76). A plausible mechanism: their subadults are swabbed in
+  warmer conditions (*P. crucifer* SMD 2.8, *R. pipiens* 1.5), so if Bd is lower then, realized ~
+  same-condition + (change in overall infection with conditions) x (difference in stage
+  sampling conditions) comes out negative. But as a group the time-segregated species are mixed
+  in sign and do not carry the extended-larval effect, and there is no linear trend in the
+  co-sampling share (check fit). Discussed per species, as a hypothesis about realized
+  contrasts, not as a general pattern. (The time-segregated flag cannot mark species with no
+  co-sampled site-years, e.g. *P. regilla*, *A. varius*, *R. haematiticus*, *S. sila*; the main
+  model on the same-condition species covers those.)
+- *synchrony is not a main covariate* (decided 2026-11-27): the check fit already tests it (no
+  shift); it is partly caused by life history (overwintering larvae make stages co-occur), so
+  adjusting for it would remove part of the trait effect; it reflects survey design as much as
+  biology; and the pattern is concentrated in a few species, not linear. Instead: the main fit
+  without the 11 time-segregated species (flag set a priori) as a targeted sensitivity fit.
+- provisional wording: the subadult - adult contrast is phylogenetically structured, and
+  species with extended (overwintering) larval periods show larger contrasts in both prevalence
+  and load. The trait effect holds whichever single species is dropped and without the
+  time-segregated species; it overlaps with phylogeny (most extended species are *Rana*), so its
+  signal beyond relatedness rests on a few species; and on within-event (same-condition)
+  comparisons it keeps its direction at about 40-55% of its size with weaker support (prevalence
+  +0.55, pd 0.91). Species with larger prevalence gaps tend to have larger load gaps (total
+  correlation 0.51, pd 0.97). Wider-ranging species show smaller contrasts in the stage 1-based
+  fits, weakly or not at all on same-condition contrasts for prevalence. Aquatic index: no
+  association.
 
 Not pursued: a balanced-species subset (about 12 species, mostly *Rana*: too few, and
 phylogenetically clustered); a potential-bias adjustment (brings back a weather model with m11g's
@@ -539,6 +609,34 @@ question. What remains is whether the *contrast* changes with conditions, asked 
 
   A weather interpretation (Q9) needs a climatology / anomaly split (multi-year site x
   day-of-year normals).
+
+**Same-condition prevalence estimators** (`04`, 2026-11-26/27). Three ways to estimate a
+species' prevalence contrast from its co-sampled events, compared with stage 1:
+
+| estimator | treats event data as | limitation | *R. sierrae* | *R. muscosa* |
+|---|---|---|---|---|
+| empirical logits | one Haldane-corrected logit difference per event, normal with known se | capped near +/- 2.4 in small all-or-nothing cells (60% of *R. sierrae*'s subadult cells) | 0.39 | 0.48 |
+| Mantel-Haenszel | pooled 2 x 2 tables | assumes one common odds ratio across events | 0.61 | 0.42 |
+| binomial model | counts per event and stage, event intercepts and contrasts | one event-contrast SD shared across species | 0.81 | 0.30 |
+| (stage 1) | | | 0.99 | 1.29 |
+
+- The binomial model is the stage 1 prevalence part restricted to co-sampled events: a Bernoulli
+  model on swabs and a binomial on counts per event and stage give the same likelihood, and the
+  event term is the same as stage 1's tier A `(1 + stage_c | pop_year_event)`. Simplifications:
+  one model with species as fixed effects (no pooling before the predictive model), one
+  event-level contrast SD shared across species, no site-year level. What separates it from
+  stage 1 is the data (co-sampled events only), not the structure: the same-condition vs
+  realized distinction.
+- Result: close to stage 1 for most species (*R. sierrae*, *R. cascadae*, *R. catesbeiana*,
+  *L. chiricahuensis*, *A. canorus*), so the earlier same-condition gap was mostly the
+  estimators. Real exceptions: *R. muscosa* (0.30 vs 1.29, all three estimators agree) and
+  probably *R. pipiens* (-0.84 vs -2.05, 5 events). Deviations go both ways (*C. panamansis*,
+  *S. flotator* larger), so stage 1 is not systematically inflated. Species with 1-2 co-sampled
+  events are mostly prior (sd 1.3-1.8 vs prior sd 2) and get little weight downstream.
+- Stage 1 is not restricted to co-sampled units: that would drop 9 species, cut others to a
+  fraction of their swabs, lose the intercept information from single-stage events, and answer
+  only the same-condition question. Stage 1 stays the main (as-sampled) estimate; the binomial
+  contrasts are the same-condition sensitivity.
 
 **GAM** (`size_bd_gam/`, option 1): add the event intercept `(1 | pop_year_event)` and drop the
 climate terms and their m11g prior. The SVL curve is then estimated from size differences within
@@ -699,6 +797,22 @@ Dated one-liners; the reasoning is in the linked sections.
   size, stage gap, climate, development mode and age at maturity left out; check fit uses the
   share of swabs in co-sampled events (load definition for load); same-condition contrasts from
   a fixed-species null model in `04`.
+- 2026-11-27: same-condition prevalence response = binomial model on co-sampled events' counts
+  (`04`), replacing the empirical logits, which the Haldane ceiling compressed (Mantel-Haenszel
+  in between). Binomial close to stage 1 for most species; *R. muscosa* (0.30 vs 1.29) a real
+  exception. Stage 1 stays on all units (Same-condition prevalence estimators). The empirical
+  version stays in `05` as a labelled comparison fit.
+- 2026-11-27: predictive model robustness (Downstream models): the extended-larval effect holds
+  in every leave-one-out fit (not driven by *A. mavortium*; *A. canorus* most influential) and
+  keeps its direction, at ~40-55% size, on same-condition contrasts (binomial prevalence +0.55,
+  pd 0.91). Synchrony stays a check, not a main covariate (partly caused by life history);
+  sensitivity fit without the 11 time-segregated species added.
+- 2026-11-27: predictive model checks run (Downstream models): without the time-segregated
+  species the extended-larval effect gets larger (prevalence +1.70, load +1.64), so it does not
+  rest on their realized contrasts; raw phylogenetic signal of the contrast informed (H2 0.96-0.99
+  without traits) and largely taken up by the traits; total prevalence - load correlation 0.51
+  (pd 0.97); within-species estimation errors uncorrelated; phylogeny adds no clear predictive
+  value once traits are in.
 
 ## Open questions
 
@@ -719,6 +833,15 @@ Dated one-liners; the reasoning is in the linked sections.
   between-population comparisons. Model script: `05_contrast_predictive_model.qmd` (written).
 - *H. phyllodes* larval habitat coded D in `data/species_notes_2026-11-26.csv` (stream tadpoles:
   probably A); not used in the model.
+- Predictive model: settle the wording of the results (provisional reading in Downstream
+  models); enable the manuscript exports in `05` once reviewed. Optional: prior sensitivity of
+  the extended-larval slope (`powerscale_sequence`), since it showed a mild prior-likelihood
+  conflict (the prior pulls it in); a simulation of the achievable precision of the residual
+  phylogenetic signal (31 species, these se's, this tree).
+- *R. muscosa*: its stage 1 prevalence contrast (1.29) is mostly realized (same-condition 0.30 by
+  the binomial model, 0.42 Mantel-Haenszel, 0.48 empirical), although its weather is balanced.
+  A species-level look at which single-stage events, sites or years carry its subadult signal
+  would help its interpretation (*R. muscosa* vs *R. sierrae* is a focal comparison).
 - Per-species moderation fits (option B): on hold. If revisited: weather only, tier A parts.
 - Potential-bias measure (imbalance x the species' climate slope for overall infection), if any
   imbalanced species becomes central to the paper.
