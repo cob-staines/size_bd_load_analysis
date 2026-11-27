@@ -327,6 +327,11 @@ The lower bound of a weakly informed SD always sits near 0 (an SD cannot be nega
 the interval include 0" is not a test. Look at where the upper bound sits and whether the lower
 bound is clearly above 0. "Informed" (fading in plots, contraction >= 0.5) is a reading aid; the
 power-scaling check in `02` ("Prior sensitivity") says whether a posterior follows its prior.
+By that check (2026-11-27), contrast SDs are mostly prior-shaped in every tier: tiers B / C
+strongly (sensitivity 0.17-0.42), tier A less (mostly 0.03-0.19). Only *R. sierrae* (load event
+and site, prevalence event) and *R. muscosa* (load site-year) are data-dominated (< 0.05). Read
+tier A SDs as "better informed", not as fixed by the data; their upper bounds still carry the
+reading above.
 
 **Size.** An SD is on the scale of the contrast: about 95% of units fall within +/- 2 SD of the
 mean contrast. Prevalence (logit): SD 0.5 = within +/- 1 logit (odds ratio x/÷ 2.7). Load (log):
@@ -708,6 +713,13 @@ Upstream: `size_bd_unified/01_model_data.Rmd` (model data).
 - **Power-scaling** (priorsense): reweight the draws as if the prior (or likelihood) were raised
   to a power alpha, to see whether a posterior depends on it, without refitting. For the
   exponential(2) contrast-SD prior, alpha 0.5 / 2 = exponential(1) / exponential(4).
+- **CJS distance** (power-scaling sensitivity): how far the posterior moves when the prior (or
+  likelihood) is scaled. It compares the posterior as fitted with the posterior under the scaled
+  prior, not prior with posterior. ~0 = the posterior does not follow the prior (data dominate,
+  informed); > 0.05 = it does (priorsense's threshold; the prior does part of the work). A
+  parameter whose posterior equals its prior has a high value: any prior change passes straight
+  through. "Prior-likelihood conflict" = both prior and likelihood values > 0.05; for group SDs
+  this is common and mostly means both matter.
 - **Funnel**: the geometry where a group SD near 0 squeezes its group deviations together; hard
   to sample, the usual source of divergences in hierarchical models.
 
@@ -813,14 +825,27 @@ Dated one-liners; the reasoning is in the linked sections.
   without traits) and largely taken up by the traits; total prevalence - load correlation 0.51
   (pd 0.97); within-species estimation errors uncorrelated; phylogeny adds no clear predictive
   value once traits are in.
+- 2026-11-27: stage 1 power-scaling reviewed (`02`, exports `02_powerscale_all_priors.csv`,
+  `02_powerscale_contrast_sd_prior.csv`). Contrast-SD prior alone: 32 of 39 mean contrasts
+  < 0.05; the 7 above are mild (0.05-0.10; largest *R. muscosa* prevalence 0.10, the contrast
+  with large between-unit variation). So the exponential(2) scale is kept
+  without refits. Contrast SDs: 69 of 73 prior-sensitive, tier A less so (How to read the
+  results). All priors together: load mean contrasts clean in 26 of 31 (flags = wide tier D
+  posteriors and *R. pipiens*); prevalence flagged in 18 of 32 (0.05-0.21; largest
+  *R. luteiventris* 3.20 +/- 1.15), not from the contrast-SD prior; split by prior part added
+  (`02` "Which prior moves the mean contrast?"). Where the contrast prior pulls large uncertain
+  contrasts toward 0 (several extended-larval species), the extended-larval slope in `05` would
+  be conservative (to confirm with the split).
 
 ## Open questions
 
 - Load co-sampling uses >= 1 positive of each stage; a stricter positive count may better match
   how much a unit informs the load contrast.
-- Contrast SD prior scale (exponential(2)): check with the contrast-SD power-scaling in `02`
-  after round 3; refit a few species with exponential(1) / exponential(4) if it flags mean
-  contrasts.
+- Mean-contrast prior sensitivity (`02` "Which prior moves the mean contrast?", written, to
+  run): which prior part (contrast prior, contrast-SD prior, other) moves the 18 flagged
+  prevalence mean contrasts, and by how many posterior SDs. Refits with exponential(1) /
+  exponential(4) only if a mean contrast shifts materially (the contrast-SD prior alone does
+  not; 2026-11-27 entry).
 - R3: whether species with a constant sigma combine data sources with different measurement
   precision (`project`) has not been checked.
 - Predictive model inputs written (to run: `01`, `03`, `04`): load-definition co-sampling share

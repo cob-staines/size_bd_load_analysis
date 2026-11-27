@@ -526,3 +526,100 @@ sd_prior_sequence = function(job) {
 # powerscale_plot_quantities(sd_prior_sequence("anaxyrus_canorus_main"))
 
 ```
+
+### Which prior moves the mean contrast?
+```{r}
+#| eval: true
+
+# the all-priors check above flags many prevalence mean contrasts (prior sensitivity 0.05-0.21),
+# but the contrast-sd prior alone barely moves them. this splits the prior into three parts and
+# scales each alone, to see which one does it:
+#   meancontrast  the prior on the contrast itself: normal(0, 2) on b_hu_stage_c (prevalence,
+#                 logit), normal(0, 3) on b_stage_c (load, log); contrast_model_functions.R
+#   sdcontrast    the exponential(2) contrast-sd priors (as in the chunk above)
+#   other         everything else: intercepts, nuisance sds, sigma, lkj
+# brms stores the log density of all priors per draw (lprior, plus lprior_sdcontrast where the
+# round 3 tag exists); the first two parts are rebuilt from the draws and "other" is the total
+# minus the two (constants differ, which power-scaling ignores). prior-only scaling, so no
+# log-likelihood: cheap even for r. sierrae.
+#
+# reading the cjs distance: it compares the posterior as fitted with the posterior under the
+# scaled prior. ~0 = the posterior does not move when the prior changes (the data dominate);
+# > 0.05 = it moves (the prior does part of the work). it does not compare prior with posterior.
+# the cjs value says *whether* the posterior moves; the median shift below says *how far*, in
+# posterior sds, at alpha 0.5 (prior loosened) and 2 (tightened).
+mean_prior_sd = c(b_hu_stage_c = 2, b_stage_c = 3)   # as in contrast_model_functions.R
+
+# the contrast parameters of one fit, plus the log density of each prior part
+prior_split_draws = function(fit) {
+  lp_vars = grep("^lprior", variables(fit), value = TRUE)
+  dr = as_draws_df(fit, variable = c(contrast_vars(fit), lp_vars))
+  sum_cols = function(cols, f) {
+    if (length(cols) == 0) return(rep(0, nrow(dr)))
+    Reduce(`+`, lapply(cols, function(v) f(v, dr[[v]])))
+  }
+  b_cols = intersect(names(mean_prior_sd), variables(dr))
+  sd_cols = grep("^sd_", contrast_vars(fit), value = TRUE)
+  lp_total = sum_cols(lp_vars, function(v, x) x)
+  lp_mean = sum_cols(b_cols, function(v, x) dnorm(x, 0, mean_prior_sd[[v]], log = TRUE))
+  lp_sd = sum_cols(sd_cols, function(v, x) dexp(x, sd_prior_rate, log = TRUE))
+  list(draws = subset_draws(dr, variable = contrast_vars(fit)),
+       b_cols = b_cols,
+       lp = list(meancontrast = lp_mean,
+                 sdcontrast = if (length(sd_cols) > 0) lp_sd else NULL,
+                 other = lp_total - lp_mean - lp_sd))
+}
+
+# weighted median, for the reweighted posterior
+weighted_median = function(x, w) {
+  o = order(x)
+  x[o][which(cumsum(w[o]) / sum(w) >= 0.5)[1]]
+}
+
+# posterior median of x after raising one prior part (log density lp) to the power alpha:
+# importance weights prior^(alpha - 1). pareto k > 0.7 = the weights are too uneven to trust
+median_shift = function(x, lp, alphas = c(0.5, 2)) {
+  map(alphas, function(a) {
+    lw = (a - 1) * lp
+    w = exp(lw - max(lw))
+    tibble(alpha = a, median_scaled = weighted_median(x, w),
+           pareto_k = as.numeric(posterior::pareto_khat(w, tail = "right")))
+  }) %>%
+    list_rbind() %>%
+    mutate(median_fit = median(x), sd_fit = sd(x),
+           shift_sd = (median_scaled - median_fit) / sd_fit)
+}
+
+prior_split = imap(contrast_models, function(fit, job) {
+  ps = prior_split_draws(fit)
+  imap(compact(ps$lp), function(lp, part_name) {
+    # a draws object holding only this prior part as "lprior", so priorsense scales it alone
+    dr = ps$draws
+    dr$lprior = lp
+    sens = powerscale_sensitivity(dr, variable = ps$b_cols, component = "prior") %>%
+      as_tibble() %>%
+      select(variable, cjs_prior = prior)
+    shifts = map(ps$b_cols, function(v) median_shift(ps$draws[[v]], lp) %>% mutate(variable = v)) %>%
+      list_rbind()
+    left_join(sens, shifts, by = "variable") %>% mutate(prior_scaled = part_name)
+  }) %>%
+    list_rbind() %>%
+    mutate(job = job)
+}) %>%
+  list_rbind() %>%
+  mutate(part = if_else(str_detect(variable, "hu_"), "prevalence", "load")) %>%
+  left_join(contrast_jobs %>% select(job, tier_hu, tier_mu), by = "job") %>%
+  mutate(tier = if_else(part == "prevalence", tier_hu, tier_mu))
+
+write_csv(prior_split, here("size_bd_contrast", "intermediates", "02_powerscale_prior_split.csv"))
+
+# per mean contrast: cjs of each prior part, and the largest median shift (posterior sds) over
+# alpha 0.5 and 2. a shift of 0.1 sd is a small fraction of the interval width (~4 sd)
+prior_split %>%
+  group_by(job, part, tier, prior_scaled) %>%
+  summarise(cjs = first(cjs_prior), max_shift_sd = max(abs(shift_sd)),
+            max_pareto_k = max(pareto_k), .groups = "drop") %>%
+  pivot_wider(names_from = prior_scaled, values_from = c(cjs, max_shift_sd, max_pareto_k)) %>%
+  arrange(part, desc(cjs_other))
+
+```
