@@ -23,7 +23,10 @@ In short:
   - *main*: stage 1 mean contrasts, all species (31 prevalence, 30 load)
   - *same-condition* (sensitivity): species contrasts from co-sampled events only (`04`; 22 /
     15 species). Every species then contributes the same kind of contrast (README "How to read
-    the results", "As-sampled contrasts")
+    the results", "As-sampled contrasts"). Prevalence from the binomial model on co-sampled
+    events, load from the empirical event contrasts (2026-11-27; see the Data chunk)
+  - *same-condition, empirical* (comparison): as above with the empirical prevalence logits,
+    which the Haldane ceiling compresses (kept to show the estimator's effect)
   - *check*: main + the share of swabs in co-sampled events (that part's definition). Its slope
     near 0 = the same-condition / realized mix does not shift contrasts systematically
   - *ordinal* (sensitivity): age at metamorphosis as an ordered predictor (D < R < M < E) with a
@@ -63,10 +66,19 @@ set_cmdstan_path(Sys.getenv("cmd_stan_path"))
 #   stage 1 (03): contrast_mean, contrast_sd, contrast_se (tier D inflated), tier,
 #                 pct_swabs_co_event (share of swabs in co-sampled events, part definition)
 #   same-condition (04): contrast_mean, contrast_sd from co-sampled events only
+#     prevalence: binomial model on the co-sampled events' counts (no ceiling; event-varying
+#                 contrasts). the empirical logits (Haldane-corrected, per event) are capped near
+#                 +/- 2.4 in small all-or-nothing cells and came out compressed (r. sierrae 0.39
+#                 vs 0.81 binomial vs 0.99 stage 1); kept as a labelled comparison
+#     load:       empirical event contrasts (no ceiling problem; agreed with stage 1)
 responses_main = read_csv(file.path(intermediates_dir, "03_predictive_responses.csv"),
                           show_col_types = FALSE)
-responses_sc = read_csv(file.path(intermediates_dir, "04_same_condition_species_contrasts.csv"),
-                        show_col_types = FALSE)
+responses_sc_empirical = read_csv(file.path(intermediates_dir, "04_same_condition_species_contrasts.csv"),
+                                  show_col_types = FALSE)
+responses_sc = bind_rows(
+  read_csv(file.path(intermediates_dir, "04_binomial_prevalence_contrasts.csv"), show_col_types = FALSE) %>%
+    mutate(part = "prevalence"),
+  responses_sc_empirical %>% filter(part == "load"))
 
 # traits. habitat breadth and aquatic index: IUCN habitat metrics (as in the unified 05).
 # age at metamorphosis: species notes (D direct, R < 2 months, M 2-12 months, E > 12 months;
@@ -132,6 +144,7 @@ data_main = make_wide(responses_main, "contrast_se") %>%
   mutate(prevalence_share_z = as.numeric(scale(prevalence_share_z)),
          load_share_z = if_else(has_load, as.numeric(scale(if_else(has_load, load_share_z, NA_real_))), 0))
 data_sc = make_wide(responses_sc, "contrast_sd")
+data_sc_empirical = make_wide(responses_sc_empirical, "contrast_sd")
 
 data_main %>% summarise(n_species = n(), n_prevalence = sum(has_prevalence), n_load = sum(has_load))
 data_sc %>% summarise(n_species = n(), n_prevalence = sum(has_prevalence), n_load = sum(has_load))
@@ -190,7 +203,8 @@ fit_predictive = function(formula, data, name) {
 
 predictive_fits = list(
   main           = fit_predictive(formula_main,  data_main, "predictive_main"),
-  same_condition = fit_predictive(formula_main,  data_sc,   "predictive_same_condition"),
+  same_condition = fit_predictive(formula_main,  data_sc,   "predictive_same_condition_binomial"),
+  same_condition_empirical = fit_predictive(formula_main, data_sc_empirical, "predictive_same_condition"),
   check          = fit_predictive(formula_check, data_main, "predictive_check"),
   ordinal        = fit_predictive(formula_ord,   data_main, "predictive_ordinal"))
 
@@ -255,9 +269,9 @@ slope_draws = imap_dfr(predictive_fits, function(fit, name) {
 # main vs same-condition vs check, the shared terms: agreement = trait conclusions do not rest on
 # the same-condition / realized mix
 slope_draws %>%
-  filter(fit %in% c("main", "same_condition", "check"),
+  filter(fit %in% c("main", "same_condition", "same_condition_empirical", "check"),
          term %in% c("log_hb_z", "aquatic_z", "extended_larval")) %>%
-  mutate(fit = factor(fit, levels = c("check", "same_condition", "main"))) %>%
+  mutate(fit = factor(fit, levels = c("check", "same_condition_empirical", "same_condition", "main"))) %>%
   ggplot(aes(x = value, y = term, color = fit)) +
   stat_pointinterval(.width = c(0.5, 0.95), position = position_dodge(width = 0.6)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
@@ -298,9 +312,156 @@ signal_summary
 
 ```
 
+## Better-informed versions of the signal and the correlation
+```{r}
+#| fig-height: 6
+#| fig-width: 11
+
+# with 31 species the phylogenetic sd and sigma are only partly separable, so the residual H2
+# and the phylogenetic prevalence - load correlation above are not informed. four better-defined
+# questions and checks (added 2026-11-27):
+#   (1) raw phylogenetic signal: an intercept-only model (no traits). Q7 asks whether the contrast
+#       is phylogenetically structured; the traits are clustered (6 of 8 extended species are
+#       rana), so the H2 above is what is left after them
+#   (2) prior vs posterior: how much the data reshape H2 and the correlation
+#   (3) total cross-species correlation: phylogenetic + non-phylogenetic species effects, both
+#       correlated across the parts (the non-phylogenetic effect replaces sigma)
+#   (4) predictive value of the phylogeny: loo with vs without the phylogenetic effect
+# plus the within-species estimation-error check (from 03)
+
+# H2 and the phylogenetic correlation of one fit, per draw (models with sigma)
+signal_draws_of = function(fit, name) {
+  dr = as_draws_df(fit) %>% as_tibble()
+  tibble(.draw = dr$.draw,
+         h2_prevalence = dr$sd_taxon_capture__prevalence_Intercept^2 /
+           (dr$sd_taxon_capture__prevalence_Intercept^2 + dr$sigma_prevalence^2),
+         h2_load = dr$sd_taxon_capture__load_Intercept^2 /
+           (dr$sd_taxon_capture__load_Intercept^2 + dr$sigma_load^2),
+         cor_phylo = dr$cor_taxon_capture__prevalence_Intercept__load_Intercept) %>%
+    pivot_longer(-.draw, names_to = "metric", values_to = "value") %>%
+    mutate(fit = name)
+}
+summarise_metric = function(draws) {
+  draws %>%
+    group_by(fit, metric) %>%
+    summarise(median = median(value),
+              lower_50 = quantile(value, 0.25), upper_50 = quantile(value, 0.75),
+              lower_95 = quantile(value, 0.025), upper_95 = quantile(value, 0.975),
+              pd = max(mean(value > 0), mean(value < 0)), .groups = "drop") %>%
+    mutate(across(where(is.double), ~ round(.x, 3)))
+}
+
+# (1) intercept-only phylogenetic model
+formula_phylo_only = mvbf(predictive_bf("prevalence", "1"), predictive_bf("load", "1"), rescor = FALSE)
+priors_no_b = predictive_priors[predictive_priors$class != "b", ]
+fit_phylo_only = brm(formula_phylo_only, data = data_main,
+                     data2 = list(A = A[data_main$taxon_capture, data_main$taxon_capture]),
+                     family = gaussian(), prior = priors_no_b,
+                     control = list(adapt_delta = 0.99, max_treedepth = 12),
+                     chains = 4, iter = 4000, warmup = 2000, seed = 128, cores = 4, backend = "cmdstanr",
+                     file = file.path(models_dir, "predictive_phylo_only"), file_refit = "on_change")
+conv_check(fit_phylo_only)
+
+# (2) the priors these imply: the sds are exponential(1) each, so H2 = a^2 / (a^2 + b^2) with
+# a, b ~ exponential(1); the lkj(2) correlation of a 2 x 2 matrix has (r + 1) / 2 ~ beta(2, 2)
+set.seed(128)
+n_prior = 16000
+prior_draws = tibble(.draw = seq_len(n_prior),
+                     a = rexp(n_prior, 1), b = rexp(n_prior, 1),
+                     h2 = a^2 / (a^2 + b^2),
+                     cor_phylo = 2 * rbeta(n_prior, 2, 2) - 1)
+prior_signal = bind_rows(
+  prior_draws %>% transmute(.draw, metric = "h2_prevalence", value = h2),
+  prior_draws %>% transmute(.draw, metric = "h2_load", value = h2),
+  prior_draws %>% transmute(.draw, metric = "cor_phylo", value = cor_phylo)) %>%
+  mutate(fit = "prior")
+
+signal_compare = bind_rows(prior_signal,
+                           signal_draws_of(fit_phylo_only, "phylo_only (no traits)"),
+                           signal_draws_of(predictive_fits$main, "main (traits)"))
+
+(signal_compare_summary = summarise_metric(signal_compare))
+
+signal_compare %>%
+  mutate(fit = factor(fit, levels = c("prior", "phylo_only (no traits)", "main (traits)"))) %>%
+  ggplot(aes(x = value, color = fit, fill = fit)) +
+  geom_density(alpha = 0.15, adjust = 1.2) +
+  facet_wrap(~ metric, scales = "free") +
+  labs(x = NULL, y = "density", color = NULL, fill = NULL,
+       subtitle = "posterior vs prior: a posterior that matches its prior = not informed") +
+  theme_classic()
+
+# (3) total cross-species correlation: phylogenetic (p) and non-phylogenetic (q) species
+# effects, each correlated across the parts; se() without sigma (the q effect takes its role).
+# total correlation per draw = (cov_p + cov_q) / sqrt(total var prevalence x total var load)
+predictive_bf_total = function(part, rhs) {
+  bf(as.formula(paste0(part, " | se(", part, "_se) + subset(has_", part, ") ~ ", rhs,
+                       " + (1 | p | gr(taxon_capture, cov = A)) + (1 | q | taxon_id)")))
+}
+data_total = data_main %>% mutate(taxon_id = taxon_capture)   # second grouping column for q
+formula_total = mvbf(predictive_bf_total("prevalence", rhs_main), predictive_bf_total("load", rhs_main),
+                     rescor = FALSE)
+priors_total = predictive_priors[predictive_priors$class != "sigma", ]
+fit_total = brm(formula_total, data = data_total,
+                data2 = list(A = A[data_total$taxon_capture, data_total$taxon_capture]),
+                family = gaussian(), prior = priors_total,
+                control = list(adapt_delta = 0.99, max_treedepth = 12),
+                chains = 4, iter = 4000, warmup = 2000, seed = 128, cores = 4, backend = "cmdstanr",
+                file = file.path(models_dir, "predictive_total_cor"), file_refit = "on_change")
+conv_check(fit_total)
+
+total_cor_draws = as_draws_df(fit_total) %>%
+  as_tibble() %>%
+  transmute(.draw,
+            sp_p = sd_taxon_capture__prevalence_Intercept, sl_p = sd_taxon_capture__load_Intercept,
+            r_p = cor_taxon_capture__prevalence_Intercept__load_Intercept,
+            sp_q = sd_taxon_id__prevalence_Intercept, sl_q = sd_taxon_id__load_Intercept,
+            r_q = cor_taxon_id__prevalence_Intercept__load_Intercept,
+            value = (r_p * sp_p * sl_p + r_q * sp_q * sl_q) /
+              sqrt((sp_p^2 + sp_q^2) * (sl_p^2 + sl_q^2))) %>%
+  transmute(.draw, metric = "cor_total", value, fit = "total (phylo + non-phylo)")
+
+(total_cor_summary = summarise_metric(total_cor_draws))
+
+# within-species estimation-error correlation (03): near 0 supports treating the two parts'
+# errors as independent in se()
+error_cor_file = file.path(intermediates_dir, "03_predictive_error_cor.csv")
+if (file.exists(error_cor_file)) {
+  error_cor = read_csv(error_cor_file, show_col_types = FALSE)
+  print(summary(error_cor$error_cor))
+  print(error_cor %>% filter(abs(error_cor) > 0.2))
+} else {
+  message("no ", error_cor_file, ": re-run 03_contrast_analysis.Rmd")
+}
+
+# (4) predictive value of the phylogeny: the main model without the phylogenetic effect,
+# compared by loo per part (one response at a time, as brms requires with subset())
+predictive_bf_no_phylo = function(part, rhs) {
+  bf(as.formula(paste0(part, " | se(", part, "_se, sigma = TRUE) + subset(has_", part, ") ~ ", rhs)))
+}
+formula_no_phylo = mvbf(predictive_bf_no_phylo("prevalence", rhs_main),
+                        predictive_bf_no_phylo("load", rhs_main), rescor = FALSE)
+priors_no_phylo = predictive_priors[!predictive_priors$class %in% c("sd", "cor"), ]
+fit_no_phylo = brm(formula_no_phylo, data = data_main, family = gaussian(), prior = priors_no_phylo,
+                   control = list(adapt_delta = 0.99, max_treedepth = 12),
+                   chains = 4, iter = 4000, warmup = 2000, seed = 128, cores = 4, backend = "cmdstanr",
+                   file = file.path(models_dir, "predictive_no_phylo"), file_refit = "on_change")
+conv_check(fit_no_phylo)
+
+# elpd difference per part: negative for no_phylo = the phylogeny improves prediction of a
+# held-out species' contrast; |difference| < ~2 se = no clear difference
+(loo_phylo = map_dfr(c("prevalence", "load"), function(part) {
+  comp = loo_compare(list(with_phylo = loo(predictive_fits$main, resp = part),
+                          no_phylo = loo(fit_no_phylo, resp = part)))
+  as_tibble(comp, rownames = "model") %>%
+    transmute(part = part, model, elpd_diff = round(elpd_diff, 2), se_diff = round(se_diff, 2))
+}))
+
+```
+
 # Robustness of the main result
-The same-condition fit shrinks the extended-larval and (prevalence) habitat-breadth slopes. Three
-explanations, separated here (added 2026-11-26):
+The same-condition fit with empirical prevalence logits shrank the extended-larval and
+(prevalence) habitat-breadth slopes. Three explanations, separated here (added 2026-11-26):
 
 1. **species set**: the same-condition fit lacks 9 species with no co-sampled events (all
    non-extended). -> the main model refit on exactly the same-condition species.
@@ -308,6 +469,13 @@ explanations, separated here (added 2026-11-26):
    species-level comparison of the two contrasts.
 3. **noisier, compressed response**: empirical event contrasts and the Haldane correction pull
    large prevalence contrasts toward 0. -> also visible in the species comparison.
+
+Result (2026-11-27): the species set was not the reason for prevalence (main on the
+same-condition species: extended larval period +1.40 vs +1.43) but was for load (+0.79 vs
++1.34). For prevalence the estimator was most of it: the binomial model on co-sampled events
+(`04`) is close to stage 1 for most species (*R. sierrae* 0.81 vs 0.99), so the same-condition fit
+now uses it. *R. muscosa* stays a real exception (0.30 vs 1.29): its stage 1 prevalence contrast
+is mostly realized, carried by single-stage events.
 
 Plus influence: with 8 extended species, one or two can carry the slope. -> Pareto k per species
 and leave-one-out refits of each extended species (all 8, so the choice is not made after
@@ -353,12 +521,13 @@ conv_check(fit_matched)
 # main_matched close to same_condition -> the species set is the reason
 matched_draws = bind_rows(get_slopes(predictive_fits$main, "main"),
                           get_slopes(fit_matched, "main_matched"),
-                          get_slopes(predictive_fits$same_condition, "same_condition"))
+                          get_slopes(predictive_fits$same_condition, "same_condition"),
+                          get_slopes(predictive_fits$same_condition_empirical, "same_condition_empirical"))
 
 (matched_summary = summarise_slopes(matched_draws, fit) %>% arrange(part, term, fit))
 
 matched_draws %>%
-  mutate(fit = factor(fit, levels = c("same_condition", "main_matched", "main"))) %>%
+  mutate(fit = factor(fit, levels = c("same_condition_empirical", "same_condition", "main_matched", "main"))) %>%
   ggplot(aes(x = value, y = term, color = fit)) +
   stat_pointinterval(.width = c(0.5, 0.95), position = position_dodge(width = 0.6)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
@@ -454,6 +623,53 @@ loso_draws %>%
 
 ```
 
+## Without the time-segregated species
+```{r}
+#| fig-height: 5
+#| fig-width: 11
+
+# why (2026-11-27): the main extended-larval effect leans partly on strongly negative stage 1
+# contrasts of sparsely co-sampled, asynchronous species (e.g. p. crucifer -2.17,
+# l. sphenocephalus -1.40), whose contrasts are largely realized and cannot be checked with
+# within-event comparisons. (r. pipiens, -2.05, is weather-imbalanced but not time-segregated:
+# 5 co-sampled events in 5 site-years, so it stays in this fit.) the time-segregated flag (01_contrast_tiers.Rmd; fewer
+# co-sampled events than half the co-sampled site-years) was defined before any of this, so
+# dropping the flagged species is a targeted, a priori sensitivity fit. no extended species is
+# flagged, so the extended group stays whole.
+# reading: extended slope near its main size -> the effect does not depend on the realized
+# contrasts of the time-segregated species; much smaller -> it does.
+# (synchrony is not used as a main covariate: the check fit already tests it as a linear term,
+# and it is partly caused by life history, e.g. overwintering larvae, so adjusting for it would
+# remove part of the trait effect)
+species_table = read_csv(file.path(intermediates_dir, "01_contrast_species.csv"), show_col_types = FALSE)
+time_segregated = species_table %>% filter(include, flag_time_segregated) %>% pull(taxon_capture)
+time_segregated
+
+data_no_tseg = data_main %>% filter(!taxon_capture %in% time_segregated)
+data_no_tseg %>%
+  summarise(n_species = n(), n_prevalence = sum(has_prevalence), n_load = sum(has_load),
+            n_extended = sum(extended_larval > 0))
+
+fit_no_tseg = fit_predictive(formula_main, data_no_tseg, "predictive_main_no_time_segregated")
+conv_check(fit_no_tseg)
+
+no_tseg_draws = bind_rows(get_slopes(predictive_fits$main, "main"),
+                          get_slopes(fit_no_tseg, "main_no_time_segregated"))
+
+(no_tseg_summary = summarise_slopes(no_tseg_draws, fit) %>% arrange(part, term, fit))
+
+no_tseg_draws %>%
+  mutate(fit = factor(fit, levels = c("main_no_time_segregated", "main"))) %>%
+  ggplot(aes(x = value, y = term, color = fit)) +
+  stat_pointinterval(.width = c(0.5, 0.95), position = position_dodge(width = 0.5)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ part, scales = "free_x") +
+  labs(x = "change in the mean contrast (median, 50 / 95%)", y = NULL, color = "fit",
+       subtitle = "main model with and without the 11 time-segregated species") +
+  theme_classic()
+
+```
+
 # Export
 ```{r}
 write_csv(slope_summary, file.path(intermediates_dir, "05_predictive_slopes.csv"))
@@ -464,6 +680,12 @@ write_csv(matched_summary, file.path(intermediates_dir, "05_predictive_matched.c
 write_csv(species_compare, file.path(intermediates_dir, "05_predictive_species_compare.csv"))
 write_csv(pareto_k, file.path(intermediates_dir, "05_predictive_pareto_k.csv"))
 write_csv(loso_summary, file.path(intermediates_dir, "05_predictive_loso.csv"))
+write_csv(no_tseg_summary, file.path(intermediates_dir, "05_predictive_no_time_segregated.csv"))
+# signal and correlation: prior vs posterior (phylo-only and main), total correlation, loo with /
+# without phylogeny
+write_csv(bind_rows(signal_compare_summary, total_cor_summary),
+          file.path(intermediates_dir, "05_predictive_signal_compare.csv"))
+write_csv(loo_phylo, file.path(intermediates_dir, "05_predictive_loo_phylo.csv"))
 
 # manuscript inputs (replacing unified_05_a / unified_05_b) once the results are reviewed:
 # repo_dir = gsub("size_bd_load_analysis", "", here())
