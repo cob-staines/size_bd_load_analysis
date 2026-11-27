@@ -47,10 +47,12 @@ and cached with `file =`.
 #| code-fold: true
 #| code-summary: "Show setup code"
 
-librarian::shelf(tidyverse, here, brms, cmdstanr, posterior, tidybayes, ape, priorsense, ggrepel)
+librarian::shelf(tidyverse, here, brms, cmdstanr, posterior, tidybayes, ape, priorsense, ggrepel,
+                 patchwork, arrow)
 
 intermediates_dir = here("size_bd_contrast", "intermediates")
 models_dir = here("size_bd_contrast", "models", "predictive")
+figures_dir = here("size_bd_contrast", "figures")
 dir.create(models_dir, recursive = TRUE, showWarnings = FALSE)
 
 # conv_check() (shared with the other brms analyses)
@@ -670,6 +672,138 @@ no_tseg_draws %>%
 
 ```
 
+# Figures
+## Contrasts on the phylogeny
+```{r}
+#| fig-height: 10
+#| fig-width: 12
+
+# Q7 at a glance: each species' mean contrast (stage 1, 95% interval = mean +/- 1.96 se, tier D
+# inflated) next to the tree, with the extended larval period marked. open circles = the
+# same-condition estimate (co-sampled events only: binomial for prevalence, empirical for load),
+# where it exists. related species with similar contrasts = phylogenetic structure; the extended
+# species (mostly rana) high = the overlap of trait and phylogeny.
+
+# tree drawn from ape coordinates (no ggtree): x = distance from the root, y = tip position in
+# ladderized order (first tip at the top); an internal node sits at the mean y of its children
+tree_layout = function(tree) {
+  tree = ladderize(tree)
+  n = Ntip(tree)
+  tip_order = tree$tip.label[tree$edge[tree$edge[, 2] <= n, 2]]
+  # node coordinates (named node_x / node_y so dplyr verbs below do not confuse them with the
+  # columns they create)
+  node_y = numeric(n + tree$Nnode)
+  node_y[match(tip_order, tree$tip.label)] = rev(seq_len(n))
+  node_x = node.depth.edgelength(tree)
+  # postorder: by a node's last edge, all its children are placed
+  post = reorder(tree, "postorder")$edge
+  for (node in rev(unique(rev(post[, 1])))) {
+    node_y[node] = mean(node_y[tree$edge[tree$edge[, 1] == node, 2]])
+  }
+  edges = as_tibble(tree$edge, .name_repair = ~ c("parent", "child"))
+  list(horizontal = tibble(x = node_x[edges$parent], xend = node_x[edges$child],
+                           y = node_y[edges$child], yend = node_y[edges$child]),
+       vertical = edges %>% group_by(parent) %>%
+         summarise(ymin = min(node_y[child]), ymax = max(node_y[child]), .groups = "drop") %>%
+         mutate(x = node_x[parent]),
+       tips = tibble(taxon_capture = tree$tip.label[seq_len(n)], y = node_y[seq_len(n)]))
+}
+
+layout = tree_layout(phylo_tree)
+n_tips = nrow(layout$tips)
+y_scale = scale_y_continuous(limits = c(0.5, n_tips + 0.5), expand = c(0, 0))
+
+p_tree = ggplot() +
+  geom_segment(data = layout$horizontal, aes(x = x, xend = xend, y = y, yend = yend), linewidth = 0.4) +
+  geom_segment(data = layout$vertical, aes(x = x, xend = x, y = ymin, yend = ymax), linewidth = 0.4) +
+  y_scale +
+  theme_void()
+
+tip_info = layout$tips %>%
+  left_join(traits %>% select(taxon_capture, age_metamorphosis), by = "taxon_capture") %>%
+  mutate(larval_period = if_else(age_metamorphosis == "E", "extended (> 12 months)", "other"),
+         label = str_to_sentence(gsub("_", " ", taxon_capture)))
+
+p_labels = ggplot(tip_info, aes(x = 0, y = y)) +
+  geom_point(aes(color = larval_period), size = 2.5, shape = 15) +
+  geom_text(aes(x = 0.15, label = label), hjust = 0, size = 3, fontface = "italic") +
+  scale_x_continuous(limits = c(-0.1, 2)) +
+  scale_color_manual(values = c(`extended (> 12 months)` = "#1b7837", other = "grey70"), name = "larval period") +
+  y_scale +
+  theme_void() +
+  theme(legend.position = "bottom")
+
+contrast_panel = function(part_name, x_label) {
+  main = responses_main %>% filter(part == part_name) %>%
+    transmute(taxon_capture, mean = contrast_mean, lower = contrast_mean - 1.96 * contrast_se,
+              upper = contrast_mean + 1.96 * contrast_se, tier)
+  sc = responses_sc %>% filter(part == part_name) %>% transmute(taxon_capture, sc_mean = contrast_mean)
+  d = tip_info %>% select(taxon_capture, y, larval_period) %>%
+    left_join(main, by = "taxon_capture") %>%
+    left_join(sc, by = "taxon_capture")
+  ggplot(d, aes(y = y)) +
+    geom_vline(xintercept = 0, color = "grey60") +
+    geom_linerange(aes(xmin = lower, xmax = upper, color = larval_period), linewidth = 0.5, na.rm = TRUE) +
+    geom_point(aes(x = mean, color = larval_period), size = 2, na.rm = TRUE) +
+    geom_point(aes(x = sc_mean), shape = 21, fill = NA, size = 2.2, na.rm = TRUE) +
+    scale_color_manual(values = c(`extended (> 12 months)` = "#1b7837", other = "grey45"), guide = "none") +
+    y_scale +
+    labs(x = x_label, y = NULL) +
+    theme_classic() +
+    theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank())
+}
+
+p_phylo_contrasts = p_tree + p_labels +
+  contrast_panel("prevalence", "prevalence contrast (logit)") +
+  contrast_panel("load", "load contrast (log)") +
+  plot_layout(widths = c(1.2, 1.6, 2, 2), guides = "collect") +
+  plot_annotation(subtitle = paste("filled = stage 1 mean contrast (95%); open = same-condition estimate",
+                                   "(co-sampled events only); positive = subadults higher")) &
+  theme(legend.position = "bottom")
+
+p_phylo_contrasts
+
+```
+
+## Trait slopes across fits
+```{r}
+#| fig-height: 6
+#| fig-width: 11
+
+# the three trait slopes in the fits that bear on the reading: main; without the time-segregated
+# species; main on the same-condition species; same-condition (binomial prevalence)
+slopes_fig_draws = bind_rows(
+  get_slopes(predictive_fits$main, "main (all species)"),
+  get_slopes(fit_no_tseg, "without time-segregated species"),
+  get_slopes(fit_matched, "main, same-condition species"),
+  get_slopes(predictive_fits$same_condition, "same-condition contrasts")) %>%
+  filter(term %in% c("extended_larval", "log_hb_z", "aquatic_z")) %>%
+  mutate(fit = factor(fit, levels = rev(c("main (all species)", "without time-segregated species",
+                                          "main, same-condition species", "same-condition contrasts"))),
+         term = recode(term, extended_larval = "extended larval period\n(extended - other)",
+                       log_hb_z = "habitat breadth (log, per sd)", aquatic_z = "aquatic index (per sd)"),
+         part = factor(part, levels = c("prevalence", "load")))
+
+p_slopes = ggplot(slopes_fig_draws, aes(x = value, y = term, color = fit)) +
+  stat_pointinterval(.width = c(0.5, 0.95), position = position_dodge(width = 0.65)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  facet_wrap(~ part, scales = "free_x",
+             labeller = labeller(part = c(prevalence = "prevalence contrast (logit)", load = "load contrast (log)"))) +
+  scale_color_manual(values = c(`main (all species)` = "black", `without time-segregated species` = "#2166ac",
+                                `main, same-condition species` = "#92c5de", `same-condition contrasts` = "#d6604d"),
+                     breaks = c("main (all species)", "without time-segregated species",
+                                "main, same-condition species", "same-condition contrasts")) +
+  labs(x = "change in the mean subadult - adult contrast (median, 50 / 95%)", y = NULL, color = NULL) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+p_slopes
+
+ggsave(file.path(figures_dir, "05_predictive_phylo_contrasts.png"), p_phylo_contrasts, width = 12, height = 10)
+ggsave(file.path(figures_dir, "05_predictive_slopes.png"), p_slopes, width = 11, height = 6)
+
+```
+
 # Export
 ```{r}
 write_csv(slope_summary, file.path(intermediates_dir, "05_predictive_slopes.csv"))
@@ -687,10 +821,28 @@ write_csv(bind_rows(signal_compare_summary, total_cor_summary),
           file.path(intermediates_dir, "05_predictive_signal_compare.csv"))
 write_csv(loo_phylo, file.path(intermediates_dir, "05_predictive_loo_phylo.csv"))
 
-# manuscript inputs (replacing unified_05_a / unified_05_b) once the results are reviewed:
-# repo_dir = gsub("size_bd_load_analysis", "", here())
-# manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
-# write_parquet(slope_draws, paste0(manuscript_data_dir, "contrast_05_a_slope_draws.parquet"))
-# write_csv(signal_summary, paste0(manuscript_data_dir, "contrast_05_b_signal_summary.csv"))
+# manuscript inputs (replace unified_05_a / unified_05_b; enabled 2026-11-27):
+#   contrast_05_a_slope_draws    trait slope draws, every fit (main, check, ordinal, same-condition
+#                                variants, matched, without time-segregated species)
+#   contrast_05_b_signal_summary phylogenetic signal (prior, phylo-only, main) and the
+#                                prevalence - load correlations (phylogenetic, total)
+#   contrast_05_c_slope_summary  slope summaries of every fit (median, 50 / 95%, pd)
+#   contrast_05_d_responses      per-species responses (stage 1 and same-condition) with traits
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
+
+all_slope_draws = bind_rows(slope_draws,
+                            get_slopes(fit_matched, "main_matched"),
+                            get_slopes(fit_no_tseg, "main_no_time_segregated"))
+write_parquet(all_slope_draws, paste0(manuscript_data_dir, "contrast_05_a_slope_draws.parquet"))
+write_csv(bind_rows(signal_compare_summary, total_cor_summary),
+          paste0(manuscript_data_dir, "contrast_05_b_signal_summary.csv"))
+write_csv(summarise_slopes(all_slope_draws, fit),
+          paste0(manuscript_data_dir, "contrast_05_c_slope_summary.csv"))
+write_csv(bind_rows(responses_main %>% mutate(source = "stage 1"),
+                    responses_sc %>% mutate(source = "same-condition")) %>%
+            left_join(traits %>% select(taxon_capture, habitat_breadth, aquatic_index, age_metamorphosis),
+                      by = "taxon_capture"),
+          paste0(manuscript_data_dir, "contrast_05_d_responses.csv"))
 
 ```
