@@ -405,9 +405,194 @@ species_draws_sc %>%
 
 ```
 
+# Mantel-Haenszel check (prevalence)
+```{r}
+#| fig-height: 6
+#| fig-width: 11
+
+# why (2026-11-26): the same-condition prevalence contrasts came out much smaller than the stage 1
+# ones, most of all in the balanced, data-rich rana (r. sierrae 0.99 -> 0.39), where timing cannot
+# explain it. suspected cause: compression. a co-sampled event has as few as 5 swabs per stage, and
+# at 0/5 or 5/5 the Haldane-corrected logit tops out near +/- 2.4, truncating event-level
+# differences wherever prevalence is near 0% or 100%.
+# check: the Mantel-Haenszel pooled log odds ratio per species across its co-sampled events, the
+# classic estimator for many small stratified 2 x 2 tables. it pools the tables' cross-products
+# before taking the log, so sparse and all-or-nothing cells do not hit a ceiling. variance:
+# Robins-Breslow-Greenland. it assumes one common odds ratio across events (between-event
+# variation not modeled), so its se is a lower bound when the contrast varies between events.
+# reading: MH close to stage 1 -> compression confirmed (the empirical prevalence response is the
+# problem, not the stage 1 contrasts); MH close to the empirical values -> the gap is real
+# (same-condition vs realized)
+#
+# cells per event (subadult = exposed group, so log OR = subadult - adult on the logit scale):
+#   a = subadult positive, b = subadult negative, c = adult positive, d = adult negative
+mh_prevalence = prev_events %>%
+  transmute(taxon_capture,
+            a = pos_sub, b = n_sub - pos_sub, c = pos_ad, d = n_ad - pos_ad,
+            n = n_sub + n_ad) %>%
+  mutate(R = a * d / n, S = b * c / n, P = (a + d) / n, Q = (b + c) / n) %>%
+  group_by(taxon_capture) %>%
+  summarise(n_events = n(),
+            sum_R = sum(R), sum_S = sum(S),
+            # RBG variance terms
+            v1 = sum(P * R), v2 = sum(P * S + Q * R), v3 = sum(Q * S),
+            .groups = "drop") %>%
+  mutate(mh_log_or = if_else(sum_R > 0 & sum_S > 0, log(sum_R / sum_S), NA_real_),
+         mh_se = sqrt(v1 / (2 * sum_R^2) + v2 / (2 * sum_R * sum_S) + v3 / (2 * sum_S^2)),
+         mh_se = if_else(is.na(mh_log_or), NA_real_, mh_se)) %>%
+  select(taxon_capture, n_events, mh_log_or, mh_se)
+
+# species where MH is not defined (no event with the informative cross-product): listed, not used
+mh_prevalence %>% filter(is.na(mh_log_or))
+
+# side by side: stage 1 mean contrast (03), empirical same-condition contrast (fixed-species null
+# model above), Mantel-Haenszel
+stage1_prevalence = read_csv(file.path(intermediates_dir, "03_predictive_responses.csv"),
+                             show_col_types = FALSE) %>%
+  filter(part == "prevalence") %>%
+  select(taxon_capture, tier, stage1_mean = contrast_mean, stage1_sd = contrast_sd)
+
+mh_compare = mh_prevalence %>%
+  left_join(same_condition_contrasts %>% filter(part == "prevalence") %>%
+              select(taxon_capture, empirical_mean = contrast_mean, empirical_sd = contrast_sd),
+            by = "taxon_capture") %>%
+  left_join(stage1_prevalence, by = "taxon_capture")
+
+mh_compare %>%
+  mutate(across(where(is.double), ~ round(.x, 2))) %>%
+  arrange(desc(n_events))
+
+# how far each same-condition estimate sits from stage 1, over the species with all three
+# (slope of each on stage 1 through the origin: 1 = same scale, < 1 = compressed)
+mh_compare %>%
+  filter(!is.na(mh_log_or), !is.na(stage1_mean)) %>%
+  summarise(n_species = n(),
+            slope_mh_on_stage1 = round(sum(mh_log_or * stage1_mean) / sum(stage1_mean^2), 2),
+            slope_empirical_on_stage1 = round(sum(empirical_mean * stage1_mean) / sum(stage1_mean^2), 2),
+            median_abs_diff_mh = round(median(abs(mh_log_or - stage1_mean)), 2),
+            median_abs_diff_empirical = round(median(abs(empirical_mean - stage1_mean)), 2))
+
+mh_compare %>%
+  filter(!is.na(mh_log_or)) %>%
+  select(taxon_capture, stage1_mean, stage1_sd, mh = mh_log_or, mh_se, empirical = empirical_mean,
+         empirical_sd) %>%
+  pivot_longer(c(mh, empirical), names_to = "estimator", values_to = "estimate") %>%
+  mutate(se = if_else(estimator == "mh", mh_se, empirical_sd)) %>%
+  ggplot(aes(x = stage1_mean, y = estimate, color = estimator)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0, color = "grey85") +
+  geom_vline(xintercept = 0, color = "grey85") +
+  geom_errorbar(aes(ymin = estimate - 1.96 * se, ymax = estimate + 1.96 * se), width = 0, alpha = 0.35) +
+  geom_point(size = 2) +
+  labs(x = "stage 1 prevalence contrast (logit)", y = "same-condition estimate (logit)",
+       color = NULL, subtitle = "co-sampled events only; 95% bars; dashed = 1:1") +
+  theme_classic()
+
+```
+
+# Binomial same-condition prevalence contrasts
+```{r}
+#| fig-height: 6
+#| fig-width: 11
+
+# why (2026-11-27): the Mantel-Haenszel check recovered only part of the gap between the
+# empirical same-condition prevalence contrasts and stage 1 (r. sierrae 0.39 -> 0.61 vs 0.99;
+# r. muscosa unchanged at ~0.45 vs 1.29). two estimators, two different limits: the empirical
+# logits hit a ceiling in small all-or-nothing cells (Haldane), Mantel-Haenszel assumes one common
+# odds ratio across events. a binomial model on the co-sampled events has neither limit: counts
+# per event and stage (no ceiling), and the contrast may vary between events, as in stage 1.
+#
+#   positives | trials(swabs)                 Bd-positive swabs (co100) of that stage in that event
+#   0 + taxon_capture + taxon_capture:stage_c each species' midpoint and its contrast as fixed
+#                                             effects (no pooling across species, as the
+#                                             fixed-species null model above)
+#   (1 + stage_c | taxon_capture:pop_year_event)
+#                                             event-level intercepts and contrasts; one event-level
+#                                             contrast sd shared across species (a simplification:
+#                                             most species have few co-sampled events)
+#   (1 | taxon_capture:population)            site-level intercepts
+# stage_c = -0.5 adult / +0.5 subadult, so the taxon_capture:stage_c coefficient is the species'
+# subadult - adult difference in logit prevalence at a typical co-sampled event (stage 1's scale
+# and sign). priors as stage 1: coefficients normal(0, 2), intercept sds exponential(1), the
+# contrast sd exponential(2), correlation lkj(2)
+binomial_events = contrast_data %>%
+  semi_join(prev_events, by = c("taxon_capture", "pop_year_event")) %>%
+  group_by(taxon_capture, population, pop_year_event, stage_c) %>%
+  summarise(swabs = n(), positives = sum(.data[[response_col]] > 0), .groups = "drop")
+
+binomial_events %>% summarise(rows = n(), events = n_distinct(paste(taxon_capture, pop_year_event)),
+                              species = n_distinct(taxon_capture))
+
+binomial_priors = set_prior("normal(0, 2)", class = "b") +
+  set_prior("exponential(1)", class = "sd") +
+  set_prior("exponential(2)", class = "sd", group = "taxon_capture:pop_year_event", coef = "stage_c") +
+  set_prior("lkj(2)", class = "cor")
+
+fit_binomial = brm(positives | trials(swabs) ~ 0 + taxon_capture + taxon_capture:stage_c +
+                     (1 + stage_c | taxon_capture:pop_year_event) + (1 | taxon_capture:population),
+                   data = binomial_events, family = binomial(), prior = binomial_priors,
+                   control = list(adapt_delta = 0.99, max_treedepth = 12),
+                   chains = 4, iter = 4000, warmup = 2000, seed = 128, cores = 4, backend = "cmdstanr",
+                   file = file.path(screen_dir, "screen_prevalence_binomial"), file_refit = "on_change")
+
+conv_check(fit_binomial)
+
+# species contrasts: posterior mean, sd and skewness of each taxon_capture:stage_c coefficient
+binomial_draws = as_draws_df(fit_binomial, variable = ":stage_c$", regex = TRUE) %>%
+  as_tibble() %>%
+  select(starts_with("b_")) %>%
+  pivot_longer(everything(), names_to = "parameter", values_to = "contrast") %>%
+  mutate(taxon_capture = sub("^b_taxon_capture(.*):stage_c$", "\\1", parameter))
+
+binomial_contrasts = binomial_draws %>%
+  group_by(taxon_capture) %>%
+  summarise(contrast_mean = mean(contrast), contrast_sd = sd(contrast),
+            contrast_skew = mean(((contrast - mean(contrast)) / sd(contrast))^3), .groups = "drop") %>%
+  left_join(count(prev_events, taxon_capture, name = "n_events"), by = "taxon_capture")
+
+# all four side by side: stage 1, binomial, Mantel-Haenszel, empirical. reading:
+#   binomial close to stage 1           -> the earlier gap was the estimators (ceiling, common OR)
+#   binomial close to MH / empirical    -> the within-event contrast really is smaller than stage 1
+#                                          (stage 1 carries a realized component in that species)
+#   binomial between MH and stage 1     -> heterogeneity between events matters (common OR too
+#                                          simple), the rest is realized
+binomial_compare = mh_compare %>%
+  left_join(binomial_contrasts %>% select(taxon_capture, binomial_mean = contrast_mean,
+                                          binomial_sd = contrast_sd),
+            by = "taxon_capture") %>%
+  select(taxon_capture, n_events, tier, stage1_mean, binomial_mean, binomial_sd, mh_log_or,
+         empirical_mean)
+
+binomial_compare %>%
+  mutate(across(where(is.double), ~ round(.x, 2))) %>%
+  arrange(desc(n_events))
+
+# slopes through the origin on stage 1 (1 = same scale, < 1 = smaller), species with all four
+binomial_compare %>%
+  filter(!is.na(mh_log_or), !is.na(binomial_mean), !is.na(stage1_mean)) %>%
+  summarise(n_species = n(),
+            across(c(binomial_mean, mh_log_or, empirical_mean),
+                   ~ round(sum(.x * stage1_mean) / sum(stage1_mean^2), 2), .names = "slope_{.col}"))
+
+binomial_draws %>%
+  ggplot(aes(x = contrast, y = taxon_capture)) +
+  stat_halfeye(.width = c(0.5, 0.95), normalize = "groups", point_size = 1) +
+  geom_point(data = binomial_compare %>% filter(!is.na(stage1_mean)),
+             aes(x = stage1_mean, y = taxon_capture), inherit.aes = FALSE,
+             shape = 4, color = "firebrick", size = 2.5) +
+  geom_vline(xintercept = 0, color = "grey60") +
+  labs(x = "same-condition prevalence contrast, binomial model (median, 50 / 95%)", y = NULL,
+       subtitle = "red x = stage 1 mean contrast") +
+  theme_classic()
+
+```
+
 # Export
 ```{r}
 write_csv(same_condition_contrasts, file.path(intermediates_dir, "04_same_condition_species_contrasts.csv"))
+write_csv(mh_compare, file.path(intermediates_dir, "04_mantel_haenszel_prevalence.csv"))
+write_csv(binomial_contrasts, file.path(intermediates_dir, "04_binomial_prevalence_contrasts.csv"))
+write_csv(binomial_compare, file.path(intermediates_dir, "04_prevalence_estimator_compare.csv"))
 write_csv(slope_summary, file.path(intermediates_dir, "04_environment_screen_slopes.csv"))
 write_csv(variance_explained, file.path(intermediates_dir, "04_environment_screen_variance.csv"))
 
