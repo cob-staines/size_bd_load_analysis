@@ -445,6 +445,10 @@ contrast_sensitivity = imap(contrast_models, function(fit, job) {
 contrast_sensitivity %>%
   filter(diagnosis != "-")
 
+# saved so the results can be reviewed without rerunning (the run takes a while for r. sierrae)
+write_csv(contrast_sensitivity,
+          here("size_bd_contrast", "intermediates", "02_powerscale_all_priors.csv"))
+
 ```
 
 ### Does the contrast-sd prior drive the mean contrast?
@@ -499,6 +503,9 @@ sd_prior_sensitivity %>%
 # the contrast sds themselves: high = mostly prior (expected for tiers B and C), low = the data
 # dominate (informed). a second view of "informed" in 03, less sensitive to the prior's tail than
 # contraction
+write_csv(sd_prior_sensitivity,
+          here("size_bd_contrast", "intermediates", "02_powerscale_contrast_sd_prior.csv"))
+
 sd_prior_sensitivity %>%
   filter(quantity == "contrast sd") %>%
   select(job, part, tier, variable, prior) %>%
