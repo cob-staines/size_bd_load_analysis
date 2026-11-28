@@ -1,0 +1,197 @@
+---
+title: "GAM: curves by body size"
+output: html_document
+---
+
+Purpose: prevalence and load curves over SVL (with the metamorph baseline) from the GAM fits of
+`06_gam_modeling.qmd`, for a qualitative read of the species in the discussion. Replaces
+`size_bd_gam/03_size_bd_GAM_analysis.Rmd` (m3 fits; kept until retired).
+
+Reading the curves:
+
+- each curve is for an average site, site-year and event (`re_formula = NA`): the population
+  average of the species, not a particular site
+- prevalence is 1 - hu; load is mu, the mean log load density among positives
+- bands are 50% and 95% intervals of the posterior; the dashed line is the subadult / adult
+  SVL cutoff of stage 1
+- how much to read into a curve follows its stage 1 contrast: see `06_gam_species.csv` (tier,
+  co-sampled events, time-segregated flag, stage 1 support). Across the stage boundary, a
+  time-segregated species' curve partly reflects when each size class was swabbed, as its
+  stage 1 contrast does
+
+```{r}
+#| output: false
+librarian::shelf(tidyverse, here, brms, tidybayes, patchwork, arrow)
+
+intermediates_dir = here("size_bd_contrast", "intermediates")
+models_dir = here("size_bd_contrast", "models")
+figures_dir = here("size_bd_contrast", "figures")
+```
+
+# Load fits
+
+```{r}
+# species table (06): stage 1 counts, tiers, flags, svl cutoffs
+gam_species_table = read_csv(file.path(intermediates_dir, "06_gam_species.csv"), show_col_types = FALSE)
+
+# the data each model was fit to (06; GAM data + event ids). from here rather than fit$data,
+# which holds only the model's own columns (no life_stage_simple)
+gam_data = readRDS(file.path(intermediates_dir, "06_gam_model_data.rds"))
+
+gam_species = sort(gam_species_table$taxon_capture)
+
+gam_fits = set_names(gam_species) %>%
+  map(~ readRDS(file.path(models_dir, paste0("gam_m4_", .x, ".rds"))))
+```
+
+# Curves
+
+```{r}
+# posterior curves for one species and one part.
+#   part = "hu": prevalence (1 - hu); part = "mu": mean log load among positives
+# metamorph baseline: a single prediction (svl does not enter, the by-smooth is off), when the
+# species has metamorphs (for load: positive metamorphs). post-metamorph curve: 200 points over
+# the subadult / adult svl range the smooth was fit on.
+svl_curve = function(sp, part) {
+  fit = gam_fits[[sp]]
+  sp_data = filter(gam_data, taxon_capture == sp)
+  value = if (part == "hu") "prevalence" else "mu"
+  to_value = function(d) if (part == "hu") mutate(d, prevalence = 1 - hu) else d
+
+  # median and 50 / 95% intervals per svl value, as columns <value>, <value>_0.5_lower, ...
+  summarise_curve = function(draws, is_met) {
+    draws %>%
+      ungroup() %>%
+      to_value() %>%
+      mutate(v = .data[[value]]) %>%
+      group_by(svl_mm) %>%
+      median_qi(v, .width = c(0.5, 0.95)) %>%
+      pivot_wider(id_cols = c(svl_mm, v), names_from = .width, values_from = c(.lower, .upper)) %>%
+      rename_with(~ sub("^\\.(lower|upper)_(.*)$", paste0(value, "_\\2_\\1"), .x)) %>%
+      rename(!!value := v) %>%
+      mutate(is_metamorph = is_met)
+  }
+
+  met_data = filter(sp_data, life_stage_simple == "metamorph")
+  if (part == "mu") met_data = filter(met_data, bd_load_co100_density > 0)
+
+  # svl is a placeholder for metamorphs (the smooth is off); the same value in the prevalence and
+  # load rows so the two join into one metamorph row per species
+  svl_met = mean(sp_data$svl_mm)
+  met = if (nrow(met_data) > 0) {
+    tibble(svl_mm = svl_met, is_not_metamorph = 0) %>%
+      add_epred_draws(fit, dpar = part, re_formula = NA) %>%
+      summarise_curve(is_met = 1)
+  } else {
+    tibble(svl_mm = svl_met, is_metamorph = 1)   # empty metamorph panel
+  }
+
+  svl_post = sp_data$svl_mm[sp_data$life_stage_simple != "metamorph"]
+  post = tibble(svl_mm = seq(min(svl_post), max(svl_post), length.out = 200),
+                is_not_metamorph = 1) %>%
+    add_epred_draws(fit, dpar = part, re_formula = NA) %>%
+    summarise_curve(is_met = 0)
+
+  bind_rows(met, post) %>%
+    mutate(taxon_capture = sp)
+}
+
+prev_curves = map(gam_species, svl_curve, part = "hu") %>% list_rbind()
+load_curves = map(gam_species, svl_curve, part = "mu") %>% list_rbind()
+
+# one table, same columns as the earlier GAM export (GAM_03_a): prevalence_* and mu_* with
+# _0.5_lower / _0.95_upper etc., plus is_metamorph, svl_mm, svl_mm_cutoff
+svl_agg_all = full_join(prev_curves, load_curves,
+                        by = c("taxon_capture", "is_metamorph", "svl_mm")) %>%
+  left_join(select(gam_species_table, taxon_capture, svl_mm_cutoff = svl_cutoff_mm),
+            by = "taxon_capture") %>%
+  select(taxon_capture, is_metamorph, svl_mm, svl_mm_cutoff, everything())
+```
+
+# Figures
+
+```{r}
+#| fig-height: 28
+#| fig-width: 8
+# species shown: all fitted species by default. to choose a subset for the discussion, set
+# show_species to their taxon_capture values (06_gam_species.csv says what each curve rests on)
+show_species = gam_species
+
+# panel label: species, then stage 1 tier (prevalence / load) and the time-segregated flag
+species_labels = gam_species_table %>%
+  mutate(label = paste0(str_to_sentence(gsub("_", " ", taxon_capture)), "\n",
+                        "tier ", tier_hu, " / ", tier_mu,
+                        if_else(flag_time_segregated, ", time-seg.", ""))) %>%
+  select(taxon_capture, label) %>%
+  deframe()
+
+# one row per species: metamorph box (left) + post-metamorph curve (right), shared y range
+svl_rows = function(svl_agg, value, fill, y_range) {
+  map(sort(unique(svl_agg$taxon_capture)), function(sp) {
+    d = filter(svl_agg, taxon_capture == sp)
+    col = function(x) paste0(value, "_", x)
+
+    p_met = ggplot(filter(d, is_metamorph == 1),
+                   aes(x = "metamorph", middle = .data[[value]],
+                       lower = .data[[col("0.5_lower")]], upper = .data[[col("0.5_upper")]],
+                       ymin = .data[[col("0.95_lower")]], ymax = .data[[col("0.95_upper")]])) +
+      geom_boxplot(stat = "identity", fill = fill, alpha = 0.72, outlier.shape = NA) +
+      coord_cartesian(ylim = y_range) +
+      labs(x = NULL, y = species_labels[[sp]]) +
+      theme_classic()
+
+    p_post = ggplot(filter(d, is_metamorph == 0), aes(x = svl_mm, y = .data[[value]])) +
+      geom_ribbon(aes(ymin = .data[[col("0.5_lower")]], ymax = .data[[col("0.5_upper")]]),
+                  fill = fill, alpha = 0.6) +
+      geom_ribbon(aes(ymin = .data[[col("0.95_lower")]], ymax = .data[[col("0.95_upper")]]),
+                  fill = fill, alpha = 0.3) +
+      geom_line(linewidth = 1) +
+      { if (!is.na(d$svl_mm_cutoff[1]))
+          geom_vline(xintercept = d$svl_mm_cutoff[1], linetype = "dashed", color = "#666") } +
+      coord_cartesian(ylim = y_range) +
+      labs(x = "SVL (mm)", y = NULL) +
+      theme_classic() +
+      theme(axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+            axis.line.y = element_blank())
+
+    p_met + p_post + plot_layout(widths = c(1, 3))
+  })
+}
+
+shown = filter(svl_agg_all, taxon_capture %in% show_species)
+
+# prevalence on its full 95% range; load on the 50% range of the post-metamorph curves (95%
+# bands of thin species would otherwise flatten the rest)
+prev_range = range(c(shown$prevalence_0.95_lower, shown$prevalence_0.95_upper), na.rm = TRUE)
+load_range = shown %>%
+  filter(is_metamorph == 0) %>%
+  with(range(c(mu_0.5_lower, mu_0.5_upper), na.rm = TRUE))
+
+p_prev = wrap_plots(svl_rows(shown, "prevalence", "#8DA0CB", prev_range), ncol = 1) +
+  plot_annotation(title = "Bd prevalence by body size")
+p_load = wrap_plots(svl_rows(shown, "mu", "#FC8D62", load_range), ncol = 1) +
+  plot_annotation(title = "log Bd load (among positives) by body size")
+
+n_shown = length(show_species)
+ggsave(file.path(figures_dir, "07_gam_svl_prevalence.png"), p_prev, width = 8, height = n_shown * 2)
+ggsave(file.path(figures_dir, "07_gam_svl_load.png"), p_load, width = 8, height = n_shown * 2)
+
+p_prev
+p_load
+```
+
+# Manuscript exports
+
+```{r}
+#| eval: false
+# manuscript inputs, to replace GAM_03_a / GAM_03_b (build_intermediates.Rmd reads those names;
+# re-point it when these are enabled). off until the fits are reviewed.
+repo_dir = gsub("size_bd_load_analysis", "", here())
+manuscript_data_dir = paste0(repo_dir, "size-bd-dynamics-manuscript/resources/01_essential_data/")
+
+write_parquet(svl_agg_all, paste0(manuscript_data_dir, "contrast_07_a_gam_svl.parquet"))
+
+# sample-level data the models were fit to (seasonal size-structure / cohort plots)
+stopifnot(nrow(gam_data) == sum(map_int(gam_fits, ~ nrow(.x$data))))
+write_parquet(gam_data, paste0(manuscript_data_dir, "contrast_07_b_gam_model_data.parquet"))
+```

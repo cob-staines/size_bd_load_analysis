@@ -413,7 +413,7 @@ stage 1 contrast models (per species)
    |-> predictive model           species mean contrasts ~ phylogeny + traits (no climate)
    |-> environment and contrast   within species: does the contrast move with conditions?
                                   environment screen (04) -> per-species moderation fits if warranted
-GAM (size_bd_gam/)                finer age resolution; stage 1 nuisance structure, no climate terms
+GAM (06, 07)                      finer age resolution; stage 1 nuisance structure, no climate terms
 ```
 
 **Predictive model** (replaces `size_bd_unified/05_species_regression.qmd`; decided 2026-11-26).
@@ -643,15 +643,43 @@ species' prevalence contrast from its co-sampled events, compared with stage 1:
   only the same-condition question. Stage 1 stays the main (as-sampled) estimate; the binomial
   contrasts are the same-condition sensitivity.
 
-**GAM** (`size_bd_gam/`, option 1): add the event intercept `(1 | pop_year_event)` and drop the
-climate terms and their m11g prior. The SVL curve is then estimated from size differences within
-events, with nothing used twice. Cost: the between-event size comparisons, which are exactly the
-ones confounded with timing. Share of SVL variance within events vs within site-years (the
-current structure): little change for the data-rich *Rana* (*R. sierrae* 0.56 vs 0.59,
-*R. muscosa* 0.58 vs 0.61), large where size and timing go together (*P. crucifer* 0.16 vs 0.60,
-*R. pipiens* 0.27 vs 0.57, *R. catesbeiana* 0.42 vs 0.75). If climate terms are ever needed:
-per species, not one global slope (*Bd* has a thermal optimum, so a global slope can have the
-wrong sign for a species).
+**GAM** (`06_gam_modeling.qmd`, `07_gam_analysis.Rmd`; option 1, decided 2026-11-26,
+written 2026-11-27; replaces `size_bd_gam/02` and `03`, kept until retired). A secondary,
+qualitative model for species in the discussion, kept as close as possible to each species'
+stage 1 model:
+
+- same as stage 1: response and family, the nuisance intercepts `(1 | population)`,
+  `(1 | pop_year)`, `(1 | pop_year_event)`, which of them each part keeps (the R2 / R3 flags of
+  `01_contrast_species.csv`, reused, not recomputed), the nuisance priors, and the event
+  definition (`event_ids()`)
+- different by design: metamorphs included (an intercept for the metamorph baseline), and a thin
+  plate smooth `s(svl_mm, by = is_not_metamorph)` (`s(svl_mm)` without metamorphs) in place of
+  `stage_c`. Smooth terms keep brms' default priors
+- dropped: the climate terms and their m11g prior (nothing used twice), and the stage-specific
+  site and site-year intercepts of the earlier GAM (`m3`, inherited from m11g). Those let the
+  stage gap vary by site as a step at the SVL cutoff, an artifact of the cutoff for SVL-staged
+  species, and asked stage 1's Q2-Q3 again. No varying size effect either
+- species: the 14 with >= 100 swabs of each stage in the stage 1 data. A post-hoc description of
+  the existing GAM data (`size_bd_gam/00`, chosen by hand for SVL coverage): all 14 have >= 130,
+  every other stage 1 species <= 97 (*A. americanus*, 97 adults). Others can be added by name
+  (data prep in `size_bd_gam/00`), labeled as below the cutoff
+- events are built from all the species' swab dates, metamorphs included, so event counts can
+  differ slightly from stage 1
+
+How informed a curve is: the event intercepts are random effects, so comparisons between events
+are down-weighted (by how much events vary anyway), not discarded. The curve rests on the same
+comparisons as the species' stage 1 contrast and is about as informed, with the same caveats.
+E.g. *P. crucifer*: 1 co-sampled event of 191, time-segregated, yet a stage 1 prevalence contrast
+of -2.16 [95%: -3.24, -1.20], pd 1, from comparisons between events within its 9 co-sampled
+site-years. Co-sampled event counts therefore describe a curve but are not used to include or
+exclude species. `06_gam_species.csv` carries each species' stage 1 tier, counts, co-sampled
+events, time-segregated flag and contrast support, for choosing which curves to show. Share of
+SVL variance within events vs within site-years: *R. sierrae* 0.56 vs 0.59, *R. muscosa* 0.58 vs
+0.61, *P. crucifer* 0.16 vs 0.60, *R. pipiens* 0.27 vs 0.57, *R. catesbeiana* 0.42 vs 0.75 (low
+within-event shares: across the stage boundary the curve leans on between-event comparisons,
+where size and timing go together). If climate terms are ever needed: per species, not one
+global slope (*Bd* has a thermal optimum, so a global slope can have the wrong sign for a
+species).
 
 ## Files and run order
 
@@ -665,10 +693,14 @@ wrong sign for a species).
 | `03_contrast_analysis.Rmd` | stage 1 results (mean contrasts, contrast sds, sign consistency, variance shares, group contrasts), consistency checks, exports for the downstream models | written |
 | `04_contrast_environment_screen.qmd` | environment screen: empirical contrasts of co-sampled events vs within-season and between-year weather, and long-term site climate (Downstream models) | written, run (weather and site models) |
 | `05_contrast_predictive_model.qmd` | predictive model: species mean contrasts ~ log habitat breadth + aquatic index + extended larval period + phylogeny (main, same-condition, check, ordinal fits) | written |
+| `gam_model_functions.R` | GAM formula and prior builders, shared run settings (copied verbatim into the cluster script) | written |
+| `06_gam_modeling.qmd` | GAM: per-species prevalence and load by SVL (thin plate smooth + metamorph baseline) with the stage 1 nuisance intercepts; species table, structure check, timing test, fits (local or cluster), fit health, prior sensitivity (Downstream models) | written, fits pending |
+| `r-brms-contained/size_bd_contrast_gam_modeling.R` + `hpc/` | GAM cluster fits, one species per array task (`hpc/submit_size_bd_contrast_gam.sh` submits the four resource groups; provisional until the timing test) | written |
+| `07_gam_analysis.Rmd` | GAM curves (average site / site-year / event), figures, manuscript exports (off until the fits are reviewed) | written |
 
 Outputs: `intermediates/` (tables), `models/` (fits, not tracked), `figures/`.
 
-Upstream: `size_bd_unified/01_model_data.Rmd` (model data).
+Upstream: `size_bd_unified/01_model_data.Rmd` (model data); GAM data from `size_bd_gam/00`-`01`.
 
 ## Glossary
 
@@ -860,6 +892,22 @@ Dated one-liners; the reasoning is in the linked sections.
   uncertainty). Same-condition estimates left out of the manuscript figures for now. m11g
   consistency check kept in the `03` code, not reported.
 
+- 2026-11-27: GAM option 1 written as `06_gam_modeling.qmd` / `07_gam_analysis.Rmd` in this
+  folder (shared event definition, flags and priors; `size_bd_gam/02`-`03` kept until retired).
+  Matches each species' stage 1 model except for metamorphs and the SVL smooth: nuisance
+  intercepts and their R2 / R3 flags from `01_contrast_species.csv`, stage 1 nuisance priors
+  (smooth terms at brms defaults), no climate terms or m11g prior. The `m3` stage-specific site and
+  site-year intercepts dropped (a step at the SVL cutoff; stage 1's Q2-Q3). Species: >= 100
+  swabs of each stage in the stage 1 data, set post hoc to describe the existing 14 (>= 130 vs
+  <= 97 for the rest). A minimum of co-sampled events was considered and rejected: with random
+  event intercepts, between-event comparisons are down-weighted, not discarded, so a species'
+  curve is about as informed as its stage 1 contrast (*P. crucifer*: 1 co-sampled event, strong
+  stage 1 prevalence contrast); tier and flags are carried in `06_gam_species.csv` instead.
+  Fits saved as `models/gam_m4_<species>.rds`, without LOO (no model comparison). Builders and
+  run settings in `gam_model_functions.R`, copied into `r-brms-contained/size_bd_contrast_gam_modeling.R`
+  for cluster fits (one species per array task; resource groups provisional, from the stage 1
+  fits of the same species, until the timing test in `06`).
+
 ## Open questions
 
 - Load co-sampling uses >= 1 positive of each stage; a stricter positive count may better match
@@ -889,7 +937,10 @@ Dated one-liners; the reasoning is in the linked sections.
 - Potential-bias measure (imbalance x the species' climate slope for overall infection), if any
   imbalanced species becomes central to the paper.
 - Climatology / anomaly split, needed only for a weather interpretation.
-- GAM option 1 to implement in `size_bd_gam/02_size_bd_GAM_modeling.qmd`.
+- GAM (`06`, `07`): fits pending (14 species; timing test in `06`, then cluster or local). Then fit health, prior sensitivity of the
+  smooth wiggliness, choice of species for the figures, and re-pointing the manuscript from
+  `GAM_03_*` to `contrast_07_*`. *A. americanus* (97 adults) can be added if the discussion needs
+  more *Anaxyrus*. Retire `size_bd_gam/02`-`03` once `07` is in use.
 - Check *C. panamansis* development mode in `iucn_habitat_metrics.csv` (probably larval; moot
   for the predictive model, which drops development mode).
 - Manuscript methods / results / discussion text still describes m11g (figures and captions

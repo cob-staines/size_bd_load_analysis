@@ -1,0 +1,353 @@
+---
+title: "GAM: infection by body size"
+format:
+  html:
+    toc: true
+df-print: kable
+---
+
+Purpose: a finer-resolution, qualitative companion to stage 1 for species in the discussion. Per
+species, prevalence and load are modeled as a smooth function of SVL (plus a metamorph
+baseline), rather than as a two-level subadult - adult contrast. Specification and reasons:
+`README.md` "Downstream models" -> "GAM". Replaces `size_bd_gam/02_size_bd_GAM_modeling.qmd`
+(m3: m11g climate priors, stage-specific random effects; kept until retired).
+
+In short:
+
+- **same as the stage 1 model of each species**: response (`bd_load_co100_density`, hurdle
+  lognormal), the nuisance intercepts (site, site-year, event), which of them a part keeps (the
+  R2 / R3 flags of `01_contrast_species.csv`, reused as they are, not recomputed), and the
+  nuisance priors
+- **different by design**: metamorphs are included, and SVL enters as a thin plate smooth in
+  place of the stage term `stage_c`. There is no stage term and no varying size effect: whether
+  the subadult - adult difference varies across sites, years or events is stage 1's question
+  (Q2-Q4)
+- **no climate terms**: the event intercepts absorb weather shared by all animals in an event
+- **species**: the 14 species with >= 100 swabs of each stage (adult, subadult) in the stage 1
+  data. A post-hoc description of the existing GAM data set (`size_bd_gam/00`, chosen by hand
+  for SVL coverage): every species in it has >= 130, every other stage 1 species <= 97
+  (*A. americanus*). Other species can be added by name if the discussion needs them (with data
+  prep in `size_bd_gam/00`), labeled as below the cutoff
+- **how informed a curve is** follows stage 1: comparisons between events are down-weighted by
+  the event intercepts, not discarded (random, not fixed, effects), so a species' curve is about
+  as informed as its stage 1 contrast, with the same caveats (tier, time-segregated flag). These
+  are carried in the species table, for choosing which curves to show
+
+Run order: this script (fits locally, then fit health and prior sensitivity) ->
+`07_gam_analysis.Rmd` (curves, figures, manuscript exports).
+
+# Setup
+
+```{r}
+#| output: false
+librarian::shelf(tidyverse, here, brms, cmdstanr, posterior)
+
+# event definition (event_ids), response_col and the R2 constant come from stage 1, so the GAM
+# cannot drift from it
+source(here("size_bd_contrast", "contrast_data_functions.R"))
+# formula and prior builders, run settings (copied verbatim into the cluster script)
+source(here("size_bd_contrast", "gam_model_functions.R"))
+# subadult / adult svl cutoffs, for the species table
+source(here("size_bd_unified", "svl_stage_cutoffs.R"))
+
+intermediates_dir = here("size_bd_contrast", "intermediates")
+models_dir = here("size_bd_contrast", "models")
+
+set_cmdstan_path(Sys.getenv("cmd_stan_path"))
+```
+
+# Data
+
+```{r}
+# GAM data (size_bd_gam/00-01): stage 1 sources and populations, plus metamorphs and SVL bounds
+# per species. life_stage_simple is metamorph / subadult / adult; is_not_metamorph = 1 for
+# subadults and adults. the climate columns in it are not used.
+load(here("size_bd_gam", "intermediates", "brms_data_gam_2026-11-15.RData"))
+gam_data_raw = brms_data
+rm(brms_data)
+
+# stage 1 species table: counts, tiers, nuisance flags (R2 / R3), co-sampling, time-segregated flag
+stage1_species = read_csv(file.path(intermediates_dir, "01_contrast_species.csv"),
+                          show_col_types = FALSE) %>%
+  filter(include)
+```
+
+## Species
+
+```{r}
+# inclusion: >= 100 swabs of each stage in the stage 1 data (set 2026-11-27, post hoc; see the
+# header). stage 1 counts, not GAM counts: the GAM's staging reassigns small animals to
+# metamorphs (e.g. r. sierrae 2873 GAM vs 4194 stage 1 subadults), and stage 1 is the shared
+# reference
+gam_min_stage_swabs = 100
+
+gam_species = stage1_species %>%
+  filter(pmin(n_adult, n_subadult) >= gam_min_stage_swabs) %>%
+  pull(taxon_capture) %>%
+  sort()
+
+# every selected species must be in the GAM data (a species added to the cutoff needs data prep
+# in size_bd_gam/00 first)
+missing_gam = setdiff(gam_species, unique(gam_data_raw$taxon_capture))
+if (length(missing_gam) > 0) stop("Not in the GAM data: ", paste(missing_gam, collapse = ", "))
+
+gam_species
+```
+
+## Events and grouping columns
+
+```{r}
+# events as in stage 1 (event_ids: no gap > 5 days, runs > 14 days split at their longest gap),
+# per species x population. the one difference: the dates are all of the species' swab dates,
+# metamorphs included, so a metamorph-only survey is its own event and one shared with adults
+# joins theirs. event counts can therefore differ slightly from stage 1.
+# add_contrast_groups() is not reused: it recodes life_stage_simple to adult / subadult, which
+# would turn metamorphs into NA.
+add_gam_groups = function(df) {
+  events = df %>%
+    distinct(taxon_capture, population, date) %>%
+    arrange(taxon_capture, population, date) %>%
+    group_by(taxon_capture, population) %>%
+    mutate(event_k = event_ids(as.numeric(date))) %>%
+    ungroup()
+
+  df %>%
+    left_join(events, by = c("taxon_capture", "population", "date")) %>%
+    mutate(pop_year = paste(population, year, sep = "_"),
+           pop_year_event = paste(population, year, event_k, sep = "_"))
+}
+
+gam_data = gam_data_raw %>%
+  filter(taxon_capture %in% gam_species) %>%
+  add_gam_groups()
+
+# saved for 07 (curves over the data each model was fit to, manuscript export)
+saveRDS(gam_data, file.path(intermediates_dir, "06_gam_model_data.rds"))
+
+gam_data %>%
+  group_by(taxon_capture) %>%
+  summarise(n_swabs = n(),
+            n_metamorph = sum(life_stage_simple == "metamorph"),
+            n_populations = n_distinct(population),
+            n_site_years = n_distinct(pop_year),
+            n_events = n_distinct(pop_year_event))
+```
+
+# Model
+
+## Formula and priors
+
+`gam_formula()` and `gam_priors()` are in `gam_model_functions.R` (shared with the cluster
+script). Per part (mu, hu):
+
+- size: metamorph baseline (the intercept) + `s(svl_mm, by = is_not_metamorph)`, a thin plate
+  smooth over subadults and adults; `s(svl_mm)` for species without metamorphs
+- nuisance: `(1 | population)`, plus `(1 | pop_year)` and `(1 | pop_year_event)` where stage 1
+  kept them for that part (R2); sigma by population where stage 1's is (R3)
+- priors: stage 1's nuisance priors (intercepts, intercept sds, sigma); smooth terms at brms'
+  defaults
+
+## Species table
+
+```{r}
+# what each curve rests on, for choosing which to show (07) and for the caveats: stage 1 counts,
+# positives, tier, co-sampling, time-segregated flag and stage 1 contrast support, next to the
+# GAM's own counts and structure. written before fitting so it exists without the fits.
+stage1_support = read_csv(file.path(intermediates_dir, "03_contrast_species_summary.csv"),
+                          show_col_types = FALSE) %>%
+  filter(variant == "main") %>%
+  select(taxon_capture, part, contrast_median, contrast_support) %>%
+  pivot_wider(names_from = part, values_from = c(contrast_median, contrast_support))
+
+gam_structure = gam_data %>%
+  group_by(taxon_capture) %>%
+  summarise(gam_n_metamorph = sum(life_stage_simple == "metamorph"),
+            gam_n_subadult = sum(life_stage_simple == "subadult"),
+            gam_n_adult = sum(life_stage_simple == "adult"),
+            gam_n_events = n_distinct(pop_year_event),
+            svl_term = if_else(gam_n_metamorph > 0, "s(svl_mm, by = is_not_metamorph)", "s(svl_mm)"))
+
+gam_species_table = stage1_species %>%
+  filter(taxon_capture %in% gam_species) %>%
+  select(taxon_capture, n_adult, n_subadult, n_pos_adult, n_pos_subadult,
+         n_co_event, n_co_load_event, n_co_popyear, n_co_pop,
+         tier_hu, tier_mu, flag_time_segregated,
+         hu_has_pop_year, hu_has_event, mu_has_pop_year, mu_has_event, sigma_by_population) %>%
+  left_join(stage1_support, by = "taxon_capture") %>%
+  left_join(gam_structure, by = "taxon_capture") %>%
+  left_join(svl_cutoff_species(gam_species) %>% select(taxon_capture, svl_cutoff_mm = svl_mm_cutoff),
+            by = "taxon_capture")
+
+write_csv(gam_species_table, file.path(intermediates_dir, "06_gam_species.csv"))
+
+gam_species_table %>%
+  select(taxon_capture, n_adult, n_subadult, n_co_event, tier_hu, tier_mu,
+         flag_time_segregated, contrast_support_prevalence, contrast_support_load)
+```
+
+## Structure check
+
+```{r}
+# formula and prior for each species, without fitting: make_standata builds the data Stan would
+# get (fails on a formula error), validate_prior fails on a prior that matches no parameter
+gam_model_file = function(sp) file.path(models_dir, gam_model_name(sp))
+
+gam_setup = function(sp) {
+  sp_row = filter(gam_species_table, taxon_capture == sp)
+  model_data = gam_data %>% filter(taxon_capture == sp) %>% droplevels()
+  list(formula = gam_formula(sp_row, model_data),
+       prior = gam_priors(sp_row),
+       data = model_data)
+}
+
+structure_check = map(gam_species, function(sp) {
+  s = gam_setup(sp)
+  sdata = make_standata(s$formula, data = s$data, family = hurdle_lognormal(), prior = s$prior)
+  validate_prior(s$prior, s$formula, data = s$data, family = hurdle_lognormal())
+  tibble(taxon_capture = sp,
+         mu = deparse1(s$formula$formula),
+         hu = deparse1(s$formula$pforms$hu),
+         sigma = deparse1(s$formula$pforms$sigma),
+         n_obs = sdata$N)
+}) %>%
+  list_rbind()
+
+structure_check
+```
+
+# Timing test
+
+```{r}
+#| eval: false
+# short runs to size the cluster jobs (r-brms-contained/hpc/run_size_bd_contrast_gam_modeling.sbatch),
+# extrapolated as in 02: slowest chain, warmup x 2000/300, sampling x 2000/100 (production:
+# 2000 warmup + 2000 sampling per chain). three species spanning size and structure:
+#   silverstoneia_flotator   n ~600,  no metamorphs, s(svl_mm)
+#   rana_catesbeiana         n ~1.9k, metamorphs, by-smooth
+#   rana_clamitans           n ~2.7k, metamorphs, by-smooth
+# the larger species are extrapolated from these with run time ~ n^b: b from the three runs,
+# bounded by 1.2 (stage 1's observed growth) and 1.6 (the upper bound assumed in 02). confirm
+# with the first cluster runs (sacct Elapsed, MaxRSS).
+timing_species = c("silverstoneia_flotator", "rana_catesbeiana", "rana_clamitans")
+
+timing_results = map(timing_species, function(sp) {
+  s = gam_setup(sp)
+  start = Sys.time()
+  fit = brm(formula = s$formula, data = s$data, family = hurdle_lognormal(), prior = s$prior,
+            control = list(adapt_delta = gam_adapt_delta, max_treedepth = gam_max_treedepth),
+            chains = gam_n_chains, iter = 400, warmup = 300,
+            seed = 128, cores = gam_n_chains, backend = "cmdstanr", refresh = 0)
+  chain_times = rstan::get_elapsed_time(fit$fit)
+  np = nuts_params(fit)
+  tibble(taxon_capture = sp,
+         n = nrow(s$data),
+         total_min = as.numeric(difftime(Sys.time(), start, units = "mins")),  # incl. compilation
+         max_chain_warmup_s = max(chain_times[, "warmup"]),
+         max_chain_sample_s = max(chain_times[, "sample"]),
+         est_production_h = (max(chain_times[, "warmup"]) * (gam_n_warmup / 300) +
+                               max(chain_times[, "sample"]) * ((gam_n_iter - gam_n_warmup) / 100)) / 3600,
+         divergences = sum(np$Value[np$Parameter == "divergent__"]))
+}) %>%
+  list_rbind()
+
+timing_results
+
+# growth exponent from the three runs, and the extrapolation to every species from the largest
+# timed one (r. clamitans) at that exponent and at the 1.2 / 1.6 bounds
+b_fit = unname(coef(lm(log(est_production_h) ~ log(n), data = timing_results))[2])
+ref = slice_max(timing_results, n)
+
+timing_extrapolated = gam_species_table %>%
+  transmute(taxon_capture, array_index = match(taxon_capture, sort(gam_species)) - 1,
+            n = gam_n_adult + gam_n_subadult + gam_n_metamorph) %>%
+  mutate(est_h_fit = ref$est_production_h * (n / ref$n)^b_fit,
+         est_h_1.2 = ref$est_production_h * (n / ref$n)^1.2,
+         est_h_1.6 = ref$est_production_h * (n / ref$n)^1.6) %>%
+  arrange(n)
+
+b_fit
+timing_extrapolated
+```
+
+# Fit
+
+```{r}
+#| eval: false
+# local fits, one per species. or on the cluster: r-brms-contained/size_bd_contrast_gam_modeling.R
+# (same builders and settings), then copy models/size_bd_contrast_gam/*.rds into
+# size_bd_contrast/models/; this chunk then loads them instead of refitting.
+# brm(file = ...) saves the fit and, when the file exists, loads it (file_refit = "never");
+# delete a file to refit it.
+# no LOO: the curves are read qualitatively and no models are compared.
+# the event intercepts add one parameter per event and part: r. sierrae (997 events) and
+# r. muscosa are the long runs.
+fit_gam = function(sp) {
+  s = gam_setup(sp)
+  cat("Fitting GAM for:", sp, "\n")
+  brm(formula = s$formula,
+      data = s$data,
+      family = hurdle_lognormal(),
+      prior = s$prior,
+      control = list(adapt_delta = gam_adapt_delta, max_treedepth = gam_max_treedepth),
+      chains = gam_n_chains, iter = gam_n_iter, warmup = gam_n_warmup,
+      seed = gam_seed, cores = gam_n_chains, backend = "cmdstanr",
+      file = gam_model_file(sp), file_refit = "never")
+}
+
+# small species first; r. sierrae last
+fit_order = gam_species_table %>%
+  arrange(gam_n_adult + gam_n_subadult + gam_n_metamorph) %>%
+  pull(taxon_capture)
+
+walk(fit_order, fit_gam)
+```
+
+# Fit health
+
+```{r}
+#| eval: false
+# divergences, max rhat, min bulk / tail ess per fit (summarise_draws over all parameters,
+# random effects included)
+gam_fit_health = map(gam_species, function(sp) {
+  fit = readRDS(paste0(gam_model_file(sp), ".rds"))
+  np = nuts_params(fit)
+  dr = summarise_draws(as_draws_array(fit), "rhat", "ess_bulk", "ess_tail")
+  tibble(taxon_capture = sp,
+         n_divergent = sum(np$Value[np$Parameter == "divergent__"]),
+         max_treedepth_hits = sum(np$Value[np$Parameter == "treedepth__"] >= 12),
+         max_rhat = max(dr$rhat, na.rm = TRUE),
+         min_ess_bulk = min(dr$ess_bulk, na.rm = TRUE),
+         min_ess_tail = min(dr$ess_tail, na.rm = TRUE))
+}) %>%
+  list_rbind()
+
+write_csv(gam_fit_health, file.path(intermediates_dir, "06_gam_fit_health.csv"))
+gam_fit_health
+```
+
+# Prior sensitivity
+
+```{r}
+#| eval: false
+library(priorsense)
+
+# power-scaling (as in 02, "Prior sensitivity"): how much the posterior of each variance term
+# moves when the prior is weakened or strengthened. cjs_dist > 0.05 = the prior matters.
+#   sds_*  smooth wiggliness (how far the SVL curve may bend); student_t(3, 0, 2.5) default
+#   sd_*   nuisance intercept sds (site, site-year, event); exponential(1)
+# a wiggliness sd that is prior-shaped means the data say little about the curve's shape beyond
+# its linear part: read the curve's bends with that in mind.
+gam_powerscale = map(gam_species, function(sp) {
+  fit = readRDS(paste0(gam_model_file(sp), ".rds"))
+  vars = grep("^(sds|sd)_", variables(fit), value = TRUE)
+  powerscale_sensitivity(fit, variable = vars) %>%
+    as_tibble() %>%
+    mutate(taxon_capture = sp, .before = 1)
+}) %>%
+  list_rbind()
+
+write_csv(gam_powerscale, file.path(intermediates_dir, "06_gam_powerscale.csv"))
+
+gam_powerscale %>%
+  filter(diagnosis != "-")
+```
