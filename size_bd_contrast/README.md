@@ -664,7 +664,13 @@ stage 1 model:
   every other stage 1 species <= 97 (*A. americanus*, 97 adults). Others can be added by name
   (data prep in `size_bd_gam/00`), labeled as below the cutoff
 - events are built from all the species' swab dates, metamorphs included, so event counts can
-  differ slightly from stage 1
+  differ slightly from stage 1 (in practice not at all for co-sampled subadult + adult events:
+  *R. sierrae* 162 either way). Metamorphs do not shape the smooth (it is off for them), but
+  through the shared intercepts they can link events that hold metamorphs + only subadults to
+  events with metamorphs + only adults, an indirect subadult - adult comparison that assumes the
+  metamorph offset is the same in every event. Such bridges exist mainly in the data-rich *Rana*
+  (*R. sierrae* 24 / 28 events, *R. muscosa* 19 / 24) and not at all for *P. crucifer* or
+  *A. canorus* (no metamorph + adult-only events)
 
 How informed a curve is: the event intercepts are random effects, so comparisons between events
 are down-weighted (by how much events vary anyway), not discarded. The curve rests on the same

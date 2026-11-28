@@ -180,9 +180,9 @@ gam_species_table = stage1_species %>%
 
 write_csv(gam_species_table, file.path(intermediates_dir, "06_gam_species.csv"))
 
-gam_species_table %>%
+(gam_species_table_summary = gam_species_table %>%
   select(taxon_capture, n_adult, n_subadult, n_co_event, tier_hu, tier_mu,
-         flag_time_segregated, contrast_support_prevalence, contrast_support_load)
+         flag_time_segregated, contrast_support_prevalence, contrast_support_load))
 ```
 
 ## Structure check
