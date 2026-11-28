@@ -228,6 +228,18 @@ structure_check
 # the larger species are extrapolated from these with run time ~ n^b: b from the three runs,
 # bounded by 1.2 (stage 1's observed growth) and 1.6 (the upper bound assumed in 02). confirm
 # with the first cluster runs (sacct Elapsed, MaxRSS).
+#
+# results (2026-11-27, est_production_h at adapt_delta 0.95, 8000 draws):
+#   silverstoneia_flotator   n 602    0.017 h   0 divergences
+#   rana_catesbeiana         n 1876   0.31 h    0
+#   rana_clamitans           n 2701   0.38 h    1 (300 warmup iterations; check in production)
+# faster than stage 1 for the same species (0.13 / 0.51 / 0.70 h): no contrast slopes or
+# correlations. the fitted exponent (b ~ 2.2, r. sierrae ~59 h) is not used: s. flotator drives
+# it (no metamorphs, plain s(svl_mm), fixed overhead dominating at n 602); r. catesbeiana ->
+# r. clamitans grows ~n^0.6, and stage 1's r. sierrae (more complex, twice the draws) took 5.9 h
+# on the cluster. cluster limits use the 1.2 / 1.6 bounds: large group (n 5-7k) 0.85-1.7 h,
+# r. sierrae 6-15 h. resource groups: header of
+# r-brms-contained/hpc/run_size_bd_contrast_gam_modeling.sbatch.
 timing_species = c("silverstoneia_flotator", "rana_catesbeiana", "rana_clamitans")
 
 timing_results = map(timing_species, function(sp) {
